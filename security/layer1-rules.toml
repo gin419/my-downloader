@@ -14,7 +14,7 @@ message = "Hardcoded /Users/<name>/ path — use FileManager.homeDirectoryForCur
 severity = "warning"
 tags = ["pii", "path", "macos"]
 
-  [[rules.allowlist]]
+  [rules.allowlist]
   description = "CI runner and placeholder paths are safe"
   regexes = ['''/Users/(runner|github|actions|example|test|dummy)/''']
 
@@ -26,7 +26,7 @@ message = "Personal email address found — verify this is intentional."
 severity = "error"
 tags = ["pii", "email"]
 
-  [[rules.allowlist]]
+  [rules.allowlist]
   description = "Placeholder/example emails are fine"
   regexes = [
     '''(example|test|user|sample|noreply|no-reply|placeholder)@''',
@@ -50,7 +50,7 @@ regex = '''(?i)(?:password|passwd|pwd|secret)\s*[:=]\s*["'][^"']{4,}["']'''
 severity = "error"
 tags = ["credential", "password"]
 
-  [[rules.allowlist]]
+  [rules.allowlist]
   description = "Placeholder password values"
   regexes = [
     '''(?i)[:=]\s*["'](?:password|changeme|YOUR_PASSWORD|<password>|example|xxx+|\.\.\.|\*+)["']''',
@@ -89,7 +89,7 @@ message = "Real local path found in a comment — replace with a generic example
 severity = "warning"
 tags = ["pii", "path", "comment"]
 
-  [[rules.allowlist]]
+  [rules.allowlist]
   regexes = ['''/Users/(runner|example|test)/''']
 
 # ── Global Allowlist ───────────────────────────────────────────────────────────
