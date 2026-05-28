@@ -3,11 +3,11 @@ import SwiftUI
 struct DownloadRowView: View {
     @ObservedObject var item: DownloadItem
     @EnvironmentObject var manager: DownloadManager
-    let onReveal: () -> Void
-    let onRemove: () -> Void
-    let onRetry: () -> Void
+    let onReveal:   () -> Void
+    let onRemove:   () -> Void
+    let onRetry:    () -> Void
     let onCopyLink: () -> Void
-    let onOpen: () -> Void
+    let onOpen:     () -> Void
 
     @State private var titleHovered = false
 
@@ -96,21 +96,15 @@ struct DownloadRowView: View {
         Group {
             switch item.status {
             case .queued:
-                Image(systemName: "clock")
-                    .foregroundColor(.secondary)
+                Image(systemName: "clock").foregroundColor(.secondary)
             case .fetching:
-                Image(systemName: "magnifyingglass")
-                    .foregroundColor(.orange)
+                Image(systemName: "magnifyingglass").foregroundColor(.orange)
             case .downloading:
-                Image(systemName: "arrow.down.circle.fill")
-                    .foregroundColor(.blue)
-                    .symbolEffect(.pulse)
+                Image(systemName: "arrow.down.circle.fill").foregroundColor(.blue).symbolEffect(.pulse)
             case .completed:
-                Image(systemName: "checkmark.circle.fill")
-                    .foregroundColor(.green)
+                Image(systemName: "checkmark.circle.fill").foregroundColor(.green)
             case .failed:
-                Image(systemName: "xmark.circle.fill")
-                    .foregroundColor(.red)
+                Image(systemName: "xmark.circle.fill").foregroundColor(.red)
             }
         }
     }
@@ -143,20 +137,14 @@ struct DownloadRowView: View {
 
             HStack {
                 if let size = item.totalSize {
-                    Text(size)
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundColor(.secondary)
+                    Text(size).font(.system(size: 11, design: .monospaced)).foregroundColor(.secondary)
                 }
                 Spacer()
                 if let speed = item.speed {
-                    Text(speed)
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundColor(.secondary)
+                    Text(speed).font(.system(size: 11, design: .monospaced)).foregroundColor(.secondary)
                 }
                 if let eta = item.eta {
-                    Text("ETA \(eta)")
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundColor(.secondary)
+                    Text("ETA \(eta)").font(.system(size: 11, design: .monospaced)).foregroundColor(.secondary)
                 }
             }
         }
@@ -224,23 +212,18 @@ struct DownloadRowView: View {
     }
 
     private var rowBackground: some ShapeStyle {
-        if item.status == .completed {
-            return AnyShapeStyle(Color.green.opacity(0.05))
-        } else if isFailed {
-            return AnyShapeStyle(Color.red.opacity(0.05))
-        }
+        if item.status == .completed { return AnyShapeStyle(Color.green.opacity(0.05)) }
+        if isFailed                  { return AnyShapeStyle(Color.red.opacity(0.05)) }
         return AnyShapeStyle(Color(nsColor: .controlBackgroundColor))
     }
 
     private var borderColor: Color {
         if item.status == .completed { return .green.opacity(0.2) }
-        if isFailed { return .red.opacity(0.2) }
+        if isFailed                  { return .red.opacity(0.2) }
         return Color.primary.opacity(0.08)
     }
 
     private static let progressGradient = LinearGradient(
-        colors: [.blue, .cyan],
-        startPoint: .leading,
-        endPoint: .trailing
+        colors: [.blue, .cyan], startPoint: .leading, endPoint: .trailing
     )
 }

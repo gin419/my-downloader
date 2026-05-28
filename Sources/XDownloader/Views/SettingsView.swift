@@ -39,17 +39,13 @@ struct SettingsView: View {
                     }
                 }
 
-                Button("Open in Finder") {
-                    manager.openDownloadsFolder()
-                }
-                .foregroundColor(.secondary)
+                Button("Open in Finder") { manager.openDownloadsFolder() }
+                    .foregroundColor(.secondary)
             }
 
             Section("Cookies") {
                 Picker("Browser", selection: $manager.cookieBrowser) {
-                    ForEach(CookieBrowser.allCases) { browser in
-                        Text(browser.displayName).tag(browser)
-                    }
+                    ForEach(CookieBrowser.allCases) { Text($0.displayName).tag($0) }
                 }
                 .pickerStyle(.segmented)
 
@@ -60,17 +56,13 @@ struct SettingsView: View {
 
             Section("Download Format") {
                 Picker("Format", selection: $manager.youtubeFormat) {
-                    ForEach(YouTubeFormat.allCases) { fmt in
-                        Text(fmt.displayName).tag(fmt)
-                    }
+                    ForEach(YouTubeFormat.allCases) { Text($0.displayName).tag($0) }
                 }
                 .pickerStyle(.segmented)
 
                 if manager.youtubeFormat != .audioOnly {
                     Picker("Subtitles", selection: $manager.subtitleLanguage) {
-                        ForEach(SubtitleLanguage.allCases) { lang in
-                            Text(lang.displayName).tag(lang)
-                        }
+                        ForEach(SubtitleLanguage.allCases) { Text($0.displayName).tag($0) }
                     }
 
                     if manager.subtitleLanguage != .none {
@@ -107,11 +99,10 @@ struct SettingsView: View {
                 Toggle("Show download date & time", isOn: $manager.showDownloadDate)
 
                 Picker("Open completed file as", selection: $manager.openPreference) {
-                    ForEach(OpenPreference.allCases) { pref in
-                        Text(pref.displayName).tag(pref)
-                    }
+                    ForEach(OpenPreference.allCases) { Text($0.displayName).tag($0) }
                 }
                 .pickerStyle(.segmented)
+
                 Text("\"Audio\" opens the audio stream when available (e.g. Audio Only downloads). Falls back to the video file if the audio file no longer exists.")
                     .font(.caption)
                     .foregroundColor(.secondary)
@@ -119,13 +110,13 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .frame(width: 440)
-        .onChange(of: manager.cookieBrowser) { manager.saveSettings() }
-        .onChange(of: manager.maxConcurrent) { manager.saveSettings() }
-        .onChange(of: manager.youtubeFormat) { manager.saveSettings() }
-        .onChange(of: manager.subtitleLanguage) { manager.saveSettings() }
-        .onChange(of: manager.embedSubtitles) { manager.saveSettings() }
-        .onChange(of: manager.showDownloadDate) { manager.saveSettings() }
-        .onChange(of: manager.openPreference) { manager.saveSettings() }
-        .onChange(of: manager.autoDownloadOnPaste) { manager.saveSettings() }
+        .onChange(of: manager.cookieBrowser)      { manager.saveSettings() }
+        .onChange(of: manager.maxConcurrent)      { manager.saveSettings() }
+        .onChange(of: manager.youtubeFormat)      { manager.saveSettings() }
+        .onChange(of: manager.subtitleLanguage)   { manager.saveSettings() }
+        .onChange(of: manager.embedSubtitles)     { manager.saveSettings() }
+        .onChange(of: manager.showDownloadDate)   { manager.saveSettings() }
+        .onChange(of: manager.openPreference)     { manager.saveSettings() }
+        .onChange(of: manager.autoDownloadOnPaste){ manager.saveSettings() }
     }
 }

@@ -10,25 +10,23 @@ enum DownloadStatus: Equatable {
 
     var label: String {
         switch self {
-        case .queued: return "Queued"
-        case .fetching: return "Fetching info..."
+        case .queued:      return "Queued"
+        case .fetching:    return "Fetching info..."
         case .downloading: return "Downloading"
-        case .completed: return "Done"
-        case .failed: return "Failed"
+        case .completed:   return "Done"
+        case .failed:      return "Failed"
         }
     }
 
     var color: Color {
         switch self {
-        case .queued: return .secondary
-        case .fetching: return .orange
+        case .queued:      return .secondary
+        case .fetching:    return .orange
         case .downloading: return .blue
-        case .completed: return .green
-        case .failed: return .red
+        case .completed:   return .green
+        case .failed:      return .red
         }
     }
-
-
 }
 
 @MainActor
@@ -43,9 +41,9 @@ class DownloadItem: Identifiable, ObservableObject {
     @Published var speed: String?
     @Published var eta: String?
     @Published var totalSize: String?
-    @Published var outputPath: String?   // primary path used by Show in Finder / open
-    @Published var videoPath: String?   // video or merged file
-    @Published var audioPath: String?   // audio-only file
+    @Published var outputPath: String?
+    @Published var videoPath: String?
+    @Published var audioPath: String?
     @Published var imageCount: Int?
     @Published var retryCount: Int = 0
 

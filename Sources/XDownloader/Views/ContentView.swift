@@ -69,9 +69,7 @@ struct ContentView: View {
                         .onSubmit { submitURL() }
 
                     if !urlInput.isEmpty {
-                        Button {
-                            urlInput = ""
-                        } label: {
+                        Button { urlInput = "" } label: {
                             Image(systemName: "xmark.circle.fill")
                                 .foregroundColor(.secondary)
                                 .font(.system(size: 14))
@@ -117,8 +115,7 @@ struct ContentView: View {
                 .buttonStyle(.plain)
                 .foregroundColor(.secondary)
 
-                Text("·")
-                    .foregroundColor(.secondary)
+                Text("·").foregroundColor(.secondary)
 
                 Text("or drag & drop a URL here")
                     .font(.system(size: 12))
@@ -141,9 +138,7 @@ struct ContentView: View {
 
                 if manager.items.contains(where: { $0.status == .completed }) {
                     Button("Clear done") {
-                        withAnimation(.easeOut(duration: 0.2)) {
-                            manager.clearCompleted()
-                        }
+                        withAnimation(.easeOut(duration: 0.2)) { manager.clearCompleted() }
                     }
                     .font(.system(size: 12))
                     .foregroundColor(.secondary)
@@ -161,36 +156,14 @@ struct ContentView: View {
                             item: item,
                             onReveal: { manager.revealInFinder(item) },
                             onRemove: {
-                                withAnimation(.easeOut(duration: 0.2)) {
-                                    manager.removeItem(item)
-                                }
+                                withAnimation(.easeOut(duration: 0.2)) { manager.removeItem(item) }
                             },
-                            onRetry: { manager.retryItem(item) },
+                            onRetry:    { manager.retryItem(item) },
                             onCopyLink: {
                                 NSPasteboard.general.clearContents()
                                 NSPasteboard.general.setString(item.url, forType: .string)
                             },
-                            onOpen: {
-                                // Resolve preferred file, falling back if it no longer exists
-                                // (e.g. the intermediate .m4a is deleted after merging).
-                                func exists(_ p: String?) -> Bool {
-                                    guard let p else { return false }
-                                    return FileManager.default.fileExists(atPath: p)
-                                }
-                                let path: String?
-                                if manager.openPreference == .audio {
-                                    path = exists(item.audioPath) ? item.audioPath
-                                         : exists(item.videoPath) ? item.videoPath
-                                         : item.outputPath
-                                } else {
-                                    path = exists(item.videoPath) ? item.videoPath
-                                         : exists(item.audioPath) ? item.audioPath
-                                         : item.outputPath
-                                }
-                                if let p = path {
-                                    NSWorkspace.shared.open(URL(fileURLWithPath: p))
-                                }
-                            }
+                            onOpen: { openFile(item) }
                         )
                         .transition(.asymmetric(
                             insertion: .move(edge: .top).combined(with: .opacity),
@@ -254,5 +227,23 @@ struct ContentView: View {
             urlInput = text
             isInputFocused = true
         }
+    }
+
+    private func openFile(_ item: DownloadItem) {
+        func exists(_ p: String?) -> Bool {
+            guard let p else { return false }
+            return FileManager.default.fileExists(atPath: p)
+        }
+        let path: String?
+        if manager.openPreference == .audio {
+            path = exists(item.audioPath) ? item.audioPath
+                 : exists(item.videoPath) ? item.videoPath
+                 : item.outputPath
+        } else {
+            path = exists(item.videoPath) ? item.videoPath
+                 : exists(item.audioPath) ? item.audioPath
+                 : item.outputPath
+        }
+        if let p = path { NSWorkspace.shared.open(URL(fileURLWithPath: p)) }
     }
 }

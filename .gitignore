@@ -3,7 +3,8 @@
 .AppleDouble
 .LSOverride
 
-# Xcode / Swift build
+# Swift / Xcode build
+.build/
 build/
 *.o
 *.d
