@@ -10,7 +10,7 @@ enum YouTubeFormat: String, CaseIterable, Identifiable {
     var displayName: String {
         switch self {
         case .videoAndAudio: return "Video + Audio"
-        case .singleFile:    return "Single File"
+        case .singleFile:    return "Video Only"
         case .audioOnly:     return "Audio Only"
         }
     }
