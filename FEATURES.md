@@ -17,7 +17,7 @@
 
 ## Download Formats
 - **Video + Audio** — best quality MP4 with separate video and audio streams merged (default)
-- **Single File** — best pre-muxed MP4 that needs no merging step
+- **Video Only** — best pre-muxed MP4 that needs no merging step
 - **Audio Only** — extracts audio as MP3 at highest quality
 
 ## Subtitles (YouTube)
