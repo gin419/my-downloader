@@ -40,16 +40,18 @@ enum GalleryDlService {
             return
         }
 
-        // Detect newly created image files since the download started.
+        // Detect newly created media files since the download started.
         let imageExts = Set(["jpg", "jpeg", "png", "webp", "gif", "avif"])
+        let videoExts = Set(["mp4", "mov", "webm", "mkv", "m4v"])
         let afterFiles = (try? FileManager.default.contentsOfDirectory(atPath: outputDirectory.path)) ?? []
-        let newImages = afterFiles.filter { f in
-            !beforeFiles.contains(f) &&
-            imageExts.contains(URL(fileURLWithPath: f).pathExtension.lowercased())
-        }.sorted()
+
+        func ext(_ name: String) -> String { URL(fileURLWithPath: name).pathExtension.lowercased() }
+        let newImages = afterFiles.filter { !beforeFiles.contains($0) && imageExts.contains(ext($0)) }.sorted()
+        let newVideos = afterFiles.filter { !beforeFiles.contains($0) && videoExts.contains(ext($0)) }.sorted()
 
         if item.outputPath == nil {
-            if let first = newImages.first {
+            let candidate = newImages.first ?? newVideos.first
+            if let first = candidate {
                 item.outputPath = outputDirectory.appendingPathComponent(first).path
             } else {
                 // File already existed (gallery-dl skipped it) — resolve path via dry run.
@@ -64,11 +66,25 @@ enum GalleryDlService {
             }
         }
 
-        let count = newImages.count > 0 ? newImages.count : (item.outputPath != nil ? 1 : 0)
-        item.imageCount = count > 0 ? count : nil
+        if !newImages.isEmpty { item.imageCount = newImages.count }
+        if !newVideos.isEmpty { item.videoCount = newVideos.count }
+
+        // "File already existed" path: parseLine never fired, so infer count from outputPath extension.
+        if newImages.isEmpty && newVideos.isEmpty, let path = item.outputPath {
+            let e = ext(path)
+            if imageExts.contains(e) && (item.imageCount ?? 0) == 0 { item.imageCount = 1 }
+            if videoExts.contains(e) && (item.videoCount ?? 0) == 0 { item.videoCount = 1 }
+        }
+
+        // Sync category from final counts (overrides whatever parseLine may have set).
+        let hasImg = (item.imageCount ?? 0) > 0
+        let hasVid = (item.videoCount ?? 0) > 0
+        if hasImg && hasVid       { item.mediaCategory = .mixed }
+        else if hasImg            { item.mediaCategory = .image }
+        else if hasVid            { item.mediaCategory = .video }
 
         // Rename single-image files: strip trailing " #1" suffix.
-        if count == 1, let path = item.outputPath {
+        if newImages.count == 1, let path = item.outputPath {
             let u = URL(fileURLWithPath: path)
             let stem = u.deletingPathExtension().lastPathComponent
             if stem.hasSuffix(" #1") {
@@ -106,12 +122,20 @@ enum GalleryDlService {
             guard knownMedia.contains(ext) else { return }
 
             let isImage = ["jpg", "jpeg", "png", "webp", "gif", "avif"].contains(ext)
+            let isVideo = ["mp4", "mov", "webm", "mkv", "m4v"].contains(ext)
             item.status     = .downloading
             item.outputPath = line
             if isImage {
-                item.imageCount    = (item.imageCount ?? 0) + 1
-                item.mediaCategory = .image
+                item.imageCount = (item.imageCount ?? 0) + 1
+            } else if isVideo {
+                item.videoCount = (item.videoCount ?? 0) + 1
             }
+            // Update category progressively
+            let hasImg = (item.imageCount ?? 0) > 0
+            let hasVid = (item.videoCount ?? 0) > 0
+            if hasImg && hasVid       { item.mediaCategory = .mixed }
+            else if hasImg            { item.mediaCategory = .image }
+            else if hasVid            { item.mediaCategory = .video }
 
             if item.title == nil {
                 var stem = URL(fileURLWithPath: line).deletingPathExtension().lastPathComponent
