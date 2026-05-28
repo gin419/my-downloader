@@ -5,10 +5,25 @@ struct ContentView: View {
     @EnvironmentObject var manager: DownloadManager
     @State private var urlInput: String = ""
     @State private var isHoveringDrop = false
+    @State private var showInstallSheet = false
+    @State private var bannerDismissed = false
     @FocusState private var isInputFocused: Bool
+
+    private var showBanner: Bool {
+        !manager.missingTools.isEmpty && !bannerDismissed
+    }
 
     var body: some View {
         VStack(spacing: 0) {
+            if showBanner {
+                RequirementsBannerView(
+                    tools: manager.missingTools,
+                    onSetup: { showInstallSheet = true },
+                    onDismiss: { bannerDismissed = true }
+                )
+                .transition(.move(edge: .top).combined(with: .opacity))
+            }
+
             urlInputSection
                 .padding(.horizontal, 20)
                 .padding(.top, 20)
@@ -24,6 +39,10 @@ struct ContentView: View {
             }
         }
         .background(Color(nsColor: .windowBackgroundColor))
+        .sheet(isPresented: $showInstallSheet, onDismiss: { bannerDismissed = manager.missingTools.isEmpty }) {
+            InstallToolsSheet(tools: manager.missingTools)
+                .environmentObject(manager)
+        }
         .onDrop(of: [.plainText, .url], isTargeted: $isHoveringDrop) { providers in
             for provider in providers {
                 // Prefer the URL representation; only fall back to plain text if a

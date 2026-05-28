@@ -16,6 +16,7 @@ class DownloadManager: ObservableObject {
     @Published var embedSubtitles: Bool = true
     @Published var openPreference: OpenPreference = .video
     @Published var autoDownloadOnPaste: Bool = false
+    @Published var missingTools: [ToolRequirement] = []
 
     // MARK: - Private state
 
@@ -23,27 +24,9 @@ class DownloadManager: ObservableObject {
     private var downloadQueue: [DownloadItem] = []
     private var activeCount: Int = 0
 
-    private let ytdlpPath: String = {
-        for p in ["/opt/homebrew/bin/yt-dlp", "/usr/local/bin/yt-dlp", "/usr/bin/yt-dlp"] {
-            if FileManager.default.fileExists(atPath: p) { return p }
-        }
-        return "yt-dlp"
-    }()
-
-    private let galleryDlPath: String? = {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let candidates = [
-            "/opt/homebrew/bin/gallery-dl",
-            "/usr/local/bin/gallery-dl",
-            "\(home)/Library/Python/3.9/bin/gallery-dl",
-            "\(home)/Library/Python/3.10/bin/gallery-dl",
-            "\(home)/Library/Python/3.11/bin/gallery-dl",
-            "\(home)/Library/Python/3.12/bin/gallery-dl",
-            "\(home)/Library/Python/3.13/bin/gallery-dl",
-            "\(home)/.local/bin/gallery-dl",
-        ]
-        return candidates.first { FileManager.default.fileExists(atPath: $0) }
-    }()
+    // Resolved at runtime via RequirementsService so paths stay in one place.
+    private var ytdlpPath: String  { RequirementsService.ytdlp.installedPath    ?? "yt-dlp"     }
+    private var galleryDlPath: String? { RequirementsService.galleryDl.installedPath }
 
     // MARK: - Init
 
@@ -55,6 +38,11 @@ class DownloadManager: ObservableObject {
         self.outputDirectory = defaultDir
 
         loadSettings()
+        checkRequirements()
+    }
+
+    func checkRequirements() {
+        missingTools = RequirementsService.missingTools()
     }
 
     // MARK: - Queue management
