@@ -1,0 +1,81 @@
+name: Release
+
+# Trigger by pushing a version tag: git tag v1.1 && git push origin v1.1
+on:
+  push:
+    tags:
+      - 'v[0-9]*'
+
+jobs:
+  # ── Step 1: security must pass before anything is built or published ─────────
+  security:
+    name: Security scan
+    uses: ./.github/workflows/security.yml
+
+  # ── Step 2: build the macOS app and publish a GitHub Release ─────────────────
+  build-and-release:
+    name: Build & publish
+    needs: security          # blocked until both security layers pass
+    runs-on: macos-15
+    permissions:
+      contents: write        # needed to create the GitHub Release
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Parse "v1.2.3" → VERSION=1.2.3, BUILD=<run number>
+      - name: Parse version
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+          echo "TAG=$TAG"                       >> "$GITHUB_ENV"
+          echo "VERSION=$VERSION"               >> "$GITHUB_ENV"
+          echo "BUILD=${{ github.run_number }}" >> "$GITHUB_ENV"
+          echo "ASSET=XDownloader-${TAG}.zip"   >> "$GITHUB_ENV"
+
+      # Stamp the version from the tag into the app bundle's Info.plist.
+      # This runs before the build so the binary carries the correct version.
+      - name: Stamp version into Info.plist
+        run: |
+          /usr/libexec/PlistBuddy \
+            -c "Set :CFBundleShortVersionString ${{ env.VERSION }}" \
+            -c "Set :CFBundleVersion ${{ env.BUILD }}" \
+            Resources/Info.plist
+          echo "Stamped version ${{ env.VERSION }} (build ${{ env.BUILD }})"
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_16.app
+
+      - name: Build release binary
+        run: swift build -c release
+
+      - name: Create app bundle
+        run: ./build.sh release
+
+      # ditto preserves macOS metadata better than plain zip
+      - name: Archive app bundle
+        run: |
+          ditto -c -k --keepParent XDownloader.app "${{ env.ASSET }}"
+          echo "Archive size: $(du -sh ${{ env.ASSET }} | cut -f1)"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "XDownloader ${{ env.TAG }}"
+          tag_name: ${{ env.TAG }}
+          generate_release_notes: true
+          files: ${{ env.ASSET }}
+          body: |
+            ## Install
+
+            1. Download **`${{ env.ASSET }}`** below
+            2. Unzip and drag **XDownloader.app** to `/Applications`
+            3. First launch: right-click → **Open** *(app is unsigned — Gatekeeper will prompt once)*
+
+            ## Requirements
+
+            The app checks for missing tools on launch and can install them for you, or run manually:
+
+            ```bash
+            brew install yt-dlp gallery-dl ffmpeg
+            ```

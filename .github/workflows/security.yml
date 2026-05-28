@@ -5,6 +5,7 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_call:   # allows release.yml (and others) to call this workflow
 
 jobs:
   # ── Layer 1: project-specific rules ─────────────────────────────────────────
@@ -27,15 +28,6 @@ jobs:
             | tar -xz gitleaks
           sudo mv gitleaks /usr/local/bin/gitleaks
 
-      - name: "Scan — push (full history)"
-        if: github.event_name == 'push'
-        run: |
-          gitleaks detect \
-            --config security/layer1-rules.toml \
-            --source . \
-            --redact \
-            --verbose
-
       - name: "Scan — PR (changed commits only)"
         if: github.event_name == 'pull_request'
         run: |
@@ -43,6 +35,15 @@ jobs:
             --config security/layer1-rules.toml \
             --source . \
             --log-opts="origin/${{ github.base_ref }}...HEAD" \
+            --redact \
+            --verbose
+
+      - name: "Scan — full history (push / release)"
+        if: github.event_name != 'pull_request'
+        run: |
+          gitleaks detect \
+            --config security/layer1-rules.toml \
+            --source . \
             --redact \
             --verbose
 
@@ -66,15 +67,6 @@ jobs:
             | tar -xz gitleaks
           sudo mv gitleaks /usr/local/bin/gitleaks
 
-      - name: "Scan — push (full history)"
-        if: github.event_name == 'push'
-        run: |
-          gitleaks detect \
-            --config security/layer2-rules.toml \
-            --source . \
-            --redact \
-            --verbose
-
       - name: "Scan — PR (changed commits only)"
         if: github.event_name == 'pull_request'
         run: |
@@ -82,5 +74,14 @@ jobs:
             --config security/layer2-rules.toml \
             --source . \
             --log-opts="origin/${{ github.base_ref }}...HEAD" \
+            --redact \
+            --verbose
+
+      - name: "Scan — full history (push / release)"
+        if: github.event_name != 'pull_request'
+        run: |
+          gitleaks detect \
+            --config security/layer2-rules.toml \
+            --source . \
             --redact \
             --verbose
