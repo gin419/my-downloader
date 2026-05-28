@@ -60,7 +60,17 @@ struct SettingsView: View {
                 }
                 .pickerStyle(.segmented)
 
-                if manager.youtubeFormat != .audioOnly {
+                if manager.youtubeFormat == .audioOnly {
+                    Picker("Quality", selection: $manager.audioQuality) {
+                        ForEach(AudioQuality.allCases) { Text($0.displayName).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                } else {
+                    Picker("Quality", selection: $manager.videoQuality) {
+                        ForEach(VideoQuality.allCases) { Text($0.displayName).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+
                     Picker("Subtitles", selection: $manager.subtitleLanguage) {
                         ForEach(SubtitleLanguage.allCases) { Text($0.displayName).tag($0) }
                     }
@@ -75,7 +85,7 @@ struct SettingsView: View {
                     }
                 }
 
-                Text("Format applies to all downloads. Subtitle settings apply to YouTube URLs only.")
+                Text("Format and quality apply to all downloads. Subtitle settings apply to YouTube URLs only.")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
@@ -113,6 +123,8 @@ struct SettingsView: View {
         .onChange(of: manager.cookieBrowser)      { manager.saveSettings() }
         .onChange(of: manager.maxConcurrent)      { manager.saveSettings() }
         .onChange(of: manager.youtubeFormat)      { manager.saveSettings() }
+        .onChange(of: manager.videoQuality)       { manager.saveSettings() }
+        .onChange(of: manager.audioQuality)       { manager.saveSettings() }
         .onChange(of: manager.subtitleLanguage)   { manager.saveSettings() }
         .onChange(of: manager.embedSubtitles)     { manager.saveSettings() }
         .onChange(of: manager.showDownloadDate)   { manager.saveSettings() }

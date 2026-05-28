@@ -1,6 +1,44 @@
 import Foundation
 import SwiftUI
 
+enum MediaCategory: Equatable {
+    case image
+    case video
+    case audio
+    case mixed   // image + video in the same tweet
+    case unknown
+
+    var icon: String {
+        switch self {
+        case .image:   return "🖼️"
+        case .video:   return "🎬"
+        case .audio:   return "🎵"
+        case .mixed:   return "🖼️🎬"
+        case .unknown: return "?"
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .image:   return "Image"
+        case .video:   return "Video"
+        case .audio:   return "Audio"
+        case .mixed:   return "Mixed"
+        case .unknown: return "?"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .image:   return .purple
+        case .video:   return .blue
+        case .audio:   return .orange
+        case .mixed:   return .indigo
+        case .unknown: return .secondary
+        }
+    }
+}
+
 enum DownloadStatus: Equatable {
     case queued
     case fetching
@@ -45,6 +83,8 @@ class DownloadItem: Identifiable, ObservableObject {
     @Published var videoPath: String?
     @Published var audioPath: String?
     @Published var imageCount: Int?
+    @Published var videoCount: Int?
+    @Published var mediaCategory: MediaCategory = .unknown
     @Published var retryCount: Int = 0
 
     init(url: String) {

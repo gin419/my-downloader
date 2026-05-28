@@ -8,11 +8,16 @@ enum YtDlpService {
         for item: DownloadItem,
         outputDirectory: URL,
         format: YouTubeFormat,
+        videoQuality: VideoQuality,
+        audioQuality: AudioQuality,
         subtitleLanguage: SubtitleLanguage,
         embedSubtitles: Bool,
         cookieBrowser: CookieBrowser
     ) -> [String] {
-        let outputTemplate = outputDirectory.path + "/%(uploader)s - %(title)s.%(ext)s"
+        // %(playlist_index& [%(playlist_index)02d]|)s expands to " [01]" etc. only when
+        // a tweet contains multiple videos (yt-dlp treats them as a playlist). For
+        // single-video tweets playlist_index is not set, so the suffix is empty.
+        let outputTemplate = outputDirectory.path + "/%(uploader)s - %(title)s%(playlist_index& [%(playlist_index)02d]|)s.%(ext)s"
         var args: [String] = []
 
         if cookieBrowser != .none {
@@ -20,6 +25,7 @@ enum YtDlpService {
         }
 
         let isYouTube = item.url.contains("youtube.com/") || item.url.contains("youtu.be/")
+        let hf = videoQuality.heightFilter ?? ""   // e.g. "[height<=1080]" or ""
 
         switch format {
         case .audioOnly:
@@ -27,16 +33,19 @@ enum YtDlpService {
                 "--format", "bestaudio/best",
                 "--extract-audio",
                 "--audio-format", "mp3",
-                "--audio-quality", "0",
+                "--audio-quality", audioQuality.rawValue,
             ]
         case .singleFile:
+            // Prefer HTTPS combined streams; m3u8/HLS tokens expire quickly and can
+            // cause "Requested format is not available" before the download starts.
             args += [
-                "--format", "bestvideo*[acodec!=none][ext=mp4]/best[ext=mp4]/best",
+                "--format", "bestvideo*[acodec!=none][ext=mp4][protocol^=https]\(hf)/bestvideo*[acodec!=none][ext=mp4]\(hf)/best[acodec!=none]\(hf)/best",
                 "--merge-output-format", "mp4",
             ]
         case .videoAndAudio:
+            // Prefer H.264 (avc) over AV1 for wider player compatibility.
             args += [
-                "--format", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best",
+                "--format", "bestvideo[vcodec^=avc][ext=mp4]\(hf)+bestaudio[ext=m4a]/bestvideo[ext=mp4]\(hf)+bestaudio[ext=m4a]/bestvideo\(hf)+bestaudio/best",
                 "--merge-output-format", "mp4",
             ]
         }
@@ -90,7 +99,10 @@ enum YtDlpService {
             let isAudio = ["m4a", "aac", "ogg", "opus", "weba"].contains(ext)
 
             if !isImage {
-                if isAudio { item.audioPath = path } else { item.videoPath = path }
+                if isAudio { item.audioPath = path } else {
+                    item.videoPath = path
+                    item.videoCount = (item.videoCount ?? 0) + 1
+                }
                 item.outputPath = path
             } else if item.outputPath == nil {
                 item.outputPath = path
@@ -101,9 +113,21 @@ enum YtDlpService {
                 if isImage, let r = stem.range(of: #"_\d+$"#, options: .regularExpression) {
                     stem = String(stem[..<r.lowerBound])
                 }
+                // Strip playlist index suffix " [01]" added for multi-video tweets
+                if let r = stem.range(of: #" \[\d+\]$"#, options: .regularExpression) {
+                    stem = String(stem[..<r.lowerBound])
+                }
                 if let r = stem.range(of: " - ") { item.title = String(stem[r.upperBound...]) }
             }
             if isImage { item.imageCount = (item.imageCount ?? 0) + 1 }
+
+            // Update category progressively as files land
+            let hasImg = (item.imageCount ?? 0) > 0
+            let hasVid = (item.videoCount ?? 0) > 0
+            if hasImg && hasVid       { item.mediaCategory = .mixed }
+            else if hasImg            { item.mediaCategory = .image }
+            else if hasVid            { item.mediaCategory = .video }
+
             return
         }
 
@@ -122,8 +146,9 @@ enum YtDlpService {
         if line.hasPrefix("[ExtractAudio]") && line.contains("Destination:"),
            let range = line.range(of: "Destination: ") {
             let path = String(line[range.upperBound...])
-            item.audioPath  = path
-            item.outputPath = path
+            item.audioPath     = path
+            item.outputPath    = path
+            item.mediaCategory = .audio
             return
         }
 
@@ -146,7 +171,11 @@ enum YtDlpService {
         let lower = line.lowercased()
         if lower.contains("error:") {
             if case .failed = item.status { return }
-            item.status = .failed(line)
+            if line.contains("Requested format is not available") {
+                item.status = .failed("Format not available — try a different format in Settings, or update yt-dlp.")
+            } else {
+                item.status = .failed(line)
+            }
         }
     }
 }

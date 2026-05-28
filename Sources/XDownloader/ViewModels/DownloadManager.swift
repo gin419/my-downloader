@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import SwiftUI
 
 @MainActor
 class DownloadManager: ObservableObject {
@@ -12,17 +13,21 @@ class DownloadManager: ObservableObject {
     @Published var maxConcurrent: Int = 2
     @Published var showDownloadDate: Bool = false
     @Published var youtubeFormat: YouTubeFormat = .videoAndAudio
+    @Published var videoQuality: VideoQuality = .best
+    @Published var audioQuality: AudioQuality = .best
     @Published var subtitleLanguage: SubtitleLanguage = .none
     @Published var embedSubtitles: Bool = true
     @Published var openPreference: OpenPreference = .video
     @Published var autoDownloadOnPaste: Bool = false
     @Published var missingTools: [ToolRequirement] = []
+    @Published var notice: String? = nil
 
     // MARK: - Private state
 
     private var activeProcesses: [UUID: Process] = [:]
     private var downloadQueue: [DownloadItem] = []
     private var activeCount: Int = 0
+    private var noticeTask: Task<Void, Never>?
 
     // Resolved at runtime via RequirementsService so paths stay in one place.
     private var ytdlpPath: String  { RequirementsService.ytdlp.installedPath    ?? "yt-dlp"     }
@@ -50,7 +55,19 @@ class DownloadManager: ObservableObject {
     func addDownload(urlString: String) {
         let trimmed = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        let item = DownloadItem(url: stripTrackingParams(trimmed))
+        let stripped = stripTrackingParams(trimmed)
+
+        if let existing = items.first(where: { $0.url == stripped }) {
+            switch existing.status {
+            case .completed:
+                showNotice("Already downloaded — clear the completed item to re-download.")
+            default:
+                showNotice("Already in the download queue.")
+            }
+            return
+        }
+
+        let item = DownloadItem(url: stripped)
         items.insert(item, at: 0)
         downloadQueue.append(item)
         drainQueue()
@@ -66,8 +83,10 @@ class DownloadManager: ObservableObject {
         item.videoPath  = nil
         item.audioPath  = nil
         item.title      = nil
-        item.imageCount = nil
-        item.retryCount += 1
+        item.imageCount    = nil
+        item.videoCount    = nil
+        item.mediaCategory = .unknown
+        item.retryCount   += 1
         downloadQueue.append(item)
         drainQueue()
     }
@@ -105,6 +124,8 @@ class DownloadManager: ObservableObject {
         d.set(cookieBrowser.rawValue,         forKey: "cookieBrowser")
         d.set(showDownloadDate,               forKey: "showDownloadDate")
         d.set(youtubeFormat.rawValue,         forKey: "youtubeFormat")
+        d.set(videoQuality.rawValue,          forKey: "videoQuality")
+        d.set(audioQuality.rawValue,          forKey: "audioQuality")
         d.set(subtitleLanguage.rawValue,      forKey: "subtitleLanguage")
         d.set(embedSubtitles,                 forKey: "embedSubtitles")
         d.set(maxConcurrent,                  forKey: "maxConcurrent")
@@ -119,6 +140,8 @@ class DownloadManager: ObservableObject {
         if let s = d.string(forKey: "outputDirectory"), let u = URL(string: s) { outputDirectory = u }
         if let r = d.string(forKey: "cookieBrowser"),   let v = CookieBrowser(rawValue: r)    { cookieBrowser = v }
         if let r = d.string(forKey: "youtubeFormat"),   let v = YouTubeFormat(rawValue: r)    { youtubeFormat = v }
+        if let r = d.string(forKey: "videoQuality"),    let v = VideoQuality(rawValue: r)     { videoQuality = v }
+        if let r = d.string(forKey: "audioQuality"),    let v = AudioQuality(rawValue: r)     { audioQuality = v }
         if let r = d.string(forKey: "subtitleLanguage"),let v = SubtitleLanguage(rawValue: r) { subtitleLanguage = v }
         if let r = d.string(forKey: "openPreference"),  let v = OpenPreference(rawValue: r)   { openPreference = v }
         showDownloadDate  = d.bool(forKey: "showDownloadDate")
@@ -142,11 +165,14 @@ class DownloadManager: ObservableObject {
 
     private func runDownload(_ item: DownloadItem) async {
         item.status = .fetching
+        if youtubeFormat == .audioOnly { item.mediaCategory = .audio }
 
         let args = YtDlpService.buildArguments(
             for: item,
             outputDirectory: outputDirectory,
             format: youtubeFormat,
+            videoQuality: videoQuality,
+            audioQuality: audioQuality,
             subtitleLanguage: subtitleLanguage,
             embedSubtitles: embedSubtitles,
             cookieBrowser: cookieBrowser
@@ -196,6 +222,17 @@ class DownloadManager: ObservableObject {
             // already set by YtDlpService
         } else {
             item.status = .failed("yt-dlp exited with code \(exitCode)")
+        }
+    }
+
+    private func showNotice(_ message: String) {
+        withAnimation(.easeInOut(duration: 0.2)) { notice = message }
+        noticeTask?.cancel()
+        noticeTask = Task {
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            if !Task.isCancelled {
+                withAnimation(.easeInOut(duration: 0.2)) { notice = nil }
+            }
         }
     }
 

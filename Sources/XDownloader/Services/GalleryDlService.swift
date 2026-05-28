@@ -108,7 +108,10 @@ enum GalleryDlService {
             let isImage = ["jpg", "jpeg", "png", "webp", "gif", "avif"].contains(ext)
             item.status     = .downloading
             item.outputPath = line
-            if isImage { item.imageCount = (item.imageCount ?? 0) + 1 }
+            if isImage {
+                item.imageCount    = (item.imageCount ?? 0) + 1
+                item.mediaCategory = .image
+            }
 
             if item.title == nil {
                 var stem = URL(fileURLWithPath: line).deletingPathExtension().lastPathComponent

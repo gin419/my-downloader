@@ -75,6 +75,23 @@ struct ContentView: View {
 
     private var urlInputSection: some View {
         VStack(alignment: .leading, spacing: 12) {
+            if let notice = manager.notice {
+                HStack(spacing: 6) {
+                    Image(systemName: "info.circle.fill")
+                        .font(.system(size: 12))
+                        .foregroundColor(.orange)
+                    Text(notice)
+                        .font(.system(size: 12))
+                        .foregroundColor(.orange)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.orange.opacity(0.1))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .transition(.move(edge: .top).combined(with: .opacity))
+            }
+
             HStack(spacing: 10) {
                 HStack(spacing: 8) {
                     Image(systemName: "link")
@@ -229,10 +246,11 @@ struct ContentView: View {
     private func submitURL() {
         let trimmed = urlInput.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        let before = manager.items.count
         withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
             manager.addDownload(urlString: trimmed)
         }
-        urlInput = ""
+        if manager.items.count > before { urlInput = "" }
     }
 
     private func pasteFromClipboard() {

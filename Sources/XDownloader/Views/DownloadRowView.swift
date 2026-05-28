@@ -43,6 +43,9 @@ struct DownloadRowView: View {
 
                 Spacer()
 
+                if item.mediaCategory != .unknown {
+                    mediaCategoryChip
+                }
                 statusBadge
             }
 
@@ -109,6 +112,39 @@ struct DownloadRowView: View {
         }
     }
 
+    private var mediaCategoryChip: some View {
+        let cat = item.mediaCategory
+        return HStack(spacing: 4) {
+            Text(cat.icon).font(.system(size: 11))
+            Text(mediaCategoryLabel).font(.system(size: 11, weight: .medium))
+        }
+        .foregroundColor(cat.color)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3)
+        .background(cat.color.opacity(0.12))
+        .clipShape(Capsule())
+        .overlay(Capsule().strokeBorder(cat.color.opacity(0.25), lineWidth: 0.5))
+    }
+
+    private var mediaCategoryLabel: String {
+        switch item.mediaCategory {
+        case .image:
+            if let c = item.imageCount, c > 1 { return "Image · \(c)" }
+            return "Image"
+        case .video:
+            if let c = item.videoCount, c > 1 { return "Video · \(c)" }
+            return "Video"
+        case .audio:
+            return "Audio"
+        case .mixed:
+            let imgs = item.imageCount.map { "\($0)" } ?? ""
+            let vids = item.videoCount.map { "\($0)" } ?? ""
+            return "Mixed · \(imgs)+\(vids)"
+        case .unknown:
+            return "?"
+        }
+    }
+
     private var statusBadge: some View {
         Text(item.status.label)
             .font(.system(size: 11, weight: .medium))
@@ -160,6 +196,11 @@ struct DownloadRowView: View {
                 .buttonStyle(.plain)
                 .foregroundColor(.blue)
 
+                if let count = item.videoCount, count > 1 {
+                    Text("\(count) videos")
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                }
                 if let count = item.imageCount, count > 0 {
                     Text("\(count) image\(count > 1 ? "s" : "")")
                         .font(.system(size: 11))

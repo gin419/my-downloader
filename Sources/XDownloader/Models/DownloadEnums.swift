@@ -42,6 +42,49 @@ enum SubtitleLanguage: String, CaseIterable, Identifiable {
     }
 }
 
+enum VideoQuality: String, CaseIterable, Identifiable {
+    case best  = "best"
+    case p1080 = "1080"
+    case p720  = "720"
+    case p480  = "480"
+    case p360  = "360"
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .best:  return "Best"
+        case .p1080: return "1080p"
+        case .p720:  return "720p"
+        case .p480:  return "480p"
+        case .p360:  return "360p"
+        }
+    }
+
+    /// yt-dlp filter string, e.g. "[height<=720]". Nil for "best" (no filter).
+    var heightFilter: String? {
+        self == .best ? nil : "[height<=\(rawValue)]"
+    }
+}
+
+enum AudioQuality: String, CaseIterable, Identifiable {
+    case best = "0"
+    case q320 = "320K"
+    case q192 = "192K"
+    case q128 = "128K"
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .best: return "Best"
+        case .q320: return "320 kbps"
+        case .q192: return "192 kbps"
+        case .q128: return "128 kbps"
+        }
+    }
+}
+
 enum OpenPreference: String, CaseIterable, Identifiable {
     case video = "video"
     case audio = "audio"
