@@ -1,0 +1,27 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Xcode / Swift build
+build/
+*.o
+*.d
+*.dylib
+*.a
+*.xcodeproj/
+*.xcworkspace/
+xcuserdata/
+DerivedData/
+*.xcarchive
+*.ipa
+
+# App bundle (built artifact)
+XDownloader.app/
+
+# Icon generation scripts (dev-only)
+make_icon.py
+make_icon.swift
+
+# Claude Code
+.claude/
