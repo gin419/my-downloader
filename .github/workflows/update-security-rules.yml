@@ -1,0 +1,49 @@
+name: Update Layer 2 Security Rules
+
+# Runs every Monday at 06:00 UTC so layer2-rules.toml always reflects
+# the latest gitleaks community patterns without manual intervention.
+# Can also be triggered manually from the Actions tab.
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    name: Pull latest gitleaks community rules
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download latest community rules
+        run: |
+          curl -sSL \
+            "https://raw.githubusercontent.com/gitleaks/gitleaks/master/config/gitleaks.toml" \
+            -o security/layer2-rules.toml
+
+      - name: Check for changes
+        id: diff
+        run: |
+          if git diff --quiet security/layer2-rules.toml; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "No changes — rules are already up to date."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            ADDED=$(git diff --shortstat security/layer2-rules.toml | grep -oE '[0-9]+ insertion' || echo "0 insertion")
+            REMOVED=$(git diff --shortstat security/layer2-rules.toml | grep -oE '[0-9]+ deletion' || echo "0 deletion")
+            echo "Rules updated: +${ADDED}, -${REMOVED}"
+          fi
+
+      - name: Commit updated rules
+        if: steps.diff.outputs.changed == 'true'
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add security/layer2-rules.toml
+          git commit -m "chore: update layer 2 security rules [skip ci]"
+          git push

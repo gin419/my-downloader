@@ -1,0 +1,86 @@
+name: Security Scan
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # ── Layer 1: project-specific rules ─────────────────────────────────────────
+  layer1:
+    name: "Layer 1 — Project rules"
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history so gitleaks can scan all commits
+
+      - name: Install gitleaks
+        run: |
+          VERSION=$(curl -sf "https://api.github.com/repos/gitleaks/gitleaks/releases/latest" \
+            -H "Authorization: Bearer ${{ github.token }}" \
+            | grep '"tag_name"' | sed 's/.*"v\([^"]*\)".*/\1/')
+          curl -sSL \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}/gitleaks_${VERSION}_linux_x64.tar.gz" \
+            | tar -xz gitleaks
+          sudo mv gitleaks /usr/local/bin/gitleaks
+
+      - name: "Scan — push (full history)"
+        if: github.event_name == 'push'
+        run: |
+          gitleaks detect \
+            --config security/layer1-rules.toml \
+            --source . \
+            --redact \
+            --verbose
+
+      - name: "Scan — PR (changed commits only)"
+        if: github.event_name == 'pull_request'
+        run: |
+          gitleaks detect \
+            --config security/layer1-rules.toml \
+            --source . \
+            --log-opts="origin/${{ github.base_ref }}...HEAD" \
+            --redact \
+            --verbose
+
+  # ── Layer 2: community rules (auto-updated weekly) ──────────────────────────
+  layer2:
+    name: "Layer 2 — Community rules"
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install gitleaks
+        run: |
+          VERSION=$(curl -sf "https://api.github.com/repos/gitleaks/gitleaks/releases/latest" \
+            -H "Authorization: Bearer ${{ github.token }}" \
+            | grep '"tag_name"' | sed 's/.*"v\([^"]*\)".*/\1/')
+          curl -sSL \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}/gitleaks_${VERSION}_linux_x64.tar.gz" \
+            | tar -xz gitleaks
+          sudo mv gitleaks /usr/local/bin/gitleaks
+
+      - name: "Scan — push (full history)"
+        if: github.event_name == 'push'
+        run: |
+          gitleaks detect \
+            --config security/layer2-rules.toml \
+            --source . \
+            --redact \
+            --verbose
+
+      - name: "Scan — PR (changed commits only)"
+        if: github.event_name == 'pull_request'
+        run: |
+          gitleaks detect \
+            --config security/layer2-rules.toml \
+            --source . \
+            --log-opts="origin/${{ github.base_ref }}...HEAD" \
+            --redact \
+            --verbose
