@@ -100,3 +100,8 @@ paths = [
   '''security/layer2-rules\.toml''',
   '''\.github/workflows/update-security-rules\.yml''',
 ]
+# Historical commits that contain /Users/gin/ in code comments (removed in later commits)
+commits = [
+  "00127a57965529adf302018cb565ef3e06ad8d7f",
+  "9fd87f863cf869f8db6de41b956d65195843b3c8",
+]
