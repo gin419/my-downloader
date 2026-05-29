@@ -281,6 +281,43 @@ struct ContentView: View {
                  : exists(item.audioPath) ? item.audioPath
                  : item.outputPath
         }
-        if let p = path { NSWorkspace.shared.open(URL(fileURLWithPath: p)) }
+        guard let p = path else { return }
+        let url = URL(fileURLWithPath: p)
+
+        if (item.imageCount ?? 0) > 1 {
+            let siblings = siblingImageURLs(forImageAt: url)
+            if siblings.count > 1,
+               let appURL = NSWorkspace.shared.urlForApplication(toOpen: url) {
+                NSWorkspace.shared.open(siblings,
+                                        withApplicationAt: appURL,
+                                        configuration: NSWorkspace.OpenConfiguration())
+                return
+            }
+        }
+        NSWorkspace.shared.open(url)
+    }
+
+    /// Given any one image file from a gallery-dl multi-image download
+    /// (named like `prefix #N.ext`), return all sibling images in number order.
+    private func siblingImageURLs(forImageAt url: URL) -> [URL] {
+        let stem = url.deletingPathExtension().lastPathComponent
+        guard let range = stem.range(of: #" #\d+$"#, options: .regularExpression) else {
+            return [url]
+        }
+        let prefix = String(stem[..<range.lowerBound]) + " #"
+        let dir = url.deletingLastPathComponent()
+        let imageExts: Set<String> = ["jpg", "jpeg", "png", "webp", "gif", "avif"]
+
+        guard let entries = try? FileManager.default.contentsOfDirectory(atPath: dir.path) else {
+            return [url]
+        }
+        let matches: [(Int, URL)] = entries.compactMap { name in
+            let nameURL = URL(fileURLWithPath: name)
+            guard imageExts.contains(nameURL.pathExtension.lowercased()) else { return nil }
+            let s = nameURL.deletingPathExtension().lastPathComponent
+            guard s.hasPrefix(prefix), let n = Int(s.dropFirst(prefix.count)) else { return nil }
+            return (n, dir.appendingPathComponent(name))
+        }
+        return matches.sorted { $0.0 < $1.0 }.map { $0.1 }
     }
 }

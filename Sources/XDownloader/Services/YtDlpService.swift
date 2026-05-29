@@ -17,14 +17,18 @@ enum YtDlpService {
         // %(playlist_index& [%(playlist_index)02d]|)s expands to " [01]" etc. only when
         // a tweet contains multiple videos (yt-dlp treats them as a playlist). For
         // single-video tweets playlist_index is not set, so the suffix is empty.
-        let outputTemplate = outputDirectory.path + "/%(uploader)s - %(title)s%(playlist_index& [%(playlist_index)02d]|)s.%(ext)s"
+        // Non-Twitter extractors (e.g. Pornhub) trigger a yt-dlp bug where nested
+        // %(...)fmt patterns inside conditionals corrupt to null bytes — skip it there.
+        let site = SiteKind(url: item.url)
+        let playlistSuffix = site == .twitter ? "%(playlist_index& [%(playlist_index)02d]|)s" : ""
+        let outputTemplate = outputDirectory.path + "/%(uploader)s - %(title)s\(playlistSuffix).%(ext)s"
         var args: [String] = []
 
         if cookieBrowser != .none {
             args += ["--cookies-from-browser", cookieBrowser.rawValue]
         }
 
-        let isYouTube = item.url.contains("youtube.com/") || item.url.contains("youtu.be/")
+        let isYouTube = site == .youtube
         let hf = videoQuality.heightFilter ?? ""   // e.g. "[height<=1080]" or ""
 
         switch format {
@@ -36,12 +40,22 @@ enum YtDlpService {
                 "--audio-quality", audioQuality.rawValue,
             ]
         case .singleFile:
-            // Prefer HTTPS combined streams; m3u8/HLS tokens expire quickly and can
-            // cause "Requested format is not available" before the download starts.
-            args += [
-                "--format", "bestvideo*[acodec!=none][ext=mp4][protocol^=https]\(hf)/bestvideo*[acodec!=none][ext=mp4]\(hf)/best[acodec!=none]\(hf)/best",
-                "--merge-output-format", "mp4",
-            ]
+            // YouTube (including Shorts) almost never serves a single combined mp4
+            // stream — falling through to .videoAndAudio's selector avoids a
+            // "Requested format is not available" failure.
+            if isYouTube {
+                args += [
+                    "--format", "bestvideo[vcodec^=avc][ext=mp4]\(hf)+bestaudio[ext=m4a]/bestvideo[ext=mp4]\(hf)+bestaudio[ext=m4a]/bestvideo\(hf)+bestaudio/best",
+                    "--merge-output-format", "mp4",
+                ]
+            } else {
+                // Prefer HTTPS combined streams; m3u8/HLS tokens expire quickly and can
+                // cause "Requested format is not available" before the download starts.
+                args += [
+                    "--format", "bestvideo*[acodec!=none][ext=mp4][protocol^=https]\(hf)/bestvideo*[acodec!=none][ext=mp4]\(hf)/best[acodec!=none]\(hf)/best",
+                    "--merge-output-format", "mp4",
+                ]
+            }
         case .videoAndAudio:
             // Prefer H.264 (avc) over AV1 for wider player compatibility.
             args += [
@@ -154,14 +168,11 @@ enum YtDlpService {
 
         // External redirect detection: yt-dlp followed a link out of the tweet.
         // Kill the process immediately so gallery-dl can handle the original tweet URL.
-        let isXUrl = item.url.contains("x.com/") || item.url.contains("twitter.com/")
-        if isXUrl,
+        if SiteKind(url: item.url) == .twitter,
            (line.hasPrefix("[generic]") || line.hasPrefix("[redirect]")),
            let urlRange = line.range(of: "(?:Extracting URL|Following redirect to): (https?://\\S+)", options: .regularExpression),
            let detected = line[urlRange].components(separatedBy: ": ").last,
-           !detected.contains("x.com"),
-           !detected.contains("twitter.com"),
-           !detected.contains("twimg.com") {
+           !SiteKind.isTwitterContent(detected) {
             terminate()
             item.status = .failed("external_redirect")
             return

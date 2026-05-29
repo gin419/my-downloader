@@ -43,7 +43,9 @@ class DownloadManager: ObservableObject {
         self.outputDirectory = defaultDir
 
         loadSettings()
+        loadQueue()
         checkRequirements()
+        drainQueue()
     }
 
     func checkRequirements() {
@@ -70,6 +72,7 @@ class DownloadManager: ObservableObject {
         let item = DownloadItem(url: stripped)
         items.insert(item, at: 0)
         downloadQueue.append(item)
+        saveQueue()
         drainQueue()
     }
 
@@ -88,6 +91,7 @@ class DownloadManager: ObservableObject {
         item.mediaCategory = .unknown
         item.retryCount   += 1
         downloadQueue.append(item)
+        saveQueue()
         drainQueue()
     }
 
@@ -96,10 +100,12 @@ class DownloadManager: ObservableObject {
         activeProcesses.removeValue(forKey: item.id)
         downloadQueue.removeAll { $0.id == item.id }
         items.removeAll { $0.id == item.id }
+        saveQueue()
     }
 
     func clearCompleted() {
         items.removeAll { $0.status == .completed }
+        saveQueue()
     }
 
     // MARK: - File utilities
@@ -196,12 +202,13 @@ class DownloadManager: ObservableObject {
             item.progress = 1.0
             item.speed    = nil
             item.eta      = nil
+            saveQueue()
             return
         }
 
-        // yt-dlp failed on an X.com URL — try gallery-dl as fallback for image tweets.
-        let isXUrl = item.url.contains("x.com/") || item.url.contains("twitter.com/")
-        if isXUrl, let gdlPath = galleryDlPath {
+        // yt-dlp failed — try gallery-dl as fallback for sites it handles well (image
+        // tweets, Reddit posts/galleries, etc.).
+        if SiteKind(url: item.url).galleryDlFallback, let gdlPath = galleryDlPath {
             item.status     = .fetching
             item.progress   = 0
             item.imageCount = nil
@@ -223,6 +230,7 @@ class DownloadManager: ObservableObject {
         } else {
             item.status = .failed("yt-dlp exited with code \(exitCode)")
         }
+        saveQueue()
     }
 
     private func showNotice(_ message: String) {
@@ -233,6 +241,47 @@ class DownloadManager: ObservableObject {
             if !Task.isCancelled {
                 withAnimation(.easeInOut(duration: 0.2)) { notice = nil }
             }
+        }
+    }
+
+    // MARK: - Queue persistence
+
+    private var queueFileURL: URL {
+        let fm = FileManager.default
+        let base = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? fm.homeDirectoryForCurrentUser
+        let dir = base.appendingPathComponent("XDownloader", isDirectory: true)
+        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir.appendingPathComponent("queue.json")
+    }
+
+    private func saveQueue() {
+        let snapshot = items.map { $0.toPersisted() }
+        do {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            let data = try encoder.encode(snapshot)
+            try data.write(to: queueFileURL, options: .atomic)
+        } catch {
+            // best-effort: don't surface persistence failures to the user
+        }
+    }
+
+    private func loadQueue() {
+        let url = queueFileURL
+        guard FileManager.default.fileExists(atPath: url.path),
+              let data = try? Data(contentsOf: url),
+              let persisted = try? JSONDecoder().decode([PersistedDownloadItem].self, from: data) else {
+            return
+        }
+
+        // Preserve display order (newest first). Re-queue non-completed items
+        // in original chronological order (oldest first) so they download in
+        // the same sequence as before the crash/quit.
+        let restored = persisted.map { DownloadItem(persisted: $0) }
+        items = restored
+        for item in restored.reversed() where item.status != .completed {
+            downloadQueue.append(item)
         }
     }
 
