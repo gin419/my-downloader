@@ -19,7 +19,9 @@ enum GalleryDlService {
         args += [
             "--dest", outputDirectory.path,
             "-D", ".",
-            "-f", "{author[nick]} - {content:.100} #{num}.{extension}",
+        ]
+        args += formatArgs(for: item.url)
+        args += [
             "--no-mtime",
             item.url,
         ]
@@ -170,7 +172,9 @@ enum GalleryDlService {
         args += [
             "--dest", outputDirectory.path,
             "-D", ".",
-            "-f", "{author[nick]} - {content:.100} #{num}.{extension}",
+        ]
+        args += formatArgs(for: item.url)
+        args += [
             "--print", "filepath",
             item.url,
         ]
@@ -203,5 +207,14 @@ enum GalleryDlService {
 
     private static func cookieArgs(_ browser: CookieBrowser) -> [String] {
         browser != .none ? ["--cookies-from-browser", browser.rawValue] : []
+    }
+
+    /// `{author[nick]}` and `{content}` are Twitter-specific keys. For other sites
+    /// gallery-dl's per-extractor defaults produce sensible filenames already.
+    private static func formatArgs(for url: String) -> [String] {
+        if SiteKind(url: url) == .twitter {
+            return ["-f", "{author[nick]} - {content:.100} #{num}.{extension}"]
+        }
+        return []
     }
 }

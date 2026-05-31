@@ -8,6 +8,8 @@ struct DownloadRowView: View {
     let onRetry:    () -> Void
     let onCopyLink: () -> Void
     let onOpen:     () -> Void
+    let onPause:    () -> Void
+    let onResume:   () -> Void
 
     @State private var titleHovered = false
 
@@ -51,9 +53,11 @@ struct DownloadRowView: View {
 
             if case .downloading = item.status {
                 progressSection
+            } else if item.status == .paused {
+                progressSection
             }
 
-            if item.status == .completed || isFailed {
+            if item.status == .completed || isFailed || item.status == .paused {
                 actionRow
             }
         }
@@ -104,6 +108,8 @@ struct DownloadRowView: View {
                 Image(systemName: "magnifyingglass").foregroundColor(.orange)
             case .downloading:
                 Image(systemName: "arrow.down.circle.fill").foregroundColor(.blue).symbolEffect(.pulse)
+            case .paused:
+                Image(systemName: "pause.circle.fill").foregroundColor(.yellow)
             case .completed:
                 Image(systemName: "checkmark.circle.fill").foregroundColor(.green)
             case .failed:
@@ -182,6 +188,21 @@ struct DownloadRowView: View {
                 if let eta = item.eta {
                     Text("ETA \(eta)").font(.system(size: 11, design: .monospaced)).foregroundColor(.secondary)
                 }
+                if item.status == .downloading, item.isLargeDownload {
+                    Button(action: onPause) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "pause.fill").font(.system(size: 9, weight: .bold))
+                            Text("Stop").font(.system(size: 11, weight: .semibold))
+                        }
+                        .foregroundColor(.yellow)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 4)
+                        .background(Capsule().fill(Color.yellow.opacity(0.15)))
+                        .overlay(Capsule().strokeBorder(Color.yellow.opacity(0.35), lineWidth: 0.5))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Stop download — you can resume later")
+                }
             }
         }
     }
@@ -206,6 +227,20 @@ struct DownloadRowView: View {
                         .font(.system(size: 11))
                         .foregroundColor(.secondary)
                 }
+            }
+
+            if item.status == .paused {
+                Button(action: onResume) {
+                    HStack(spacing: 5) {
+                        Image(systemName: "play.fill").font(.system(size: 10, weight: .bold))
+                        Text("Resume").font(.system(size: 12, weight: .semibold))
+                    }
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 5)
+                    .background(Capsule().fill(Color.blue))
+                }
+                .buttonStyle(.plain)
             }
 
             if case .failed(let msg) = item.status {
@@ -254,12 +289,14 @@ struct DownloadRowView: View {
 
     private var rowBackground: some ShapeStyle {
         if item.status == .completed { return AnyShapeStyle(Color.green.opacity(0.05)) }
+        if item.status == .paused    { return AnyShapeStyle(Color.yellow.opacity(0.06)) }
         if isFailed                  { return AnyShapeStyle(Color.red.opacity(0.05)) }
         return AnyShapeStyle(Color(nsColor: .controlBackgroundColor))
     }
 
     private var borderColor: Color {
         if item.status == .completed { return .green.opacity(0.2) }
+        if item.status == .paused    { return .yellow.opacity(0.25) }
         if isFailed                  { return .red.opacity(0.2) }
         return Color.primary.opacity(0.08)
     }
