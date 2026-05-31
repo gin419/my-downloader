@@ -19,6 +19,17 @@ cp "$BINARY" "$BUNDLE_NAME/Contents/MacOS/"
 cp "Resources/Info.plist" "$BUNDLE_NAME/Contents/"
 chmod +x "$BUNDLE_NAME/Contents/MacOS/$APP_NAME"
 
+# Stamp version from nearest git tag so local builds match the latest release.
+# On a tag → "1.3.0"; off a tag → "1.3.0-2-gabc1234" (or "-dirty" if WIP).
+if GIT_DESC=$(git describe --tags --dirty=-dirty 2>/dev/null); then
+    VERSION="${GIT_DESC#v}"
+    /usr/libexec/PlistBuddy \
+        -c "Set :CFBundleShortVersionString $VERSION" \
+        -c "Set :CFBundleVersion $VERSION" \
+        "$BUNDLE_NAME/Contents/Info.plist"
+    echo "📌 Stamped version: $VERSION"
+fi
+
 if [ -f "Resources/AppIcon.icns" ]; then
     cp "Resources/AppIcon.icns" "$BUNDLE_NAME/Contents/Resources/"
 fi
