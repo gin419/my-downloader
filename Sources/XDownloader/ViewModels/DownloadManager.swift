@@ -28,6 +28,9 @@ class DownloadManager: ObservableObject {
     private var downloadQueue: [DownloadItem] = []
     private var activeCount: Int = 0
     private var noticeTask: Task<Void, Never>?
+    /// IDs of items the user explicitly paused — distinguishes a user-initiated
+    /// `terminate()` from a real download failure when the process exits.
+    private var pausedItemIDs: Set<UUID> = []
 
     // Resolved at runtime via RequirementsService so paths stay in one place.
     private var ytdlpPath: String  { RequirementsService.ytdlp.installedPath    ?? "yt-dlp"     }
@@ -98,9 +101,31 @@ class DownloadManager: ObservableObject {
     func removeItem(_ item: DownloadItem) {
         activeProcesses[item.id]?.terminate()
         activeProcesses.removeValue(forKey: item.id)
+        pausedItemIDs.remove(item.id)
         downloadQueue.removeAll { $0.id == item.id }
         items.removeAll { $0.id == item.id }
         saveQueue()
+    }
+
+    func pauseItem(_ item: DownloadItem) {
+        switch item.status {
+        case .downloading, .fetching:
+            break
+        default:
+            return
+        }
+        pausedItemIDs.insert(item.id)
+        // The post-exit branch in runDownload flips status to .paused once
+        // the yt-dlp process actually finishes terminating.
+        activeProcesses[item.id]?.terminate()
+    }
+
+    func resumeItem(_ item: DownloadItem) {
+        guard item.status == .paused else { return }
+        item.status = .queued
+        downloadQueue.append(item)
+        saveQueue()
+        drainQueue()
     }
 
     func clearCompleted() {
@@ -206,6 +231,16 @@ class DownloadManager: ObservableObject {
             return
         }
 
+        // User pressed Stop: the non-zero exit was our own terminate(). Freeze the
+        // row at its current progress so Resume can pick up from the .part file.
+        if pausedItemIDs.remove(item.id) != nil {
+            item.status = .paused
+            item.speed  = nil
+            item.eta    = nil
+            saveQueue()
+            return
+        }
+
         // yt-dlp failed — try gallery-dl as fallback for sites it handles well (image
         // tweets, Reddit posts/galleries, etc.).
         if SiteKind(url: item.url).galleryDlFallback, let gdlPath = galleryDlPath {
@@ -280,7 +315,7 @@ class DownloadManager: ObservableObject {
         // the same sequence as before the crash/quit.
         let restored = persisted.map { DownloadItem(persisted: $0) }
         items = restored
-        for item in restored.reversed() where item.status != .completed {
+        for item in restored.reversed() where item.status != .completed && item.status != .paused {
             downloadQueue.append(item)
         }
     }

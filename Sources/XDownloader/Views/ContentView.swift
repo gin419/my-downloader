@@ -1,12 +1,43 @@
 import SwiftUI
 import AppKit
 
+enum DownloadFilter: String, CaseIterable, Identifiable {
+    case all, downloading, queued, completed, failed
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .all:         return "All"
+        case .downloading: return "Downloading"
+        case .queued:      return "Queued"
+        case .completed:   return "Done"
+        case .failed:      return "Failed"
+        }
+    }
+
+    func matches(_ status: DownloadStatus) -> Bool {
+        switch self {
+        case .all: return true
+        case .downloading:
+            switch status {
+            case .downloading, .fetching, .paused: return true
+            default: return false
+            }
+        case .queued:    if case .queued    = status { return true } else { return false }
+        case .completed: if case .completed = status { return true } else { return false }
+        case .failed:    if case .failed    = status { return true } else { return false }
+        }
+    }
+}
+
 struct ContentView: View {
     @EnvironmentObject var manager: DownloadManager
     @State private var urlInput: String = ""
     @State private var isHoveringDrop = false
     @State private var showInstallSheet = false
     @State private var bannerDismissed = false
+    @State private var statusFilter: DownloadFilter = .all
     @FocusState private var isInputFocused: Bool
 
     private var showBanner: Bool {
@@ -163,54 +194,116 @@ struct ContentView: View {
     // MARK: - Download List
 
     private var downloadList: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text("Downloads")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundColor(.secondary)
-                    .padding(.leading, 20)
+        let filtered = manager.items.filter { statusFilter.matches($0.status) }
+        return VStack(spacing: 0) {
+            filterBar
+                .padding(.top, 12)
+                .padding(.bottom, 8)
 
-                Spacer()
-
-                if manager.items.contains(where: { $0.status == .completed }) {
-                    Button("Clear done") {
-                        withAnimation(.easeOut(duration: 0.2)) { manager.clearCompleted() }
+            if filtered.isEmpty {
+                emptyFilterState
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 8) {
+                        ForEach(filtered) { item in
+                            DownloadRowView(
+                                item: item,
+                                onReveal: { manager.revealInFinder(item) },
+                                onRemove: {
+                                    withAnimation(.easeOut(duration: 0.2)) { manager.removeItem(item) }
+                                },
+                                onRetry:    { manager.retryItem(item) },
+                                onCopyLink: {
+                                    NSPasteboard.general.clearContents()
+                                    NSPasteboard.general.setString(item.url, forType: .string)
+                                },
+                                onOpen:   { openFile(item) },
+                                onPause:  { manager.pauseItem(item) },
+                                onResume: { manager.resumeItem(item) }
+                            )
+                            .transition(.asymmetric(
+                                insertion: .move(edge: .top).combined(with: .opacity),
+                                removal: .opacity
+                            ))
+                        }
                     }
-                    .font(.system(size: 12))
-                    .foregroundColor(.secondary)
-                    .buttonStyle(.plain)
-                    .padding(.trailing, 20)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 16)
                 }
-            }
-            .padding(.top, 12)
-            .padding(.bottom, 8)
-
-            ScrollView {
-                LazyVStack(spacing: 8) {
-                    ForEach(manager.items) { item in
-                        DownloadRowView(
-                            item: item,
-                            onReveal: { manager.revealInFinder(item) },
-                            onRemove: {
-                                withAnimation(.easeOut(duration: 0.2)) { manager.removeItem(item) }
-                            },
-                            onRetry:    { manager.retryItem(item) },
-                            onCopyLink: {
-                                NSPasteboard.general.clearContents()
-                                NSPasteboard.general.setString(item.url, forType: .string)
-                            },
-                            onOpen: { openFile(item) }
-                        )
-                        .transition(.asymmetric(
-                            insertion: .move(edge: .top).combined(with: .opacity),
-                            removal: .opacity
-                        ))
-                    }
-                }
-                .padding(.horizontal, 16)
-                .padding(.bottom, 16)
             }
         }
+    }
+
+    private var filterBar: some View {
+        HStack(spacing: 6) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(DownloadFilter.allCases) { filter in
+                        filterPill(filter)
+                    }
+                }
+                .padding(.horizontal, 20)
+            }
+
+            Spacer(minLength: 0)
+
+            if manager.items.contains(where: { $0.status == .completed }) {
+                Button("Clear done") {
+                    withAnimation(.easeOut(duration: 0.2)) { manager.clearCompleted() }
+                }
+                .font(.system(size: 12))
+                .foregroundColor(.secondary)
+                .buttonStyle(.plain)
+                .padding(.trailing, 20)
+            }
+        }
+    }
+
+    private func filterPill(_ filter: DownloadFilter) -> some View {
+        let count = manager.items.lazy.filter { filter.matches($0.status) }.count
+        let isSelected = statusFilter == filter
+        return Button {
+            withAnimation(.easeInOut(duration: 0.15)) { statusFilter = filter }
+        } label: {
+            HStack(spacing: 5) {
+                Text(filter.label)
+                    .font(.system(size: 11, weight: .medium))
+                Text("\(count)")
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 1)
+                    .background(
+                        Capsule().fill(isSelected ? Color.white.opacity(0.25) : Color.primary.opacity(0.08))
+                    )
+            }
+            .foregroundColor(isSelected ? .white : .primary.opacity(0.75))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(
+                Capsule().fill(isSelected ? Color.blue : Color.primary.opacity(0.06))
+            )
+            .overlay(
+                Capsule().strokeBorder(
+                    isSelected ? Color.clear : Color.primary.opacity(0.08),
+                    lineWidth: 0.5
+                )
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var emptyFilterState: some View {
+        VStack(spacing: 8) {
+            Spacer()
+            Image(systemName: "line.3.horizontal.decrease.circle")
+                .font(.system(size: 28, weight: .light))
+                .foregroundColor(.secondary)
+            Text("No downloads match this filter")
+                .font(.system(size: 12))
+                .foregroundColor(.secondary)
+            Spacer()
+        }
+        .frame(maxWidth: .infinity)
     }
 
     // MARK: - Empty State
