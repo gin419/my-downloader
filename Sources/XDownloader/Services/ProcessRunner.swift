@@ -17,6 +17,18 @@ func runProcess(
     process.executableURL = URL(fileURLWithPath: executablePath)
     process.arguments = arguments
 
+    // GUI apps inherit a minimal PATH that excludes Homebrew. yt-dlp needs to
+    // shell out to `deno` (to solve YouTube's JS n-challenge) and `ffmpeg` (to
+    // merge streams); without them, YouTube downloads fail with "Requested
+    // format is not available". gallery-dl similarly needs ffmpeg on PATH.
+    var env = ProcessInfo.processInfo.environment
+    let existingPath = env["PATH"] ?? ""
+    let homebrewPaths = "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin"
+    env["PATH"] = existingPath.isEmpty
+        ? "\(homebrewPaths):/usr/bin:/bin:/usr/sbin:/sbin"
+        : "\(homebrewPaths):\(existingPath)"
+    process.environment = env
+
     let stdout = Pipe()
     let stderr = Pipe()
     process.standardOutput = stdout
