@@ -7,7 +7,8 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "XDownloader",
-            path: "Sources/XDownloader"
+            path: "Sources/XDownloader",
+            linkerSettings: [.linkedLibrary("sqlite3")]
         )
     ]
 )

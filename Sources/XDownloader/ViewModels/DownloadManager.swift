@@ -19,6 +19,10 @@ class DownloadManager: ObservableObject {
     @Published var embedSubtitles: Bool = true
     @Published var openPreference: OpenPreference = .video
     @Published var autoDownloadOnPaste: Bool = false
+    @Published var saveHistoryEnabled: Bool = true
+    @Published var historyCount: Int = 0
+    @Published var historySizeBytes: Int64 = 0
+    @Published var pendingDuplicate: DuplicateConfirmation? = nil
     @Published var missingTools: [ToolRequirement] = []
     @Published var notice: String? = nil
 
@@ -31,6 +35,7 @@ class DownloadManager: ObservableObject {
     /// IDs of items the user explicitly paused — distinguishes a user-initiated
     /// `terminate()` from a real download failure when the process exits.
     private var pausedItemIDs: Set<UUID> = []
+    private let history = HistoryStore()
 
     // Resolved at runtime via RequirementsService so paths stay in one place.
     private var ytdlpPath: String  { RequirementsService.ytdlp.installedPath    ?? "yt-dlp"     }
@@ -48,6 +53,7 @@ class DownloadManager: ObservableObject {
         loadSettings()
         loadQueue()
         checkRequirements()
+        refreshHistoryStats()
         drainQueue()
     }
 
@@ -58,6 +64,12 @@ class DownloadManager: ObservableObject {
     // MARK: - Queue management
 
     func addDownload(urlString: String) {
+        addDownload(urlString: urlString, skipHistoryCheck: false)
+    }
+
+    /// `skipHistoryCheck` is set by `confirmDuplicateDownload` so the user's
+    /// "Download again" choice doesn't re-trigger the same warning.
+    private func addDownload(urlString: String, skipHistoryCheck: Bool) {
         let trimmed = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         let stripped = stripTrackingParams(trimmed)
@@ -72,11 +84,37 @@ class DownloadManager: ObservableObject {
             return
         }
 
+        if saveHistoryEnabled, !skipHistoryCheck, let prior = history.mostRecentCompleted(for: stripped) {
+            let fileExists = prior.outputPath.map { FileManager.default.fileExists(atPath: $0) } ?? false
+            pendingDuplicate = DuplicateConfirmation(
+                url: stripped,
+                priorEntry: prior,
+                priorFileExists: fileExists
+            )
+            return
+        }
+
         let item = DownloadItem(url: stripped)
         items.insert(item, at: 0)
         downloadQueue.append(item)
         saveQueue()
         drainQueue()
+    }
+
+    func confirmDuplicateDownload() {
+        guard let dup = pendingDuplicate else { return }
+        pendingDuplicate = nil
+        addDownload(urlString: dup.url, skipHistoryCheck: true)
+    }
+
+    func dismissDuplicate() {
+        pendingDuplicate = nil
+    }
+
+    func revealDuplicatePriorFile() {
+        guard let dup = pendingDuplicate, let path = dup.priorEntry.outputPath else { return }
+        NSWorkspace.shared.selectFile(path, inFileViewerRootedAtPath: "")
+        pendingDuplicate = nil
     }
 
     func retryItem(_ item: DownloadItem) {
@@ -162,6 +200,7 @@ class DownloadManager: ObservableObject {
         d.set(maxConcurrent,                  forKey: "maxConcurrent")
         d.set(openPreference.rawValue,        forKey: "openPreference")
         d.set(autoDownloadOnPaste,            forKey: "autoDownloadOnPaste")
+        d.set(saveHistoryEnabled,             forKey: "saveHistoryEnabled")
     }
 
     // MARK: - Private
@@ -178,6 +217,7 @@ class DownloadManager: ObservableObject {
         showDownloadDate  = d.bool(forKey: "showDownloadDate")
         embedSubtitles    = d.object(forKey: "embedSubtitles") as? Bool ?? true
         autoDownloadOnPaste = d.bool(forKey: "autoDownloadOnPaste")
+        saveHistoryEnabled = d.object(forKey: "saveHistoryEnabled") as? Bool ?? true
         let stored = d.integer(forKey: "maxConcurrent")
         if stored > 0 { maxConcurrent = stored }
     }
@@ -227,7 +267,7 @@ class DownloadManager: ObservableObject {
             item.progress = 1.0
             item.speed    = nil
             item.eta      = nil
-            saveQueue()
+            finalize(item)
             return
         }
 
@@ -265,7 +305,112 @@ class DownloadManager: ObservableObject {
         } else {
             item.status = .failed("yt-dlp exited with code \(exitCode)")
         }
+        finalize(item)
+    }
+
+    private func finalize(_ item: DownloadItem) {
         saveQueue()
+        recordHistory(for: item)
+    }
+
+    /// Only terminal states (completed/failed) are persisted. Crash recovery for
+    /// in-progress downloads is queue.json's job — we don't duplicate that here.
+    private func recordHistory(for item: DownloadItem) {
+        guard saveHistoryEnabled else { return }
+        writeHistoryEntry(for: item, finishedAt: Date())
+        refreshHistoryStats()
+    }
+
+    /// Lower-level write — does NOT consult `saveHistoryEnabled`. Used both by
+    /// the live finalize path (with `finishedAt = now`) and by the bulk import
+    /// (with `finishedAt = item.addedAt` so historic dates aren't all "today").
+    /// Returns true when a row was actually persisted.
+    @discardableResult
+    private func writeHistoryEntry(for item: DownloadItem, finishedAt: Date) -> Bool {
+        let status: String
+        let errorMessage: String?
+        switch item.status {
+        case .completed:
+            status = "completed"
+            errorMessage = nil
+        case .failed(let msg):
+            status = "failed"
+            errorMessage = msg.isEmpty ? nil : msg
+        default:
+            return false
+        }
+        let outputPath = item.outputPath ?? item.videoPath ?? item.audioPath
+        let fileSize: Int64? = {
+            guard let p = outputPath,
+                  let attrs = try? FileManager.default.attributesOfItem(atPath: p) else { return nil }
+            return attrs[.size] as? Int64
+        }()
+        let entry = HistoryEntry(
+            id: item.id.uuidString,
+            url: item.url,
+            title: item.title,
+            site: siteLabel(for: item.url),
+            mediaCategory: item.mediaCategory == .unknown ? nil : item.mediaCategory.rawValue,
+            outputPath: outputPath,
+            fileSizeBytes: fileSize,
+            status: status,
+            errorMessage: errorMessage,
+            startedAt: item.addedAt,
+            finishedAt: finishedAt
+        )
+        history.record(entry)
+        return true
+    }
+
+    private func siteLabel(for url: String) -> String {
+        switch SiteKind(url: url) {
+        case .twitter: return "twitter"
+        case .youtube: return "youtube"
+        case .reddit:  return "reddit"
+        case .other:   return "other"
+        }
+    }
+
+    // MARK: - History admin
+
+    func refreshHistoryStats() {
+        historyCount = history.count()
+        historySizeBytes = history.fileSize()
+    }
+
+    func clearHistory() {
+        history.clear()
+        refreshHistoryStats()
+    }
+
+    /// Number of items in the current task list that are eligible for import
+    /// (completed or failed). Used to disable/label the Settings import button.
+    var importableTaskCount: Int {
+        items.reduce(into: 0) { count, item in
+            switch item.status {
+            case .completed, .failed: count += 1
+            default: break
+            }
+        }
+    }
+
+    /// Writes all completed/failed items from the current task list into the DB.
+    /// Idempotent (INSERT OR REPLACE keyed on item id) so it's safe to run more
+    /// than once. Returns the number of rows written.
+    @discardableResult
+    func importTaskListToHistory() -> Int {
+        var written = 0
+        for item in items {
+            if writeHistoryEntry(for: item, finishedAt: item.addedAt) {
+                written += 1
+            }
+        }
+        refreshHistoryStats()
+        return written
+    }
+
+    func revealHistoryFile() {
+        NSWorkspace.shared.selectFile(history.fileURL.path, inFileViewerRootedAtPath: "")
     }
 
     private func showNotice(_ message: String) {
@@ -331,4 +476,11 @@ class DownloadManager: ObservableObject {
         if c.queryItems?.isEmpty == true { c.queryItems = nil }
         return c.url?.absoluteString ?? urlString
     }
+}
+
+struct DuplicateConfirmation: Identifiable {
+    let id = UUID()
+    let url: String
+    let priorEntry: HistoryEntry
+    let priorFileExists: Bool
 }

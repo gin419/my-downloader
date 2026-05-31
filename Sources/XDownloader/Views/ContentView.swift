@@ -100,6 +100,35 @@ struct ContentView: View {
                 .strokeBorder(Color.blue.opacity(0.5), lineWidth: isHoveringDrop ? 3 : 0)
                 .animation(.easeInOut(duration: 0.2), value: isHoveringDrop)
         )
+        .alert(
+            "Already downloaded",
+            isPresented: Binding(
+                get: { manager.pendingDuplicate != nil },
+                set: { if !$0 { manager.dismissDuplicate() } }
+            ),
+            presenting: manager.pendingDuplicate
+        ) { dup in
+            Button("Cancel", role: .cancel) { manager.dismissDuplicate() }
+            if dup.priorFileExists {
+                Button("Show in Finder") { manager.revealDuplicatePriorFile() }
+            }
+            Button("Download again") { manager.confirmDuplicateDownload() }
+        } message: { dup in
+            Text(duplicateMessage(dup))
+        }
+    }
+
+    private func duplicateMessage(_ dup: DuplicateConfirmation) -> String {
+        let dateStr = dup.priorEntry.finishedAt.formatted(date: .abbreviated, time: .shortened)
+        var lines = ["You downloaded this link on \(dateStr)."]
+        if let path = dup.priorEntry.outputPath {
+            lines.append("")
+            lines.append("Saved to: \(path)")
+            if !dup.priorFileExists {
+                lines.append("⚠ The file is no longer at that location.")
+            }
+        }
+        return lines.joined(separator: "\n")
     }
 
     // MARK: - URL Input
