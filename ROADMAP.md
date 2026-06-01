@@ -8,9 +8,7 @@ All core features are live. See [FEATURES.md](FEATURES.md) for the full list.
 
 ## v1.x — Near-term
 
-- **Persist download history** — restore the download list after the app restarts
 - **Finish notification** — post a macOS notification when a download completes
-- **Pause / cancel** — stop an in-progress download without removing it from the list
 - **Batch input** — paste or import multiple URLs at once and queue them all
 - **Menu bar icon** — live download count badge in the menu bar
 
