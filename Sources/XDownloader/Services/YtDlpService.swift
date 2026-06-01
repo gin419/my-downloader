@@ -190,7 +190,7 @@ enum YtDlpService {
                 // permissive `bv*+ba/b` tail of the selector should absorb
                 // most of these; if it still fires, retrying a minute later
                 // usually works.
-                item.status = .failed("No downloadable format — usually a brief YouTube hiccup, wait a minute and re-add the link.")
+                item.status = .failed("No downloadable format — usually a brief YouTube hiccup, click Retry.")
             } else {
                 item.status = .failed(line)
             }
