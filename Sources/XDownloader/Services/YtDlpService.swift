@@ -45,21 +45,24 @@ enum YtDlpService {
             // "Requested format is not available" failure.
             if isYouTube {
                 args += [
-                    "--format", "bestvideo[vcodec^=avc][ext=mp4]\(hf)+bestaudio[ext=m4a]/bestvideo[ext=mp4]\(hf)+bestaudio[ext=m4a]/bestvideo\(hf)+bestaudio/best",
+                    "--format", "bestvideo[vcodec^=avc][ext=mp4]\(hf)+bestaudio[ext=m4a]/bestvideo[ext=mp4]\(hf)+bestaudio[ext=m4a]/bestvideo\(hf)+bestaudio/bestvideo+bestaudio/bv*+ba/b",
                     "--merge-output-format", "mp4",
                 ]
             } else {
                 // Prefer HTTPS combined streams; m3u8/HLS tokens expire quickly and can
                 // cause "Requested format is not available" before the download starts.
                 args += [
-                    "--format", "bestvideo*[acodec!=none][ext=mp4][protocol^=https]\(hf)/bestvideo*[acodec!=none][ext=mp4]\(hf)/best[acodec!=none]\(hf)/best",
+                    "--format", "bestvideo*[acodec!=none][ext=mp4][protocol^=https]\(hf)/bestvideo*[acodec!=none][ext=mp4]\(hf)/best[acodec!=none]\(hf)/bv*+ba/b",
                     "--merge-output-format", "mp4",
                 ]
             }
         case .videoAndAudio:
             // Prefer H.264 (avc) over AV1 for wider player compatibility.
+            // Final `bv*+ba/b` is the yt-dlp catch-all: `bv*` matches combined
+            // streams too (not just video-only), so even degenerate YouTube
+            // responses with only HLS combined streams still resolve.
             args += [
-                "--format", "bestvideo[vcodec^=avc][ext=mp4]\(hf)+bestaudio[ext=m4a]/bestvideo[ext=mp4]\(hf)+bestaudio[ext=m4a]/bestvideo\(hf)+bestaudio/best",
+                "--format", "bestvideo[vcodec^=avc][ext=mp4]\(hf)+bestaudio[ext=m4a]/bestvideo[ext=mp4]\(hf)+bestaudio[ext=m4a]/bestvideo\(hf)+bestaudio/bestvideo+bestaudio/bv*+ba/b",
                 "--merge-output-format", "mp4",
             ]
         }
@@ -183,7 +186,11 @@ enum YtDlpService {
         if lower.contains("error:") {
             if case .failed = item.status { return }
             if line.contains("Requested format is not available") {
-                item.status = .failed("Format not available — try a different format in Settings, or update yt-dlp.")
+                // Almost always a transient YouTube extractor hiccup — the
+                // permissive `bv*+ba/b` tail of the selector should absorb
+                // most of these; if it still fires, retrying a minute later
+                // usually works.
+                item.status = .failed("No downloadable format — usually a brief YouTube hiccup, click Retry.")
             } else {
                 item.status = .failed(line)
             }
