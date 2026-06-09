@@ -262,7 +262,13 @@ class DownloadManager: ObservableObject {
             }
         )
 
-        if exitCode == 0 {
+        // "Empty success": yt-dlp can exit 0 without writing any file. Seen on
+        // Twitter for text-only tweets, quote-RTs whose referenced media yt-dlp
+        // can't reach, and sensitive content the current cookies don't unlock.
+        // gallery-dl often picks these up, so treat it the same as a non-zero
+        // exit and let the fallback below try.
+        let mediaCaptured = item.outputPath != nil
+        if exitCode == 0 && mediaCaptured {
             item.status   = .completed
             item.progress = 1.0
             item.speed    = nil
@@ -302,9 +308,42 @@ class DownloadManager: ObservableObject {
             )
         } else if case .failed = item.status {
             // already set by YtDlpService
+        } else if exitCode == 0 {
+            item.status = .failed("yt-dlp reported success but found no media to download.")
         } else {
             item.status = .failed("yt-dlp exited with code \(exitCode)")
         }
+
+        // Auto-retry once on "empty success" — yt-dlp or gallery-dl exited 0
+        // without producing any media. Most often a transient X GraphQL
+        // hiccup (token rotation, brief rate-limit, cache miss) that one
+        // extra attempt clears. Genuinely-unreachable tweets just hit the
+        // same outcome and stay Failed. Real errors (non-zero exit codes)
+        // don't match the message check below and skip the retry, so we
+        // don't waste time re-running obvious network/auth failures.
+        let isEmptySuccess: Bool = {
+            guard case .failed(let msg) = item.status else { return false }
+            return msg.contains("found no media") || msg.contains("No media found")
+        }()
+        if isEmptySuccess && !item.autoRetryAttempted {
+            item.autoRetryAttempted = true
+            item.status        = .fetching
+            item.progress      = 0
+            item.speed         = nil
+            item.eta           = nil
+            item.imageCount    = nil
+            item.videoCount    = nil
+            item.outputPath    = nil
+            item.videoPath     = nil
+            item.audioPath     = nil
+            item.title         = nil
+            item.mediaCategory = .unknown
+            saveQueue()
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            await runDownload(item)
+            return
+        }
+
         finalize(item)
     }
 

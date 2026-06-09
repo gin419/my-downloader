@@ -11,6 +11,7 @@ All core features are live. See [FEATURES.md](FEATURES.md) for the full list.
 - **Finish notification** — post a macOS notification when a download completes
 - **Batch input** — paste or import multiple URLs at once and queue them all
 - **Menu bar icon** — live download count badge in the menu bar
+- **Zero-click download with AutoRaise** — when the window gains focus (e.g. via [AutoRaise](https://github.com/sbmpost/AutoRaise) hovering), auto-detect a fresh URL on the clipboard and start the download without any paste/Enter click. Goal: hover → done, no keyboard or mouse input.
 
 ---
 

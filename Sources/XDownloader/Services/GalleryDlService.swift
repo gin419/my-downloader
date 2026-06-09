@@ -68,6 +68,17 @@ enum GalleryDlService {
             }
         }
 
+        // gallery-dl exited 0 but neither new files appeared nor dry-run could
+        // resolve a path — the tweet's media is genuinely unreachable (most
+        // often: sensitive content the cookie session can't unlock, a deleted
+        // or protected account, or a quote-RT pointing at media we can't get).
+        // Without this guard, the row would be marked "Done" with no files,
+        // which is misleading.
+        guard item.outputPath != nil else {
+            item.status = .failed("No media found — try a different cookie browser, or check the tweet still has its image/video.")
+            return
+        }
+
         if !newImages.isEmpty { item.imageCount = newImages.count }
         if !newVideos.isEmpty { item.videoCount = newVideos.count }
 
@@ -211,9 +222,17 @@ enum GalleryDlService {
 
     /// `{author[nick]}` and `{content}` are Twitter-specific keys. For other sites
     /// gallery-dl's per-extractor defaults produce sensible filenames already.
+    ///
+    /// `{content!s:.100}` (lowercase s, Python's str() conversion) prevents the
+    /// silent download failure on image-only / no-text tweets. Earlier
+    /// `{content:.100}` raises `TypeError: unsupported format string passed to
+    /// NoneType.__format__` when content is None, which gallery-dl swallows
+    /// while still exiting 0 — that's the empty-success bug that produces
+    /// "No media found" rows in the UI. `!s` forces str(None) → "None" first,
+    /// so the `.100` precision spec then succeeds on a real string.
     private static func formatArgs(for url: String) -> [String] {
         if SiteKind(url: url) == .twitter {
-            return ["-f", "{author[nick]} - {content:.100} #{num}.{extension}"]
+            return ["-f", "{author[nick]} - {content!s:.100} #{num}.{extension}"]
         }
         return []
     }
