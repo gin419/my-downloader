@@ -118,6 +118,11 @@ class DownloadItem: Identifiable, ObservableObject {
     @Published var videoCount: Int?
     @Published var mediaCategory: MediaCategory = .unknown
     @Published var retryCount: Int = 0
+    /// In-memory only (NOT persisted). True once the auto-retry for an
+    /// "empty success" — yt-dlp/gallery-dl exit 0 with no media — has fired
+    /// for this item. Prevents infinite retry loops for tweets that are
+    /// genuinely unreachable.
+    var autoRetryAttempted: Bool = false
 
     init(url: String, addedAt: Date = Date()) {
         self.url = url
