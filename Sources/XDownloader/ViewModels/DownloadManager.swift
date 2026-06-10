@@ -130,6 +130,7 @@ class DownloadManager: ObservableObject {
         item.imageCount    = nil
         item.videoCount    = nil
         item.mediaCategory = .unknown
+        item.lastToolWarning = nil
         item.retryCount   += 1
         downloadQueue.append(item)
         saveQueue()
@@ -297,6 +298,7 @@ class DownloadManager: ObservableObject {
             item.videoPath  = nil
             item.audioPath  = nil
             item.title      = nil
+            item.lastToolWarning = nil
 
             await GalleryDlService.run(
                 item: item,
@@ -338,6 +340,7 @@ class DownloadManager: ObservableObject {
             item.audioPath     = nil
             item.title         = nil
             item.mediaCategory = .unknown
+            item.lastToolWarning = nil
             saveQueue()
             try? await Task.sleep(nanoseconds: 5_000_000_000)
             await runDownload(item)

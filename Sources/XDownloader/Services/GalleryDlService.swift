@@ -70,12 +70,16 @@ enum GalleryDlService {
 
         // gallery-dl exited 0 but neither new files appeared nor dry-run could
         // resolve a path — the tweet's media is genuinely unreachable (most
-        // often: sensitive content the cookie session can't unlock, a deleted
-        // or protected account, or a quote-RT pointing at media we can't get).
-        // Without this guard, the row would be marked "Done" with no files,
-        // which is misleading.
+        // often: a deleted tweet, or sensitive content the cookie session
+        // can't unlock). Without this guard, the row would be marked "Done"
+        // with no files, which is misleading. Prefer gallery-dl's own warning
+        // (age-restriction, media unavailable, …) over the generic guess.
         guard item.outputPath != nil else {
-            item.status = .failed("No media found — try a different cookie browser, or check the tweet still has its image/video.")
+            if let warning = item.lastToolWarning {
+                item.status = .failed("No media found — \(warning)")
+            } else {
+                item.status = .failed("No media found — the tweet may be deleted, or try a different cookie browser in Settings.")
+            }
             return
         }
 
@@ -160,6 +164,27 @@ enum GalleryDlService {
             return
         }
 
+        // Warnings aren't failures by themselves, but when the run ends with no
+        // files they're the only clue why (age-restricted tweet, media removed
+        // by a DMCA notice, …). Remember the most recent one so the
+        // empty-success guard in run() can show it instead of a generic guess.
+        // Must come before the "error" check: warning text may contain the
+        // word "error" (e.g. "API errors (1/10)") without being fatal.
+        if let r = line.range(of: "[warning] ") {
+            let msg = String(line[r.upperBound...]).trimmingCharacters(in: .whitespaces)
+            if !msg.isEmpty { item.lastToolWarning = msg }
+            return
+        }
+
+        // "[twitter][info] No results for <url>": X's TweetDetail API returned
+        // an empty conversation for an existing tweet — seen when X temporarily
+        // limits a (typically spam-flagged) account's visibility. The state can
+        // lift after hours/days, so steer the user toward retrying later.
+        if line.contains("[info] No results") {
+            item.lastToolWarning = "X returned no results — the tweet may be temporarily limited or hidden. Retry later."
+            return
+        }
+
         if line.lowercased().contains("error") {
             if case .failed = item.status { return }
             item.status = .failed(line)
@@ -230,9 +255,21 @@ enum GalleryDlService {
     /// while still exiting 0 — that's the empty-success bug that produces
     /// "No media found" rows in the UI. `!s` forces str(None) → "None" first,
     /// so the `.100` precision spec then succeeds on a real string.
+    ///
+    /// `quoted=true` / `retweets=true`: gallery-dl's defaults skip media that
+    /// belongs to a quoted tweet or retweet with only a debug-level log line,
+    /// then exits 0 having downloaded nothing. A pasted /status/ URL of a
+    /// quote-RT (media shown inline on X, but owned by the referenced tweet)
+    /// therefore failed as "No media found" even though yt-dlp had already
+    /// given up on it. The user pasted this exact tweet, so fetch everything
+    /// X renders on it.
     private static func formatArgs(for url: String) -> [String] {
         if SiteKind(url: url) == .twitter {
-            return ["-f", "{author[nick]} - {content!s:.100} #{num}.{extension}"]
+            return [
+                "-o", "quoted=true",
+                "-o", "retweets=true",
+                "-f", "{author[nick]} - {content!s:.100} #{num}.{extension}",
+            ]
         }
         return []
     }
