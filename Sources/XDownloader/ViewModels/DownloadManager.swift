@@ -308,6 +308,15 @@ class DownloadManager: ObservableObject {
                 register:   { [weak self] p in self?.activeProcesses[item.id] = p },
                 unregister: { [weak self]   in self?.activeProcesses.removeValue(forKey: item.id) }
             )
+
+            // Third fallback: X's GraphQL APIs sometimes hide tweets from
+            // spam-flagged accounts ("No results") while the media stays
+            // publicly served from the twimg CDN — fxtwitter still resolves
+            // those (the same path Telegram downloader bots use). Keeps the
+            // gallery-dl failure message when it can't help either.
+            if case .failed = item.status {
+                _ = await FxTwitterService.run(item: item, outputDirectory: outputDirectory)
+            }
         } else if case .failed = item.status {
             // already set by YtDlpService
         } else if exitCode == 0 {
