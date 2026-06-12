@@ -29,6 +29,9 @@ class DownloadManager: ObservableObject {
     // MARK: - Private state
 
     private var activeProcesses: [UUID: Process] = [:]
+    /// In-flight FxTwitterService fallbacks — URLSession Tasks, so they need
+    /// Task.cancel() rather than Process.terminate() when the user hits Stop.
+    private var activeFxTasks: [UUID: Task<Bool, Never>] = [:]
     private var downloadQueue: [DownloadItem] = []
     private var activeCount: Int = 0
     private var noticeTask: Task<Void, Never>?
@@ -140,6 +143,8 @@ class DownloadManager: ObservableObject {
     func removeItem(_ item: DownloadItem) {
         activeProcesses[item.id]?.terminate()
         activeProcesses.removeValue(forKey: item.id)
+        activeFxTasks[item.id]?.cancel()
+        activeFxTasks.removeValue(forKey: item.id)
         pausedItemIDs.remove(item.id)
         downloadQueue.removeAll { $0.id == item.id }
         items.removeAll { $0.id == item.id }
@@ -157,6 +162,9 @@ class DownloadManager: ObservableObject {
         // The post-exit branch in runDownload flips status to .paused once
         // the yt-dlp process actually finishes terminating.
         activeProcesses[item.id]?.terminate()
+        // The fxtwitter fallback runs as a URLSession Task, not a Process —
+        // cancel it too; runDownload consumes the pause after it returns.
+        activeFxTasks[item.id]?.cancel()
     }
 
     func resumeItem(_ item: DownloadItem) {
@@ -313,9 +321,23 @@ class DownloadManager: ObservableObject {
             // spam-flagged accounts ("No results") while the media stays
             // publicly served from the twimg CDN — fxtwitter still resolves
             // those (the same path Telegram downloader bots use). Keeps the
-            // gallery-dl failure message when it can't help either.
+            // gallery-dl failure message when it can't help either. Runs as
+            // a cancellable Task so Stop works (there's no Process to kill).
             if case .failed = item.status {
-                _ = await FxTwitterService.run(item: item, outputDirectory: outputDirectory)
+                let fxTask = Task { await FxTwitterService.run(item: item, outputDirectory: outputDirectory) }
+                activeFxTasks[item.id] = fxTask
+                _ = await fxTask.value
+                activeFxTasks.removeValue(forKey: item.id)
+
+                // Stop pressed while the fallback was running: consume the
+                // pause request here so it can't leak into a later retry.
+                if pausedItemIDs.remove(item.id) != nil, item.status != .completed {
+                    item.status = .paused
+                    item.speed  = nil
+                    item.eta    = nil
+                    saveQueue()
+                    return
+                }
             }
         } else if case .failed = item.status {
             // already set by YtDlpService

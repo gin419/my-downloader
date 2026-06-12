@@ -55,6 +55,13 @@ enum FxTwitterService {
         var videoCount = 0
 
         for (index, entry) in urls.enumerated() {
+            // Stop cancels the wrapping Task (see DownloadManager) — bail out
+            // between files; an in-flight URLSession download throws
+            // CancellationError and falls through the try? below.
+            if Task.isCancelled {
+                item.status = priorStatus
+                return false
+            }
             let ext = entry.isVideo
                 ? "mp4"
                 : (entry.url.pathExtension.isEmpty ? "jpg" : entry.url.pathExtension.lowercased())
@@ -72,7 +79,7 @@ enum FxTwitterService {
             if entry.isVideo { videoCount += 1 } else { imageCount += 1 }
         }
 
-        guard let first = savedPaths.first else {
+        guard !Task.isCancelled, let first = savedPaths.first else {
             item.status = priorStatus
             return false
         }
