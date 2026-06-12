@@ -510,6 +510,16 @@ class DownloadManager: ObservableObject {
         // in original chronological order (oldest first) so they download in
         // the same sequence as before the crash/quit.
         let restored = persisted.map { DownloadItem(persisted: $0) }
+
+        // Self-heal v1.3.0-era "empty success" rows: marked Done but no file
+        // was ever recorded (no title/media chip in the UI). Re-queue them so
+        // they run through the current yt-dlp → gallery-dl → fxtwitter chain
+        // instead of posing as completed forever.
+        for item in restored where item.status == .completed
+            && item.outputPath == nil && item.videoPath == nil && item.audioPath == nil {
+            item.status = .queued
+        }
+
         items = restored
         for item in restored.reversed() where item.status != .completed && item.status != .paused {
             downloadQueue.append(item)
