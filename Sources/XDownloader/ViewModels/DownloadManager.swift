@@ -29,6 +29,9 @@ class DownloadManager: ObservableObject {
     // MARK: - Private state
 
     private var activeProcesses: [UUID: Process] = [:]
+    /// In-flight FxTwitterService fallbacks — URLSession Tasks, so they need
+    /// Task.cancel() rather than Process.terminate() when the user hits Stop.
+    private var activeFxTasks: [UUID: Task<Bool, Never>] = [:]
     private var downloadQueue: [DownloadItem] = []
     private var activeCount: Int = 0
     private var noticeTask: Task<Void, Never>?
@@ -130,6 +133,7 @@ class DownloadManager: ObservableObject {
         item.imageCount    = nil
         item.videoCount    = nil
         item.mediaCategory = .unknown
+        item.lastToolWarning = nil
         item.retryCount   += 1
         downloadQueue.append(item)
         saveQueue()
@@ -139,6 +143,8 @@ class DownloadManager: ObservableObject {
     func removeItem(_ item: DownloadItem) {
         activeProcesses[item.id]?.terminate()
         activeProcesses.removeValue(forKey: item.id)
+        activeFxTasks[item.id]?.cancel()
+        activeFxTasks.removeValue(forKey: item.id)
         pausedItemIDs.remove(item.id)
         downloadQueue.removeAll { $0.id == item.id }
         items.removeAll { $0.id == item.id }
@@ -156,6 +162,9 @@ class DownloadManager: ObservableObject {
         // The post-exit branch in runDownload flips status to .paused once
         // the yt-dlp process actually finishes terminating.
         activeProcesses[item.id]?.terminate()
+        // The fxtwitter fallback runs as a URLSession Task, not a Process —
+        // cancel it too; runDownload consumes the pause after it returns.
+        activeFxTasks[item.id]?.cancel()
     }
 
     func resumeItem(_ item: DownloadItem) {
@@ -297,6 +306,7 @@ class DownloadManager: ObservableObject {
             item.videoPath  = nil
             item.audioPath  = nil
             item.title      = nil
+            item.lastToolWarning = nil
 
             await GalleryDlService.run(
                 item: item,
@@ -306,6 +316,29 @@ class DownloadManager: ObservableObject {
                 register:   { [weak self] p in self?.activeProcesses[item.id] = p },
                 unregister: { [weak self]   in self?.activeProcesses.removeValue(forKey: item.id) }
             )
+
+            // Third fallback: X's GraphQL APIs sometimes hide tweets from
+            // spam-flagged accounts ("No results") while the media stays
+            // publicly served from the twimg CDN — fxtwitter still resolves
+            // those (the same path Telegram downloader bots use). Keeps the
+            // gallery-dl failure message when it can't help either. Runs as
+            // a cancellable Task so Stop works (there's no Process to kill).
+            if case .failed = item.status {
+                let fxTask = Task { await FxTwitterService.run(item: item, outputDirectory: outputDirectory) }
+                activeFxTasks[item.id] = fxTask
+                _ = await fxTask.value
+                activeFxTasks.removeValue(forKey: item.id)
+
+                // Stop pressed while the fallback was running: consume the
+                // pause request here so it can't leak into a later retry.
+                if pausedItemIDs.remove(item.id) != nil, item.status != .completed {
+                    item.status = .paused
+                    item.speed  = nil
+                    item.eta    = nil
+                    saveQueue()
+                    return
+                }
+            }
         } else if case .failed = item.status {
             // already set by YtDlpService
         } else if exitCode == 0 {
@@ -338,6 +371,7 @@ class DownloadManager: ObservableObject {
             item.audioPath     = nil
             item.title         = nil
             item.mediaCategory = .unknown
+            item.lastToolWarning = nil
             saveQueue()
             try? await Task.sleep(nanoseconds: 5_000_000_000)
             await runDownload(item)
@@ -498,6 +532,16 @@ class DownloadManager: ObservableObject {
         // in original chronological order (oldest first) so they download in
         // the same sequence as before the crash/quit.
         let restored = persisted.map { DownloadItem(persisted: $0) }
+
+        // Self-heal v1.3.0-era "empty success" rows: marked Done but no file
+        // was ever recorded (no title/media chip in the UI). Re-queue them so
+        // they run through the current yt-dlp → gallery-dl → fxtwitter chain
+        // instead of posing as completed forever.
+        for item in restored where item.status == .completed
+            && item.outputPath == nil && item.videoPath == nil && item.audioPath == nil {
+            item.status = .queued
+        }
+
         items = restored
         for item in restored.reversed() where item.status != .completed && item.status != .paused {
             downloadQueue.append(item)

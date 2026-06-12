@@ -55,27 +55,21 @@ enum GalleryDlService {
             let candidate = newImages.first ?? newVideos.first
             if let first = candidate {
                 item.outputPath = outputDirectory.appendingPathComponent(first).path
-            } else {
-                // File already existed (gallery-dl skipped it) — resolve path via dry run.
-                item.outputPath = await dryRunPath(
-                    executablePath: executablePath,
-                    item: item,
-                    outputDirectory: outputDirectory,
-                    cookieBrowser: cookieBrowser,
-                    register: register,
-                    unregister: unregister
-                )
             }
         }
 
         // gallery-dl exited 0 but neither new files appeared nor dry-run could
         // resolve a path — the tweet's media is genuinely unreachable (most
-        // often: sensitive content the cookie session can't unlock, a deleted
-        // or protected account, or a quote-RT pointing at media we can't get).
-        // Without this guard, the row would be marked "Done" with no files,
-        // which is misleading.
+        // often: a deleted tweet, or sensitive content the cookie session
+        // can't unlock). Without this guard, the row would be marked "Done"
+        // with no files, which is misleading. Prefer gallery-dl's own warning
+        // (age-restriction, media unavailable, …) over the generic guess.
         guard item.outputPath != nil else {
-            item.status = .failed("No media found — try a different cookie browser, or check the tweet still has its image/video.")
+            if let warning = item.lastToolWarning {
+                item.status = .failed("No media found — \(warning)")
+            } else {
+                item.status = .failed("No media found — the tweet may be deleted, or try a different cookie browser in Settings.")
+            }
             return
         }
 
@@ -106,13 +100,13 @@ enum GalleryDlService {
                     .appendingPathComponent(clean + "." + u.pathExtension).path
                 if (try? FileManager.default.moveItem(atPath: path, toPath: newPath)) != nil {
                     item.outputPath = newPath
-                    item.title = clean
+                    item.title = displayTitle(forPath: newPath)
                 }
             }
         }
 
         if item.title == nil, let path = item.outputPath {
-            item.title = URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
+            item.title = displayTitle(forPath: path)
         }
 
         item.status   = .completed
@@ -127,17 +121,23 @@ enum GalleryDlService {
     static func parseLine(_ line: String, item: DownloadItem) {
         guard !line.isEmpty else { return }
 
-        // gallery-dl prints the downloaded file path on its own line.
-        // Filter out Python/urllib3 warning lines (they also start with "/" but contain ": ").
-        if line.hasPrefix("/") || line.hasPrefix("~") {
-            let ext = (line as NSString).pathExtension.lowercased()
+        // gallery-dl prints each downloaded file's path on its own line, or
+        // "# <path>" when the file already exists and was skipped. Filenames
+        // embed the tweet id (see formatArgs), so a skip can only mean this
+        // exact tweet's media is already on disk — treat it as this row's
+        // output instead of letting the run end as "no media found".
+        // Python/urllib3 warning lines also start with "/" but contain ": ".
+        let isSkipLine = line.hasPrefix("# /") || line.hasPrefix("# ~")
+        let pathLine = isSkipLine ? String(line.dropFirst(2)) : line
+        if pathLine.hasPrefix("/") || pathLine.hasPrefix("~") {
+            let ext = (pathLine as NSString).pathExtension.lowercased()
             let knownMedia = ["jpg", "jpeg", "png", "webp", "gif", "avif", "mp4", "mov", "webm", "m4a", "mp3"]
             guard knownMedia.contains(ext) else { return }
 
             let isImage = ["jpg", "jpeg", "png", "webp", "gif", "avif"].contains(ext)
             let isVideo = ["mp4", "mov", "webm", "mkv", "m4v"].contains(ext)
             item.status     = .downloading
-            item.outputPath = line
+            item.outputPath = pathLine
             if isImage {
                 item.imageCount = (item.imageCount ?? 0) + 1
             } else if isVideo {
@@ -151,12 +151,29 @@ enum GalleryDlService {
             else if hasVid            { item.mediaCategory = .video }
 
             if item.title == nil {
-                var stem = URL(fileURLWithPath: line).deletingPathExtension().lastPathComponent
-                if let r = stem.range(of: #"_\d+$"#, options: .regularExpression) {
-                    stem = String(stem[..<r.lowerBound])
-                }
-                item.title = stem
+                item.title = displayTitle(forPath: pathLine)
             }
+            return
+        }
+
+        // Warnings aren't failures by themselves, but when the run ends with no
+        // files they're the only clue why (age-restricted tweet, media removed
+        // by a DMCA notice, …). Remember the most recent one so the
+        // empty-success guard in run() can show it instead of a generic guess.
+        // Must come before the "error" check: warning text may contain the
+        // word "error" (e.g. "API errors (1/10)") without being fatal.
+        if let r = line.range(of: "[warning] ") {
+            let msg = String(line[r.upperBound...]).trimmingCharacters(in: .whitespaces)
+            if !msg.isEmpty { item.lastToolWarning = msg }
+            return
+        }
+
+        // "[twitter][info] No results for <url>": X's TweetDetail API returned
+        // an empty conversation for an existing tweet — seen when X temporarily
+        // limits a (typically spam-flagged) account's visibility. The state can
+        // lift after hours/days, so steer the user toward retrying later.
+        if line.contains("[info] No results") {
+            item.lastToolWarning = "X returned no results — the tweet may be temporarily limited or hidden. Retry later."
             return
         }
 
@@ -168,52 +185,17 @@ enum GalleryDlService {
 
     // MARK: - Private helpers
 
-    /// Run gallery-dl in print-only mode to discover the expected output path
-    /// without re-downloading. Used when a file was already present and skipped.
-    @MainActor
-    private static func dryRunPath(
-        executablePath: String,
-        item: DownloadItem,
-        outputDirectory: URL,
-        cookieBrowser: CookieBrowser,
-        register: @escaping (Process) -> Void,
-        unregister: @escaping () -> Void
-    ) async -> String? {
-        var args = cookieArgs(cookieBrowser)
-        args += [
-            "--dest", outputDirectory.path,
-            "-D", ".",
-        ]
-        args += formatArgs(for: item.url)
-        args += [
-            "--print", "filepath",
-            item.url,
-        ]
-
-        var foundPath: String?
-        await runProcess(
-            executablePath: executablePath,
-            arguments: args,
-            item: item,
-            register: register,
-            unregister: unregister,
-            lineParser: { line, _ in
-                let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-                if trimmed.hasPrefix("/"), foundPath == nil { foundPath = trimmed }
+    /// Filename stem → display title: strips the trailing " #N" file index,
+    /// the " [tweet_id]" uniqueness suffix, and the legacy "_N" index.
+    /// "Nick - text [2063695500809826393] #1" → "Nick - text"
+    private static func displayTitle(forPath path: String) -> String {
+        var stem = URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
+        for pattern in [#" #\d+$"#, #" \[\d{10,}\]$"#, #"_\d+$"#] {
+            if let r = stem.range(of: pattern, options: .regularExpression) {
+                stem = String(stem[..<r.lowerBound])
             }
-        )
-
-        guard let p = foundPath else { return nil }
-
-        // Prefer the renamed (no " #1") version when it exists.
-        let u = URL(fileURLWithPath: p)
-        let stem = u.deletingPathExtension().lastPathComponent
-        if stem.hasSuffix(" #1") {
-            let clean = u.deletingLastPathComponent()
-                .appendingPathComponent(String(stem.dropLast(3)) + "." + u.pathExtension).path
-            if FileManager.default.fileExists(atPath: clean) { return clean }
         }
-        return FileManager.default.fileExists(atPath: p) ? p : nil
+        return stem
     }
 
     private static func cookieArgs(_ browser: CookieBrowser) -> [String] {
@@ -230,9 +212,27 @@ enum GalleryDlService {
     /// while still exiting 0 — that's the empty-success bug that produces
     /// "No media found" rows in the UI. `!s` forces str(None) → "None" first,
     /// so the `.100` precision spec then succeeds on a real string.
+    ///
+    /// `quoted=true` / `retweets=true`: gallery-dl's defaults skip media that
+    /// belongs to a quoted tweet or retweet with only a debug-level log line,
+    /// then exits 0 having downloaded nothing. A pasted /status/ URL of a
+    /// quote-RT (media shown inline on X, but owned by the referenced tweet)
+    /// therefore failed as "No media found" even though yt-dlp had already
+    /// given up on it. The user pasted this exact tweet, so fetch everything
+    /// X renders on it.
+    ///
+    /// `[{tweet_id}]` in the filename makes names unique per tweet. Without
+    /// it, two no-text tweets by the same author collide ("Nick -  #1.jpg"),
+    /// and gallery-dl silently skips the second as "already downloaded" —
+    /// exit 0, zero new files, surfaced in the UI as "No media found".
+    /// parseLine strips the id (and " #N") again for display titles.
     private static func formatArgs(for url: String) -> [String] {
         if SiteKind(url: url) == .twitter {
-            return ["-f", "{author[nick]} - {content!s:.100} #{num}.{extension}"]
+            return [
+                "-o", "quoted=true",
+                "-o", "retweets=true",
+                "-f", "{author[nick]} - {content!s:.100} [{tweet_id}] #{num}.{extension}",
+            ]
         }
         return []
     }

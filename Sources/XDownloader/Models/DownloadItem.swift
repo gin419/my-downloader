@@ -123,6 +123,11 @@ class DownloadItem: Identifiable, ObservableObject {
     /// for this item. Prevents infinite retry loops for tweets that are
     /// genuinely unreachable.
     var autoRetryAttempted: Bool = false
+    /// In-memory only (NOT persisted). Most recent diagnostic line the
+    /// downloader printed for this attempt — a "[warning]" or the "No results"
+    /// info line — used to explain empty-success failures (age-restricted,
+    /// media unavailable, tweet temporarily limited, …) instead of guessing.
+    var lastToolWarning: String?
 
     init(url: String, addedAt: Date = Date()) {
         self.url = url
