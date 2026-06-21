@@ -134,6 +134,8 @@ class DownloadManager: ObservableObject {
         item.videoCount    = nil
         item.mediaCategory = .unknown
         item.lastToolWarning = nil
+        item.subtitleDownloadFailed = false
+        item.subtitlesDisabled      = false
         item.retryCount   += 1
         downloadQueue.append(item)
         saveQueue()
@@ -247,13 +249,17 @@ class DownloadManager: ObservableObject {
         item.status = .fetching
         if youtubeFormat == .audioOnly { item.mediaCategory = .audio }
 
+        // A prior run hit a subtitle 429 and aborted before saving the video —
+        // drop subtitles on the retry so the video itself can download.
+        let effectiveSubtitleLanguage: SubtitleLanguage = item.subtitlesDisabled ? .none : subtitleLanguage
+
         let args = YtDlpService.buildArguments(
             for: item,
             outputDirectory: outputDirectory,
             format: youtubeFormat,
             videoQuality: videoQuality,
             audioQuality: audioQuality,
-            subtitleLanguage: subtitleLanguage,
+            subtitleLanguage: effectiveSubtitleLanguage,
             embedSubtitles: embedSubtitles,
             cookieBrowser: cookieBrowser
         )
@@ -277,7 +283,14 @@ class DownloadManager: ObservableObject {
         // gallery-dl often picks these up, so treat it the same as a non-zero
         // exit and let the fallback below try.
         let mediaCaptured = item.outputPath != nil
-        if exitCode == 0 && mediaCaptured {
+        var hasFatalError = false; if case .failed = item.status { hasFatalError = true }
+        // Subtitles are best-effort: if the video already reached disk but yt-dlp
+        // exited non-zero *only* because the (optional) subtitle download was
+        // rate-limited, keep the video rather than failing. Scoped to the
+        // subtitle case so other non-zero exits (e.g. a Twitter multi-video tweet
+        // that partially downloaded) still fall through to the fallback below.
+        let subtitleOnlyFailure = item.subtitleDownloadFailed && !hasFatalError
+        if mediaCaptured && (exitCode == 0 || subtitleOnlyFailure) {
             item.status   = .completed
             item.progress = 1.0
             item.speed    = nil
@@ -293,6 +306,23 @@ class DownloadManager: ObservableObject {
             item.speed  = nil
             item.eta    = nil
             saveQueue()
+            return
+        }
+
+        // Subtitle download is best-effort. YouTube heavily rate-limits its
+        // subtitle endpoint (HTTP 429), and yt-dlp writes subtitles *before* the
+        // video — so that error aborts the item with no media saved. Retry once
+        // with subtitles disabled so the video itself still downloads. (When subs
+        // are fetched last instead, the success check above already keeps the
+        // video, so this branch only fires when nothing landed on disk.)
+        if item.subtitleDownloadFailed && !item.subtitlesDisabled && item.outputPath == nil {
+            item.subtitlesDisabled = true
+            item.status   = .fetching
+            item.progress = 0
+            item.speed    = nil
+            item.eta      = nil
+            saveQueue()
+            await runDownload(item)
             return
         }
 
