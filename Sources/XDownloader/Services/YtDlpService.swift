@@ -134,7 +134,17 @@ enum YtDlpService {
                 if let r = stem.range(of: #" \[\d+\]$"#, options: .regularExpression) {
                     stem = String(stem[..<r.lowerBound])
                 }
-                if let r = stem.range(of: " - ") { item.title = String(stem[r.upperBound...]) }
+                // Strip yt-dlp's intermediate format-code suffix (e.g. ".f136"):
+                // when video+audio are downloaded separately and merged, the first
+                // Destination line is the pre-merge stream "Name.f136.mp4". The
+                // final merged file ("Name.mp4") has none, so without this the
+                // title would display as "Title.f136".
+                if let r = stem.range(of: #"\.f\d+$"#, options: .regularExpression) {
+                    stem = String(stem[..<r.lowerBound])
+                }
+                // Keep the full "Uploader - Title" stem so the displayed name
+                // matches the saved filename (gallery-dl titles already do this).
+                item.title = stem
             }
             if isImage { item.imageCount = (item.imageCount ?? 0) + 1 }
 
@@ -191,6 +201,15 @@ enum YtDlpService {
                 // most of these; if it still fires, retrying a minute later
                 // usually works.
                 item.status = .failed("No downloadable format — usually a brief YouTube hiccup, click Retry.")
+            } else if lower.contains("subtitle") {
+                // Subtitle download failures (e.g. YouTube's "HTTP Error 429:
+                // Too Many Requests") must not fail the whole download — the
+                // video is the user's actual target. yt-dlp writes subtitles
+                // *before* the video, so this ERROR aborts the item with no
+                // media saved; flag it so DownloadManager can retry with
+                // subtitles disabled. Don't set .failed here.
+                item.subtitleDownloadFailed = true
+                return
             } else {
                 item.status = .failed(line)
             }

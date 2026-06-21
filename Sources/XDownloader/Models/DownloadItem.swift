@@ -128,6 +128,16 @@ class DownloadItem: Identifiable, ObservableObject {
     /// info line — used to explain empty-success failures (age-restricted,
     /// media unavailable, tweet temporarily limited, …) instead of guessing.
     var lastToolWarning: String?
+    /// In-memory only (NOT persisted). Set by YtDlpService.parseLine when a
+    /// "Unable to download video subtitles" line appears — YouTube heavily
+    /// rate-limits (HTTP 429) its subtitle endpoint, and yt-dlp aborts the
+    /// whole item on that error before the video is saved. Signals
+    /// DownloadManager to retry the video with subtitles disabled.
+    var subtitleDownloadFailed: Bool = false
+    /// In-memory only (NOT persisted). True once we've re-run this item with
+    /// subtitles forced off. Tells buildArguments to skip subtitle flags and
+    /// guards against an infinite subtitle-retry loop.
+    var subtitlesDisabled: Bool = false
 
     init(url: String, addedAt: Date = Date()) {
         self.url = url
