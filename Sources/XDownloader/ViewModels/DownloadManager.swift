@@ -328,7 +328,7 @@ class DownloadManager: ObservableObject {
 
         // yt-dlp failed — try gallery-dl as fallback for sites it handles well (image
         // tweets, Reddit posts/galleries, etc.).
-        if SiteKind(url: item.url).galleryDlFallback, let gdlPath = galleryDlPath {
+        if SiteRegistry.profile(for: item.url).usesGalleryDlFallback, let gdlPath = galleryDlPath {
             item.status     = .fetching
             item.progress   = 0
             item.imageCount = nil
@@ -466,12 +466,7 @@ class DownloadManager: ObservableObject {
     }
 
     private func siteLabel(for url: String) -> String {
-        switch SiteKind(url: url) {
-        case .twitter: return "twitter"
-        case .youtube: return "youtube"
-        case .reddit:  return "reddit"
-        case .other:   return "other"
-        }
+        SiteRegistry.profile(for: url).id
     }
 
     // MARK: - History admin
