@@ -19,8 +19,12 @@ enum GalleryDlService {
         args += [
             "--dest", outputDirectory.path,
             "-D", ".",
+            // Large X/Reddit videos (multi-GB) drop the connection or read-time out
+            // on a flaky link; the default ~4 retries / 30s aren't enough. Be generous.
+            "--retries", "10",
+            "-o", "downloader.http.timeout=60",
         ]
-        args += formatArgs(for: item.url)
+        args += SiteRegistry.profile(for: item.url).galleryDlArgs
         args += [
             "--no-mtime",
             item.url,
@@ -200,40 +204,5 @@ enum GalleryDlService {
 
     private static func cookieArgs(_ browser: CookieBrowser) -> [String] {
         browser != .none ? ["--cookies-from-browser", browser.rawValue] : []
-    }
-
-    /// `{author[nick]}` and `{content}` are Twitter-specific keys. For other sites
-    /// gallery-dl's per-extractor defaults produce sensible filenames already.
-    ///
-    /// `{content!s:.100}` (lowercase s, Python's str() conversion) prevents the
-    /// silent download failure on image-only / no-text tweets. Earlier
-    /// `{content:.100}` raises `TypeError: unsupported format string passed to
-    /// NoneType.__format__` when content is None, which gallery-dl swallows
-    /// while still exiting 0 — that's the empty-success bug that produces
-    /// "No media found" rows in the UI. `!s` forces str(None) → "None" first,
-    /// so the `.100` precision spec then succeeds on a real string.
-    ///
-    /// `quoted=true` / `retweets=true`: gallery-dl's defaults skip media that
-    /// belongs to a quoted tweet or retweet with only a debug-level log line,
-    /// then exits 0 having downloaded nothing. A pasted /status/ URL of a
-    /// quote-RT (media shown inline on X, but owned by the referenced tweet)
-    /// therefore failed as "No media found" even though yt-dlp had already
-    /// given up on it. The user pasted this exact tweet, so fetch everything
-    /// X renders on it.
-    ///
-    /// `[{tweet_id}]` in the filename makes names unique per tweet. Without
-    /// it, two no-text tweets by the same author collide ("Nick -  #1.jpg"),
-    /// and gallery-dl silently skips the second as "already downloaded" —
-    /// exit 0, zero new files, surfaced in the UI as "No media found".
-    /// parseLine strips the id (and " #N") again for display titles.
-    private static func formatArgs(for url: String) -> [String] {
-        if SiteRegistry.profile(for: url).usesTwitterGalleryDlArgs {
-            return [
-                "-o", "quoted=true",
-                "-o", "retweets=true",
-                "-f", "{author[nick]} - {content!s:.100} [{tweet_id}] #{num}.{extension}",
-            ]
-        }
-        return []
     }
 }
