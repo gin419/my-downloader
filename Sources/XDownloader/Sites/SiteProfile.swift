@@ -31,15 +31,16 @@ struct SiteProfile {
     let supportsSubtitles: Bool
     /// Use yt-dlp's DASH/avc YouTube format selector instead of the generic one.
     let usesYouTubeFormatSelector: Bool
-    /// Append the multi-video playlist-index suffix to the output template.
-    /// Twitter only (other extractors hit a yt-dlp template bug — see YtDlpService).
-    let usesPlaylistIndexSuffix: Bool
+    /// Suffix appended to the yt-dlp output template (before the extension).
+    /// Twitter uses it for the multi-video playlist index; empty elsewhere
+    /// (other extractors hit a yt-dlp template bug — see YtDlpService).
+    let outputTemplateSuffix: String
     /// Kill yt-dlp if it follows a redirect *out* of the original page, so a
     /// fallback can handle it. Twitter only.
     let detectsExternalRedirect: Bool
-    /// Pass quoted/retweets options + the unique filename template to gallery-dl.
-    /// Twitter only.
-    let usesTwitterGalleryDlArgs: Bool
+    /// Extra gallery-dl args for this site (filename template, etc.); empty when
+    /// gallery-dl's per-extractor defaults are fine.
+    let galleryDlArgs: [String]
 
     var usesGalleryDlFallback: Bool { fallbacks.contains(.galleryDl) }
     var usesFxTwitterFallback: Bool { fallbacks.contains(.fxTwitter) }
@@ -55,9 +56,18 @@ enum SiteRegistry {
         fallbacks: [.galleryDl, .fxTwitter],
         supportsSubtitles: false,
         usesYouTubeFormatSelector: false,
-        usesPlaylistIndexSuffix: true,
+        outputTemplateSuffix: "%(playlist_index& [%(playlist_index)02d]|)s",
         detectsExternalRedirect: true,
-        usesTwitterGalleryDlArgs: true
+        // gallery-dl Twitter args (hard-won against silent empty-success bugs):
+        // quoted/retweets=true fetch media owned by quoted/retweeted tweets;
+        // {content!s:.100} forces str(None) so no-text tweets don't raise on the
+        // .100 precision spec; [{tweet_id}] keeps filenames unique so same-author
+        // no-text tweets don't collide and get skipped as "already downloaded".
+        galleryDlArgs: [
+            "-o", "quoted=true",
+            "-o", "retweets=true",
+            "-f", "{author[nick]} - {content!s:.100} [{tweet_id}] #{num}.{extension}",
+        ]
     )
 
     static let youtube = SiteProfile(
@@ -66,9 +76,9 @@ enum SiteRegistry {
         fallbacks: [],
         supportsSubtitles: true,
         usesYouTubeFormatSelector: true,
-        usesPlaylistIndexSuffix: false,
+        outputTemplateSuffix: "",
         detectsExternalRedirect: false,
-        usesTwitterGalleryDlArgs: false
+        galleryDlArgs: []
     )
 
     static let reddit = SiteProfile(
@@ -77,9 +87,9 @@ enum SiteRegistry {
         fallbacks: [.galleryDl],
         supportsSubtitles: false,
         usesYouTubeFormatSelector: false,
-        usesPlaylistIndexSuffix: false,
+        outputTemplateSuffix: "",
         detectsExternalRedirect: false,
-        usesTwitterGalleryDlArgs: false
+        galleryDlArgs: []
     )
 
     /// Catch-all: the generic yt-dlp extractor with no fallbacks.
@@ -89,9 +99,9 @@ enum SiteRegistry {
         fallbacks: [],
         supportsSubtitles: false,
         usesYouTubeFormatSelector: false,
-        usesPlaylistIndexSuffix: false,
+        outputTemplateSuffix: "",
         detectsExternalRedirect: false,
-        usesTwitterGalleryDlArgs: false
+        galleryDlArgs: []
     )
 
     static let all: [SiteProfile] = [twitter, youtube, reddit, other]

@@ -20,8 +20,7 @@ enum YtDlpService {
         // Non-Twitter extractors (e.g. Pornhub) trigger a yt-dlp bug where nested
         // %(...)fmt patterns inside conditionals corrupt to null bytes — skip it there.
         let profile = SiteRegistry.profile(for: item.url)
-        let playlistSuffix = profile.usesPlaylistIndexSuffix ? "%(playlist_index& [%(playlist_index)02d]|)s" : ""
-        let outputTemplate = outputDirectory.path + "/%(uploader)s - %(title)s\(playlistSuffix).%(ext)s"
+        let outputTemplate = outputDirectory.path + "/%(uploader)s - %(title)s\(profile.outputTemplateSuffix).%(ext)s"
         var args: [String] = []
 
         if cookieBrowser != .none {
