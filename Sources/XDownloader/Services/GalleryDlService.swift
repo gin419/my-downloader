@@ -227,7 +227,7 @@ enum GalleryDlService {
     /// exit 0, zero new files, surfaced in the UI as "No media found".
     /// parseLine strips the id (and " #N") again for display titles.
     private static func formatArgs(for url: String) -> [String] {
-        if SiteKind(url: url) == .twitter {
+        if SiteRegistry.profile(for: url).usesTwitterGalleryDlArgs {
             return [
                 "-o", "quoted=true",
                 "-o", "retweets=true",

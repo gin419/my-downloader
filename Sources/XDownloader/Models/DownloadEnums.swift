@@ -99,35 +99,6 @@ enum OpenPreference: String, CaseIterable, Identifiable {
     }
 }
 
-/// Single source of truth for URL → site routing. Add a new case + matchers here
-/// when a new site needs special handling, rather than scattering `url.contains(...)`.
-enum SiteKind {
-    case twitter, youtube, reddit, other
-
-    init(url: String) {
-        if url.contains("x.com/") || url.contains("twitter.com/") {
-            self = .twitter
-        } else if url.contains("youtube.com/") || url.contains("youtu.be/") {
-            self = .youtube
-        } else if url.contains("reddit.com/") || url.contains("redd.it/") {
-            self = .reddit
-        } else {
-            self = .other
-        }
-    }
-
-    /// Whether to try gallery-dl as a fallback when yt-dlp fails.
-    var galleryDlFallback: Bool {
-        self == .twitter || self == .reddit
-    }
-
-    /// True if `url` belongs to Twitter's domains, including the image CDN (`twimg.com`).
-    /// Used to detect whether yt-dlp followed a redirect *out* of the original tweet.
-    static func isTwitterContent(_ url: String) -> Bool {
-        url.contains("x.com") || url.contains("twitter.com") || url.contains("twimg.com")
-    }
-}
-
 enum CookieBrowser: String, CaseIterable, Identifiable {
     case safari  = "safari"
     case chrome  = "chrome"

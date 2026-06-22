@@ -19,8 +19,8 @@ enum YtDlpService {
         // single-video tweets playlist_index is not set, so the suffix is empty.
         // Non-Twitter extractors (e.g. Pornhub) trigger a yt-dlp bug where nested
         // %(...)fmt patterns inside conditionals corrupt to null bytes — skip it there.
-        let site = SiteKind(url: item.url)
-        let playlistSuffix = site == .twitter ? "%(playlist_index& [%(playlist_index)02d]|)s" : ""
+        let profile = SiteRegistry.profile(for: item.url)
+        let playlistSuffix = profile.usesPlaylistIndexSuffix ? "%(playlist_index& [%(playlist_index)02d]|)s" : ""
         let outputTemplate = outputDirectory.path + "/%(uploader)s - %(title)s\(playlistSuffix).%(ext)s"
         var args: [String] = []
 
@@ -28,7 +28,6 @@ enum YtDlpService {
             args += ["--cookies-from-browser", cookieBrowser.rawValue]
         }
 
-        let isYouTube = site == .youtube
         let hf = videoQuality.heightFilter ?? ""   // e.g. "[height<=1080]" or ""
 
         switch format {
@@ -43,7 +42,7 @@ enum YtDlpService {
             // YouTube (including Shorts) almost never serves a single combined mp4
             // stream — falling through to .videoAndAudio's selector avoids a
             // "Requested format is not available" failure.
-            if isYouTube {
+            if profile.usesYouTubeFormatSelector {
                 args += [
                     "--format", "bestvideo[vcodec^=avc][ext=mp4]\(hf)+bestaudio[ext=m4a]/bestvideo[ext=mp4]\(hf)+bestaudio[ext=m4a]/bestvideo\(hf)+bestaudio/bestvideo+bestaudio/bv*+ba/b",
                     "--merge-output-format", "mp4",
@@ -67,7 +66,7 @@ enum YtDlpService {
             ]
         }
 
-        if isYouTube && format != .audioOnly && subtitleLanguage != .none {
+        if profile.supportsSubtitles && format != .audioOnly && subtitleLanguage != .none {
             args += ["--write-sub", "--write-auto-sub", "--sub-lang", subtitleLanguage.rawValue]
             if embedSubtitles { args += ["--embed-subs"] }
         }
@@ -181,11 +180,11 @@ enum YtDlpService {
 
         // External redirect detection: yt-dlp followed a link out of the tweet.
         // Kill the process immediately so gallery-dl can handle the original tweet URL.
-        if SiteKind(url: item.url) == .twitter,
+        if SiteRegistry.profile(for: item.url).detectsExternalRedirect,
            (line.hasPrefix("[generic]") || line.hasPrefix("[redirect]")),
            let urlRange = line.range(of: "(?:Extracting URL|Following redirect to): (https?://\\S+)", options: .regularExpression),
            let detected = line[urlRange].components(separatedBy: ": ").last,
-           !SiteKind.isTwitterContent(detected) {
+           !SiteRegistry.isTwitterContent(detected) {
             terminate()
             item.status = .failed("external_redirect")
             return
