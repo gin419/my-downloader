@@ -326,55 +326,36 @@ class DownloadManager: ObservableObject {
             return
         }
 
-        // yt-dlp failed — try gallery-dl as fallback for sites it handles well (image
-        // tweets, Reddit posts/galleries, etc.).
-        if SiteRegistry.profile(for: item.url).usesGalleryDlFallback, let gdlPath = galleryDlPath {
-            item.status     = .fetching
-            item.progress   = 0
-            item.imageCount = nil
-            item.outputPath = nil
-            item.videoPath  = nil
-            item.audioPath  = nil
-            item.title      = nil
-            item.lastToolWarning = nil
-
-            await GalleryDlService.run(
-                item: item,
-                executablePath: gdlPath,
-                outputDirectory: outputDirectory,
-                cookieBrowser: cookieBrowser,
-                register:   { [weak self] p in self?.activeProcesses[item.id] = p },
-                unregister: { [weak self]   in self?.activeProcesses.removeValue(forKey: item.id) }
-            )
-
-            // Third fallback: X's GraphQL APIs sometimes hide tweets from
-            // spam-flagged accounts ("No results") while the media stays
-            // publicly served from the twimg CDN — fxtwitter still resolves
-            // those (the same path Telegram downloader bots use). Keeps the
-            // gallery-dl failure message when it can't help either. Runs as
-            // a cancellable Task so Stop works (there's no Process to kill).
-            if case .failed = item.status {
-                let fxTask = Task { await FxTwitterService.run(item: item, outputDirectory: outputDirectory) }
-                activeFxTasks[item.id] = fxTask
-                _ = await fxTask.value
-                activeFxTasks.removeValue(forKey: item.id)
-
-                // Stop pressed while the fallback was running: consume the
-                // pause request here so it can't leak into a later retry.
-                if pausedItemIDs.remove(item.id) != nil, item.status != .completed {
-                    item.status = .paused
-                    item.speed  = nil
-                    item.eta    = nil
-                    saveQueue()
-                    return
-                }
+        // yt-dlp failed or found no media — run the site's declared fallback
+        // chain (data-driven from its SiteProfile) until one succeeds. Each tool
+        // owns its own process/task + pause handling in a helper below; adding or
+        // reordering a site's fallbacks is now a profile edit, not a change here.
+        let profile = SiteRegistry.profile(for: item.url)
+        var ranFallback = false
+        for fallback in profile.fallbacks {
+            if case .completed = item.status { break }   // a prior fallback already won
+            switch fallback {
+            case .galleryDl:
+                guard let gdlPath = galleryDlPath else { continue }   // tool not installed
+                ranFallback = true
+                await runGalleryDlFallback(item, executablePath: gdlPath)
+            case .fxTwitter:
+                guard case .failed = item.status else { continue }    // only as a rescue
+                ranFallback = true
+                if await runFxTwitterFallback(item) { return }        // user pressed Stop mid-run
             }
-        } else if case .failed = item.status {
-            // already set by YtDlpService
-        } else if exitCode == 0 {
-            item.status = .failed("yt-dlp reported success but found no media to download.")
-        } else {
-            item.status = .failed("yt-dlp exited with code \(exitCode)")
+        }
+
+        // No fallback ran (none declared for this site, or gallery-dl missing) —
+        // finalize yt-dlp's own outcome.
+        if !ranFallback {
+            if case .failed = item.status {
+                // already set by YtDlpService
+            } else if exitCode == 0 {
+                item.status = .failed("yt-dlp reported success but found no media to download.")
+            } else {
+                item.status = .failed("yt-dlp exited with code \(exitCode)")
+            }
         }
 
         // Auto-retry once on "empty success" — yt-dlp or gallery-dl exited 0
@@ -409,6 +390,51 @@ class DownloadManager: ObservableObject {
         }
 
         finalize(item)
+    }
+
+    /// Resets yt-dlp's partial state, then runs the gallery-dl fallback (a
+    /// Process — pause kills it via `activeProcesses`). On return `item.status`
+    /// is `.completed` or `.failed`.
+    private func runGalleryDlFallback(_ item: DownloadItem, executablePath: String) async {
+        item.status     = .fetching
+        item.progress   = 0
+        item.imageCount = nil
+        item.outputPath = nil
+        item.videoPath  = nil
+        item.audioPath  = nil
+        item.title      = nil
+        item.lastToolWarning = nil
+
+        await GalleryDlService.run(
+            item: item,
+            executablePath: executablePath,
+            outputDirectory: outputDirectory,
+            cookieBrowser: cookieBrowser,
+            register:   { [weak self] p in self?.activeProcesses[item.id] = p },
+            unregister: { [weak self]   in self?.activeProcesses.removeValue(forKey: item.id) }
+        )
+    }
+
+    /// Last-resort fallback: X's GraphQL APIs sometimes hide tweets from
+    /// spam-flagged accounts while the media stays publicly served from the twimg
+    /// CDN — fxtwitter still resolves those. Runs as a cancellable Task (no
+    /// Process to kill), so it registers in `activeFxTasks`. Keeps the prior
+    /// (gallery-dl) failure message when it can't help. Returns true if the user
+    /// pressed Stop mid-run — the item is set to .paused and the caller returns.
+    private func runFxTwitterFallback(_ item: DownloadItem) async -> Bool {
+        let fxTask = Task { await FxTwitterService.run(item: item, outputDirectory: outputDirectory) }
+        activeFxTasks[item.id] = fxTask
+        _ = await fxTask.value
+        activeFxTasks.removeValue(forKey: item.id)
+
+        if pausedItemIDs.remove(item.id) != nil, item.status != .completed {
+            item.status = .paused
+            item.speed  = nil
+            item.eta    = nil
+            saveQueue()
+            return true
+        }
+        return false
     }
 
     private func finalize(_ item: DownloadItem) {
