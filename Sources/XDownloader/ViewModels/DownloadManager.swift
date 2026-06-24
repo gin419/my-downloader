@@ -10,6 +10,9 @@ class DownloadManager: ObservableObject {
     @Published var items: [DownloadItem] = []
     @Published var outputDirectory: URL
     @Published var cookieBrowser: CookieBrowser = .safari
+    @Published var cookiesFilePath: String? = nil   // display / last resolved path
+    private var cookiesFileBookmarkData: Data?       // security-scoped bookmark for sandboxed file access
+    private var _bookmarkForDeinit: Data?            // non-isolated copy for deinit cleanup (avoids actor isolation in deinit)
     @Published var maxConcurrent: Int = 2
     @Published var showDownloadDate: Bool = false
     @Published var youtubeFormat: YouTubeFormat = .videoAndAudio
@@ -58,6 +61,16 @@ class DownloadManager: ObservableObject {
         checkRequirements()
         refreshHistoryStats()
         drainQueue()
+    }
+
+    deinit {
+        // Use the non-isolated copy to avoid actor-isolated call in deinit
+        if let data = _bookmarkForDeinit {
+            var isStale = false
+            if let url = try? URL(resolvingBookmarkData: data, options: .withSecurityScope, relativeTo: nil, bookmarkDataIsStale: &isStale) {
+                url.stopAccessingSecurityScopedResource()
+            }
+        }
     }
 
     func checkRequirements() {
@@ -196,12 +209,67 @@ class DownloadManager: ObservableObject {
         NSWorkspace.shared.open(outputDirectory)
     }
 
+    // MARK: - Cookies file (security-scoped bookmark for sandbox)
+    /// Starts (or restarts) security-scoped access for the stored bookmark and returns the usable path for --cookies.
+    /// Must be called before passing the path to yt-dlp / gallery-dl.
+    func beginAccessingCookiesFile() -> String? {
+        guard let data = cookiesFileBookmarkData else { return cookiesFilePath }
+        var isStale = false
+        guard let url = try? URL(resolvingBookmarkData: data, options: .withSecurityScope, relativeTo: nil, bookmarkDataIsStale: &isStale) else { return nil }
+        if url.startAccessingSecurityScopedResource() {
+            cookiesFilePath = url.path   // update display to current location
+            return url.path
+        }
+        return nil
+    }
+
+    func setCookiesFile(from url: URL) {
+        do {
+            let data = try url.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil)
+            // stop any previous
+            stopAccessingCookiesFile()
+            cookiesFileBookmarkData = data
+            _bookmarkForDeinit = data
+            cookiesFilePath = url.path
+            _ = beginAccessingCookiesFile()
+            saveSettings()
+        } catch {
+            // last resort plain path (no sandbox grant)
+            cookiesFileBookmarkData = nil
+            cookiesFilePath = url.path
+            saveSettings()
+        }
+    }
+
+    func clearCookiesFile() {
+        stopAccessingCookiesFile()
+        cookiesFileBookmarkData = nil
+        _bookmarkForDeinit = nil
+        cookiesFilePath = nil
+        saveSettings()
+    }
+
+    private func stopAccessingCookiesFile() {
+        guard let data = cookiesFileBookmarkData else { return }
+        var isStale = false
+        if let url = try? URL(resolvingBookmarkData: data, options: .withSecurityScope, relativeTo: nil, bookmarkDataIsStale: &isStale) {
+            url.stopAccessingSecurityScopedResource()
+        }
+        _bookmarkForDeinit = nil
+    }
+
     // MARK: - Settings
 
     func saveSettings() {
         let d = UserDefaults.standard
         d.set(outputDirectory.absoluteString, forKey: "outputDirectory")
         d.set(cookieBrowser.rawValue,         forKey: "cookieBrowser")
+        d.set(cookiesFilePath,                forKey: "cookiesFilePath")
+        if let bm = cookiesFileBookmarkData {
+            d.set(bm, forKey: "cookiesFileBookmarkData")
+        } else {
+            d.removeObject(forKey: "cookiesFileBookmarkData")
+        }
         d.set(showDownloadDate,               forKey: "showDownloadDate")
         d.set(youtubeFormat.rawValue,         forKey: "youtubeFormat")
         d.set(videoQuality.rawValue,          forKey: "videoQuality")
@@ -220,6 +288,11 @@ class DownloadManager: ObservableObject {
         let d = UserDefaults.standard
         if let s = d.string(forKey: "outputDirectory"), let u = URL(string: s) { outputDirectory = u }
         if let r = d.string(forKey: "cookieBrowser"),   let v = CookieBrowser(rawValue: r)    { cookieBrowser = v }
+        if let p = d.string(forKey: "cookiesFilePath"), !p.isEmpty { cookiesFilePath = p } else { cookiesFilePath = nil }
+        if let data = d.data(forKey: "cookiesFileBookmarkData") { 
+            cookiesFileBookmarkData = data 
+            _bookmarkForDeinit = data
+        }
         if let r = d.string(forKey: "youtubeFormat"),   let v = YouTubeFormat(rawValue: r)    { youtubeFormat = v }
         if let r = d.string(forKey: "videoQuality"),    let v = VideoQuality(rawValue: r)     { videoQuality = v }
         if let r = d.string(forKey: "audioQuality"),    let v = AudioQuality(rawValue: r)     { audioQuality = v }
@@ -231,6 +304,8 @@ class DownloadManager: ObservableObject {
         saveHistoryEnabled = d.object(forKey: "saveHistoryEnabled") as? Bool ?? true
         let stored = d.integer(forKey: "maxConcurrent")
         if stored > 0 { maxConcurrent = stored }
+        // Start access early if we have a bookmark (best effort)
+        if cookiesFileBookmarkData != nil { _ = beginAccessingCookiesFile() }
     }
 
     private func drainQueue() {
@@ -253,6 +328,7 @@ class DownloadManager: ObservableObject {
         // drop subtitles on the retry so the video itself can download.
         let effectiveSubtitleLanguage: SubtitleLanguage = item.subtitlesDisabled ? .none : subtitleLanguage
 
+        let fileToPass = beginAccessingCookiesFile()
         let args = YtDlpService.buildArguments(
             for: item,
             outputDirectory: outputDirectory,
@@ -261,7 +337,8 @@ class DownloadManager: ObservableObject {
             audioQuality: audioQuality,
             subtitleLanguage: effectiveSubtitleLanguage,
             embedSubtitles: embedSubtitles,
-            cookieBrowser: cookieBrowser
+            cookieBrowser: cookieBrowser,
+            cookiesFile: fileToPass
         )
 
         let exitCode = await runProcess(
@@ -279,7 +356,8 @@ class DownloadManager: ObservableObject {
 
         // "Empty success": yt-dlp can exit 0 without writing any file. Seen on
         // Twitter for text-only tweets, quote-RTs whose referenced media yt-dlp
-        // can't reach, and sensitive content the current cookies don't unlock.
+        // can't reach, and sensitive content the current cookies don't unlock. Use cookies.txt export for X NSFW videos.
+        // Use a cookies.txt export (Settings) for X adult/NSFW media that browser cookies can't reach.
         // gallery-dl often picks these up, so treat it the same as a non-zero
         // exit and let the fallback below try.
         let mediaCaptured = item.outputPath != nil
@@ -367,7 +445,7 @@ class DownloadManager: ObservableObject {
         // don't waste time re-running obvious network/auth failures.
         let isEmptySuccess: Bool = {
             guard case .failed(let msg) = item.status else { return false }
-            return msg.contains("found no media") || msg.contains("No media found")
+            return msg.contains("found no media") || msg.contains("No media found") || msg.contains("cookies.txt")
         }()
         if isEmptySuccess && !item.autoRetryAttempted {
             item.autoRetryAttempted = true
@@ -405,11 +483,13 @@ class DownloadManager: ObservableObject {
         item.title      = nil
         item.lastToolWarning = nil
 
+        let fileToPass = beginAccessingCookiesFile()
         await GalleryDlService.run(
             item: item,
             executablePath: executablePath,
             outputDirectory: outputDirectory,
             cookieBrowser: cookieBrowser,
+            cookiesFile: fileToPass,
             register:   { [weak self] p in self?.activeProcesses[item.id] = p },
             unregister: { [weak self]   in self?.activeProcesses.removeValue(forKey: item.id) }
         )
