@@ -42,8 +42,6 @@ struct SiteProfile {
     /// gallery-dl's per-extractor defaults are fine.
     let galleryDlArgs: [String]
 
-    var usesGalleryDlFallback: Bool { fallbacks.contains(.galleryDl) }
-    var usesFxTwitterFallback: Bool { fallbacks.contains(.fxTwitter) }
 }
 
 /// The single registry of known sites. Order matters: specific profiles first,

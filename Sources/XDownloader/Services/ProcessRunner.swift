@@ -69,3 +69,47 @@ func runProcess(
 
     return process.terminationStatus
 }
+
+/// Minimal variant: no DownloadItem coupling, no register/unregister.
+/// Used by one-shot tool invocations (e.g. Homebrew install) that only need
+/// streamed output and an exit code.
+@discardableResult
+func runRawProcess(
+    executablePath: String,
+    arguments: [String],
+    environment: [String: String],
+    onLine: @escaping @MainActor (String) -> Void
+) async -> Int32 {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: executablePath)
+    process.arguments = arguments
+    process.environment = environment
+
+    let stdout = Pipe()
+    let stderr = Pipe()
+    process.standardOutput = stdout
+    process.standardError = stderr
+
+    let handler: @Sendable (FileHandle) -> Void = { handle in
+        let data = handle.availableData
+        guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
+        Task { @MainActor in
+            for line in text.components(separatedBy: .newlines) {
+                let t = line.trimmingCharacters(in: .whitespaces)
+                if !t.isEmpty { onLine(t) }
+            }
+        }
+    }
+    stdout.fileHandleForReading.readabilityHandler = { @Sendable h in handler(h) }
+    stderr.fileHandleForReading.readabilityHandler = { @Sendable h in handler(h) }
+
+    do { try process.run() } catch { return -1 }
+
+    await withCheckedContinuation { continuation in
+        process.terminationHandler = { _ in continuation.resume() }
+    }
+
+    stdout.fileHandleForReading.readabilityHandler = nil
+    stderr.fileHandleForReading.readabilityHandler = nil
+    return process.terminationStatus
+}

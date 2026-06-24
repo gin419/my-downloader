@@ -83,49 +83,19 @@ enum RequirementsService {
         onLine: @escaping @MainActor (String) -> Void
     ) async -> Int32 {
         guard let brew = brewPath else { return -1 }
-
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: brew)
-        process.arguments = ["install"] + tools.map(\.brewPackage)
-
         var env = ProcessInfo.processInfo.environment
         env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
         env["HOMEBREW_NO_AUTO_UPDATE"] = "1"
-        process.environment = env
-
-        let stdout = Pipe()
-        let stderr = Pipe()
-        process.standardOutput = stdout
-        process.standardError = stderr
-
-        let forward: @Sendable (FileHandle) -> Void = { handle in
-            let data = handle.availableData
-            guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
-            Task { @MainActor in
-                for raw in text.components(separatedBy: .newlines) {
-                    let line = raw
-                        // Strip ANSI colour codes
-                        .replacingOccurrences(of: "\\u{1B}\\[[0-9;]*[A-Za-z]",
-                                              with: "",
-                                              options: .regularExpression)
-                        .trimmingCharacters(in: .whitespaces)
-                    if !line.isEmpty { onLine(line) }
-                }
+        return await runRawProcess(
+            executablePath: brew,
+            arguments: ["install"] + tools.map(\.brewPackage),
+            environment: env,
+            onLine: { line in
+                // Strip ANSI colour codes that brew emits
+                let stripped = line.replacingOccurrences(
+                    of: "\\u{1B}\\[[0-9;]*[A-Za-z]", with: "", options: .regularExpression)
+                if !stripped.isEmpty { onLine(stripped) }
             }
-        }
-
-        stdout.fileHandleForReading.readabilityHandler = { @Sendable h in forward(h) }
-        stderr.fileHandleForReading.readabilityHandler = { @Sendable h in forward(h) }
-
-        do { try process.run() } catch { return -1 }
-
-        await withCheckedContinuation { continuation in
-            process.terminationHandler = { _ in continuation.resume() }
-        }
-
-        stdout.fileHandleForReading.readabilityHandler = nil
-        stderr.fileHandleForReading.readabilityHandler = nil
-
-        return process.terminationStatus
+        )
     }
 }
