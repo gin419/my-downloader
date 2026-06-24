@@ -13,6 +13,7 @@ class DownloadManager: ObservableObject {
     @Published var cookiesFilePath: String? = nil   // display / last resolved path
     private var cookiesFileBookmarkData: Data?       // security-scoped bookmark for sandboxed file access
     private var _bookmarkForDeinit: Data?            // non-isolated copy for deinit cleanup (avoids actor isolation in deinit)
+    private var activeCookieScopes: [UUID: URL] = [:] // holds scoped URL per item while its child process (yt-dlp/gallery) runs
     @Published var maxConcurrent: Int = 2
     @Published var showDownloadDate: Bool = false
     @Published var youtubeFormat: YouTubeFormat = .videoAndAudio
@@ -212,12 +213,15 @@ class DownloadManager: ObservableObject {
     // MARK: - Cookies file (security-scoped bookmark for sandbox)
     /// Starts (or restarts) security-scoped access for the stored bookmark and returns the usable path for --cookies.
     /// Must be called before passing the path to yt-dlp / gallery-dl.
-    func beginAccessingCookiesFile() -> String? {
+    func beginAccessingCookiesFile(for itemID: UUID? = nil) -> String? {
         guard let data = cookiesFileBookmarkData else { return cookiesFilePath }
         var isStale = false
         guard let url = try? URL(resolvingBookmarkData: data, options: .withSecurityScope, relativeTo: nil, bookmarkDataIsStale: &isStale) else { return nil }
         if url.startAccessingSecurityScopedResource() {
             cookiesFilePath = url.path   // update display to current location
+            if let id = itemID {
+                activeCookieScopes[id] = url
+            }
             return url.path
         }
         return nil
@@ -243,6 +247,8 @@ class DownloadManager: ObservableObject {
 
     func clearCookiesFile() {
         stopAccessingCookiesFile()
+        activeCookieScopes.values.forEach { $0.stopAccessingSecurityScopedResource() }
+        activeCookieScopes.removeAll()
         cookiesFileBookmarkData = nil
         _bookmarkForDeinit = nil
         cookiesFilePath = nil
@@ -256,6 +262,12 @@ class DownloadManager: ObservableObject {
             url.stopAccessingSecurityScopedResource()
         }
         _bookmarkForDeinit = nil
+    }
+
+    func endCookiesScope(for itemID: UUID) {
+        if let url = activeCookieScopes.removeValue(forKey: itemID) {
+            url.stopAccessingSecurityScopedResource()
+        }
     }
 
     // MARK: - Settings
@@ -328,7 +340,7 @@ class DownloadManager: ObservableObject {
         // drop subtitles on the retry so the video itself can download.
         let effectiveSubtitleLanguage: SubtitleLanguage = item.subtitlesDisabled ? .none : subtitleLanguage
 
-        let fileToPass = beginAccessingCookiesFile()
+        let fileToPass = beginAccessingCookiesFile(for: item.id)
         let args = YtDlpService.buildArguments(
             for: item,
             outputDirectory: outputDirectory,
@@ -346,7 +358,10 @@ class DownloadManager: ObservableObject {
             arguments: args,
             item: item,
             register:   { [weak self] p in self?.activeProcesses[item.id] = p },
-            unregister: { [weak self]   in self?.activeProcesses.removeValue(forKey: item.id) },
+            unregister: { [weak self]   in 
+                self?.activeProcesses.removeValue(forKey: item.id)
+                self?.endCookiesScope(for: item.id)
+            },
             lineParser: { [weak self] line, item in
                 YtDlpService.parseLine(line, item: item) {
                     self?.activeProcesses[item.id]?.terminate()
@@ -483,7 +498,7 @@ class DownloadManager: ObservableObject {
         item.title      = nil
         item.lastToolWarning = nil
 
-        let fileToPass = beginAccessingCookiesFile()
+        let fileToPass = beginAccessingCookiesFile(for: item.id)
         await GalleryDlService.run(
             item: item,
             executablePath: executablePath,
@@ -491,7 +506,10 @@ class DownloadManager: ObservableObject {
             cookieBrowser: cookieBrowser,
             cookiesFile: fileToPass,
             register:   { [weak self] p in self?.activeProcesses[item.id] = p },
-            unregister: { [weak self]   in self?.activeProcesses.removeValue(forKey: item.id) }
+            unregister: { [weak self]   in 
+                self?.activeProcesses.removeValue(forKey: item.id)
+                self?.endCookiesScope(for: item.id)
+            }
         )
     }
 
