@@ -13,7 +13,7 @@ class DownloadManager: ObservableObject {
     @Published var cookiesFilePath: String? = nil   // display / last resolved path
     private var cookiesFileBookmarkData: Data?       // security-scoped bookmark for sandboxed file access
     private var _bookmarkForDeinit: Data?            // non-isolated copy for deinit cleanup (avoids actor isolation in deinit)
-    private var activeCookieScopes: [UUID: URL] = [:] // holds scoped URL per item while its child process (yt-dlp/gallery) runs
+    private let cookieScope = CookieFileScope()      // extracted scope lifetime manager (withScope + defer guarantees end)
     @Published var maxConcurrent: Int = 2
     @Published var showDownloadDate: Bool = false
     @Published var youtubeFormat: YouTubeFormat = .videoAndAudio
@@ -213,15 +213,12 @@ class DownloadManager: ObservableObject {
     // MARK: - Cookies file (security-scoped bookmark for sandbox)
     /// Starts (or restarts) security-scoped access for the stored bookmark and returns the usable path for --cookies.
     /// Must be called before passing the path to yt-dlp / gallery-dl.
-    func beginAccessingCookiesFile(for itemID: UUID? = nil) -> String? {
+    func beginAccessingCookiesFile() -> String? {
         guard let data = cookiesFileBookmarkData else { return cookiesFilePath }
         var isStale = false
         guard let url = try? URL(resolvingBookmarkData: data, options: .withSecurityScope, relativeTo: nil, bookmarkDataIsStale: &isStale) else { return nil }
         if url.startAccessingSecurityScopedResource() {
             cookiesFilePath = url.path   // update display to current location
-            if let id = itemID {
-                activeCookieScopes[id] = url
-            }
             return url.path
         }
         return nil
@@ -247,8 +244,6 @@ class DownloadManager: ObservableObject {
 
     func clearCookiesFile() {
         stopAccessingCookiesFile()
-        activeCookieScopes.values.forEach { $0.stopAccessingSecurityScopedResource() }
-        activeCookieScopes.removeAll()
         cookiesFileBookmarkData = nil
         _bookmarkForDeinit = nil
         cookiesFilePath = nil
@@ -262,12 +257,6 @@ class DownloadManager: ObservableObject {
             url.stopAccessingSecurityScopedResource()
         }
         _bookmarkForDeinit = nil
-    }
-
-    func endCookiesScope(for itemID: UUID) {
-        if let url = activeCookieScopes.removeValue(forKey: itemID) {
-            url.stopAccessingSecurityScopedResource()
-        }
     }
 
     // MARK: - Settings
@@ -340,34 +329,34 @@ class DownloadManager: ObservableObject {
         // drop subtitles on the retry so the video itself can download.
         let effectiveSubtitleLanguage: SubtitleLanguage = item.subtitlesDisabled ? .none : subtitleLanguage
 
-        let fileToPass = beginAccessingCookiesFile(for: item.id)
-        let args = YtDlpService.buildArguments(
-            for: item,
-            outputDirectory: outputDirectory,
-            format: youtubeFormat,
-            videoQuality: videoQuality,
-            audioQuality: audioQuality,
-            subtitleLanguage: effectiveSubtitleLanguage,
-            embedSubtitles: embedSubtitles,
-            cookieBrowser: cookieBrowser,
-            cookiesFile: fileToPass
-        )
+        let fileToPass = beginAccessingCookiesFile()
+        var ytExitCode: Int32 = 0
+        await cookieScope.withScope(for: item.id, file: fileToPass) {
+            let args = YtDlpService.buildArguments(
+                for: item,
+                outputDirectory: outputDirectory,
+                format: youtubeFormat,
+                videoQuality: videoQuality,
+                audioQuality: audioQuality,
+                subtitleLanguage: effectiveSubtitleLanguage,
+                embedSubtitles: embedSubtitles,
+                cookieBrowser: cookieBrowser,
+                cookiesFile: fileToPass
+            )
 
-        let exitCode = await runProcess(
-            executablePath: ytdlpPath,
-            arguments: args,
-            item: item,
-            register:   { [weak self] p in self?.activeProcesses[item.id] = p },
-            unregister: { [weak self]   in 
-                self?.activeProcesses.removeValue(forKey: item.id)
-                self?.endCookiesScope(for: item.id)
-            },
-            lineParser: { [weak self] line, item in
-                YtDlpService.parseLine(line, item: item) {
-                    self?.activeProcesses[item.id]?.terminate()
+            ytExitCode = await runProcess(
+                executablePath: ytdlpPath,
+                arguments: args,
+                item: item,
+                register:   { [weak self] p in self?.activeProcesses[item.id] = p },
+                unregister: { [weak self]   in self?.activeProcesses.removeValue(forKey: item.id) },
+                lineParser: { [weak self] line, item in
+                    YtDlpService.parseLine(line, item: item) {
+                        self?.activeProcesses[item.id]?.terminate()
+                    }
                 }
-            }
-        )
+            )
+        }
 
         // "Empty success": yt-dlp can exit 0 without writing any file. Seen on
         // Twitter for text-only tweets, quote-RTs whose referenced media yt-dlp
@@ -383,7 +372,7 @@ class DownloadManager: ObservableObject {
         // subtitle case so other non-zero exits (e.g. a Twitter multi-video tweet
         // that partially downloaded) still fall through to the fallback below.
         let subtitleOnlyFailure = item.subtitleDownloadFailed && !hasFatalError
-        if mediaCaptured && (exitCode == 0 || subtitleOnlyFailure) {
+        if mediaCaptured && (ytExitCode == 0 || subtitleOnlyFailure) {
             item.status   = .completed
             item.progress = 1.0
             item.speed    = nil
@@ -444,10 +433,10 @@ class DownloadManager: ObservableObject {
         if !ranFallback {
             if case .failed = item.status {
                 // already set by YtDlpService
-            } else if exitCode == 0 {
+            } else if ytExitCode == 0 {
                 item.status = .failed("yt-dlp reported success but found no media to download.")
             } else {
-                item.status = .failed("yt-dlp exited with code \(exitCode)")
+                item.status = .failed("yt-dlp exited with code \(ytExitCode)")
             }
         }
 
@@ -498,19 +487,18 @@ class DownloadManager: ObservableObject {
         item.title      = nil
         item.lastToolWarning = nil
 
-        let fileToPass = beginAccessingCookiesFile(for: item.id)
-        await GalleryDlService.run(
-            item: item,
-            executablePath: executablePath,
-            outputDirectory: outputDirectory,
-            cookieBrowser: cookieBrowser,
-            cookiesFile: fileToPass,
-            register:   { [weak self] p in self?.activeProcesses[item.id] = p },
-            unregister: { [weak self]   in 
-                self?.activeProcesses.removeValue(forKey: item.id)
-                self?.endCookiesScope(for: item.id)
-            }
-        )
+        let fileToPass = beginAccessingCookiesFile()
+        await cookieScope.withScope(for: item.id, file: fileToPass) {
+            await GalleryDlService.run(
+                item: item,
+                executablePath: executablePath,
+                outputDirectory: outputDirectory,
+                cookieBrowser: cookieBrowser,
+                cookiesFile: fileToPass,
+                register:   { [weak self] p in self?.activeProcesses[item.id] = p },
+                unregister: { [weak self]   in self?.activeProcesses.removeValue(forKey: item.id) }
+            )
+        }
     }
 
     /// Last-resort fallback: X's GraphQL APIs sometimes hide tweets from
