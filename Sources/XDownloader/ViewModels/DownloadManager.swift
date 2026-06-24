@@ -13,6 +13,7 @@ class DownloadManager: ObservableObject {
     @Published var cookiesFilePath: String? = nil   // display / last resolved path
     private var cookiesFileBookmarkData: Data?       // security-scoped bookmark for sandboxed file access
     private var _bookmarkForDeinit: Data?            // non-isolated copy for deinit cleanup (avoids actor isolation in deinit)
+    private var grantedCookiesURL: URL?              // the resolved bookmark URL on which startAccessing was successfully called (transfer this to scope for correct grant + paired stop)
     private let cookieScope = CookieFileScope()      // extracted scope lifetime manager (withScope + defer guarantees end)
     @Published var maxConcurrent: Int = 2
     @Published var showDownloadDate: Bool = false
@@ -218,6 +219,7 @@ class DownloadManager: ObservableObject {
         var isStale = false
         guard let url = try? URL(resolvingBookmarkData: data, options: .withSecurityScope, relativeTo: nil, bookmarkDataIsStale: &isStale) else { return nil }
         if url.startAccessingSecurityScopedResource() {
+            grantedCookiesURL = url   // keep the resolved bookmark URL that now holds the active grant
             cookiesFilePath = url.path   // update display to current location
             return url.path
         }
@@ -244,6 +246,10 @@ class DownloadManager: ObservableObject {
 
     func clearCookiesFile() {
         stopAccessingCookiesFile()
+        if let u = grantedCookiesURL {
+            u.stopAccessingSecurityScopedResource()
+            grantedCookiesURL = nil
+        }
         cookiesFileBookmarkData = nil
         _bookmarkForDeinit = nil
         cookiesFilePath = nil
@@ -293,6 +299,11 @@ class DownloadManager: ObservableObject {
         if let data = d.data(forKey: "cookiesFileBookmarkData") { 
             cookiesFileBookmarkData = data 
             _bookmarkForDeinit = data
+            // resolve and start early, capture the granted URL for scope transfer
+            var stale = false
+            if let u = try? URL(resolvingBookmarkData: data, options: .withSecurityScope, relativeTo: nil, bookmarkDataIsStale: &stale), u.startAccessingSecurityScopedResource() {
+                grantedCookiesURL = u
+            }
         }
         if let r = d.string(forKey: "youtubeFormat"),   let v = YouTubeFormat(rawValue: r)    { youtubeFormat = v }
         if let r = d.string(forKey: "videoQuality"),    let v = VideoQuality(rawValue: r)     { videoQuality = v }
@@ -331,7 +342,7 @@ class DownloadManager: ObservableObject {
 
         let fileToPass = beginAccessingCookiesFile()
         var ytExitCode: Int32 = 0
-        await cookieScope.withScope(for: item.id, file: fileToPass) {
+        await cookieScope.withScope(for: item.id, file: fileToPass, grantedURL: grantedCookiesURL) {
             let args = YtDlpService.buildArguments(
                 for: item,
                 outputDirectory: outputDirectory,
@@ -488,7 +499,7 @@ class DownloadManager: ObservableObject {
         item.lastToolWarning = nil
 
         let fileToPass = beginAccessingCookiesFile()
-        await cookieScope.withScope(for: item.id, file: fileToPass) {
+        await cookieScope.withScope(for: item.id, file: fileToPass, grantedURL: grantedCookiesURL) {
             await GalleryDlService.run(
                 item: item,
                 executablePath: executablePath,

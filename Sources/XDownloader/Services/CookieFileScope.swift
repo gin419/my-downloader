@@ -7,16 +7,22 @@ import Foundation
 final class CookieFileScope {
     private var scopes: [UUID: URL] = [:]
 
-    /// Begin scope for the given item and (bookmark-resolved) file path.
-    /// Returns the path to pass to --cookies, or nil.
-    func begin(for id: UUID, file: String?) -> String? {
-        guard let f = file, !f.isEmpty else { return nil }
-        let url = URL(fileURLWithPath: f)
-        if url.startAccessingSecurityScopedResource() {
-            scopes[id] = url
-            return f
+    /// Begin scope for the given item and file path. If a grantedURL (resolved from bookmarkData with active startAccessing)
+    /// is provided, use it instead of a plain file URL so the exact grant object is kept alive and stopped in pair.
+    /// Returns the path for --cookies.
+    func begin(for id: UUID, file: String?, grantedURL: URL? = nil) -> String? {
+        let url: URL
+        if let g = grantedURL {
+            url = g
+            _ = g.startAccessingSecurityScopedResource() // re-ensure while we hold ref
+        } else if let f = file, !f.isEmpty {
+            url = URL(fileURLWithPath: f)
+            if !url.startAccessingSecurityScopedResource() { return nil }
+        } else {
+            return nil
         }
-        return nil
+        scopes[id] = url
+        return file ?? url.path
     }
 
     func end(for id: UUID) {
@@ -25,10 +31,10 @@ final class CookieFileScope {
         }
     }
 
-    /// Run `body` while holding the scope for `id`. `end` is guaranteed via `defer`
-    /// even if body throws or returns early.
-    func withScope<T>(for id: UUID, file: String?, _ body: () async throws -> T) async rethrows -> T {
-        let _ = begin(for: id, file: file)
+    /// Run `body` while holding the scope for `id`. `end` is guaranteed via `defer`.
+    /// Pass grantedURL (the resolved bookmark one) when available to transfer the correct grant.
+    func withScope<T>(for id: UUID, file: String?, grantedURL: URL? = nil, _ body: () async throws -> T) async rethrows -> T {
+        let _ = begin(for: id, file: file, grantedURL: grantedURL)
         defer { end(for: id) }
         return try await body()
     }
