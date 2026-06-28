@@ -32,7 +32,7 @@ jobs:
         if: github.event_name == 'pull_request'
         run: |
           gitleaks detect \
-            --config security/layer1-rules.toml \
+            --config .github/gitleaks/layer1-rules.toml \
             --source . \
             --log-opts="origin/${{ github.base_ref }}...HEAD" \
             --redact \
@@ -42,7 +42,7 @@ jobs:
         if: github.event_name != 'pull_request'
         run: |
           gitleaks detect \
-            --config security/layer1-rules.toml \
+            --config .github/gitleaks/layer1-rules.toml \
             --source . \
             --redact \
             --verbose
@@ -71,7 +71,7 @@ jobs:
         if: github.event_name == 'pull_request'
         run: |
           gitleaks detect \
-            --config security/layer2-rules.toml \
+            --config .github/gitleaks/layer2-rules.toml \
             --source . \
             --log-opts="origin/${{ github.base_ref }}...HEAD" \
             --redact \
@@ -81,7 +81,7 @@ jobs:
         if: github.event_name != 'pull_request'
         run: |
           gitleaks detect \
-            --config security/layer2-rules.toml \
+            --config .github/gitleaks/layer2-rules.toml \
             --source . \
             --redact \
             --verbose

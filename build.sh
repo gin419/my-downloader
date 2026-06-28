@@ -2,7 +2,8 @@
 set -e
 
 APP_NAME="XDownloader"
-BUNDLE_NAME="$APP_NAME.app"
+BUILD_DIR="build"                     # keep the built bundle out of the repo root (gitignored)
+BUNDLE_NAME="$BUILD_DIR/$APP_NAME.app"
 CONFIG=${1:-release}   # debug | release (default: release)
 
 echo "🔨 Building $APP_NAME ($CONFIG)..."

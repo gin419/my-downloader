@@ -55,7 +55,7 @@ jobs:
       # ditto preserves macOS metadata better than plain zip
       - name: Archive app bundle
         run: |
-          ditto -c -k --keepParent XDownloader.app "${{ env.ASSET }}"
+          ditto -c -k --keepParent build/XDownloader.app "${{ env.ASSET }}"
           echo "Archive size: $(du -sh ${{ env.ASSET }} | cut -f1)"
 
       - name: Publish GitHub Release
