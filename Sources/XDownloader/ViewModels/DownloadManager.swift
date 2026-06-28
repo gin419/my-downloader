@@ -212,18 +212,18 @@ class DownloadManager: ObservableObject {
     }
 
     // MARK: - Cookies file (security-scoped bookmark for sandbox)
-    /// Starts (or restarts) security-scoped access for the stored bookmark and returns the usable path for --cookies.
-    /// Must be called before passing the path to yt-dlp / gallery-dl.
-    func beginAccessingCookiesFile() -> String? {
+    /// Resolves the security-scoped bookmark, stores the granted URL in `grantedCookiesURL`,
+    /// and returns the path for `--cookies`. Does NOT start access — `startAccessing` is deferred
+    /// to `CookieFileScope.begin` so the grant is held only for the child process's lifetime.
+    func resolveCookiesFilePath() -> String? {
         guard let data = cookiesFileBookmarkData else { return cookiesFilePath }
         var isStale = false
         guard let url = try? URL(resolvingBookmarkData: data, options: .withSecurityScope, relativeTo: nil, bookmarkDataIsStale: &isStale) else { return nil }
-        if url.startAccessingSecurityScopedResource() {
-            grantedCookiesURL = url   // keep the resolved bookmark URL that now holds the active grant
-            cookiesFilePath = url.path   // update display to current location
-            return url.path
-        }
-        return nil
+        // Resolve and keep the granted URL object for later start in withScope (transfer the exact bookmark grant).
+        // Do NOT startAccessing here — activation happens inside withScope for the child lifetime, paired with defer stop.
+        grantedCookiesURL = url
+        cookiesFilePath = url.path
+        return url.path
     }
 
     func setCookiesFile(from url: URL) {
@@ -234,11 +234,20 @@ class DownloadManager: ObservableObject {
             cookiesFileBookmarkData = data
             _bookmarkForDeinit = data
             cookiesFilePath = url.path
-            _ = beginAccessingCookiesFile()
+            _ = resolveCookiesFilePath()
             saveSettings()
         } catch {
-            // last resort plain path (no sandbox grant)
+            // Last resort: plain path with no sandbox grant. Clear any prior grant so a
+            // stale bookmark URL can't be routed to this new file (CookieFileScope.begin
+            // prefers grantedURL over the path, which would activate the OLD file's grant
+            // while --cookies points at the new one — an ungranted read under the sandbox).
+            stopAccessingCookiesFile()
+            if let u = grantedCookiesURL {
+                u.stopAccessingSecurityScopedResource()
+                grantedCookiesURL = nil
+            }
             cookiesFileBookmarkData = nil
+            _bookmarkForDeinit = nil
             cookiesFilePath = url.path
             saveSettings()
         }
@@ -299,9 +308,9 @@ class DownloadManager: ObservableObject {
         if let data = d.data(forKey: "cookiesFileBookmarkData") { 
             cookiesFileBookmarkData = data 
             _bookmarkForDeinit = data
-            // resolve and start early, capture the granted URL for scope transfer
+            // resolve (no start) to capture the granted URL; start will happen inside withScope for each use
             var stale = false
-            if let u = try? URL(resolvingBookmarkData: data, options: .withSecurityScope, relativeTo: nil, bookmarkDataIsStale: &stale), u.startAccessingSecurityScopedResource() {
+            if let u = try? URL(resolvingBookmarkData: data, options: .withSecurityScope, relativeTo: nil, bookmarkDataIsStale: &stale) {
                 grantedCookiesURL = u
             }
         }
@@ -316,8 +325,8 @@ class DownloadManager: ObservableObject {
         saveHistoryEnabled = d.object(forKey: "saveHistoryEnabled") as? Bool ?? true
         let stored = d.integer(forKey: "maxConcurrent")
         if stored > 0 { maxConcurrent = stored }
-        // Start access early if we have a bookmark (best effort)
-        if cookiesFileBookmarkData != nil { _ = beginAccessingCookiesFile() }
+        // Pre-resolve the bookmark so grantedCookiesURL is ready (no access started here).
+        if cookiesFileBookmarkData != nil { _ = resolveCookiesFilePath() }
     }
 
     private func drainQueue() {
@@ -340,7 +349,7 @@ class DownloadManager: ObservableObject {
         // drop subtitles on the retry so the video itself can download.
         let effectiveSubtitleLanguage: SubtitleLanguage = item.subtitlesDisabled ? .none : subtitleLanguage
 
-        let fileToPass = beginAccessingCookiesFile()
+        let fileToPass = resolveCookiesFilePath()
         var ytExitCode: Int32 = 0
         await cookieScope.withScope(for: item.id, file: fileToPass, grantedURL: grantedCookiesURL) {
             let args = YtDlpService.buildArguments(
@@ -498,7 +507,7 @@ class DownloadManager: ObservableObject {
         item.title      = nil
         item.lastToolWarning = nil
 
-        let fileToPass = beginAccessingCookiesFile()
+        let fileToPass = resolveCookiesFilePath()
         await cookieScope.withScope(for: item.id, file: fileToPass, grantedURL: grantedCookiesURL) {
             await GalleryDlService.run(
                 item: item,
