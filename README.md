@@ -13,7 +13,7 @@ clean SwiftUI front end.
 [![Latest release](https://img.shields.io/github/v/release/gin419/my-downloader?style=flat-square&color=000)](https://github.com/gin419/my-downloader/releases/latest)
 [![macOS 14+](https://img.shields.io/badge/macOS-14%2B-000?style=flat-square&logo=apple)](#requirements)
 [![Swift 5.9](https://img.shields.io/badge/Swift-5.9-F05138?style=flat-square&logo=swift&logoColor=white)](Package.swift)
-[![License: MIT](https://img.shields.io/badge/License-MIT-000?style=flat-square)](#license)
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-000?style=flat-square)](#license)
 
 ### [⬇ Download XDownloader](https://github.com/gin419/my-downloader/releases/latest) · [🛠 Build from source](#build-from-source) · [✨ Features](#features)
 
@@ -207,7 +207,13 @@ Resources/          Info.plist, AppIcon.icns
 
 ## License
 
-MIT. Do whatever you want — credit appreciated, not required.
+[GNU AGPL-3.0](LICENSE) © 2025–2026 gin419.
+
+XDownloader is **copyleft**: you're free to use, study, modify, and share it — but
+any distributed or network-deployed derivative **must also be released as open
+source under AGPL-3.0**. In other words, you may not repackage it into a
+closed-source product. Selling it is allowed *only if* you also provide the
+complete corresponding source under the same license.
 
 XDownloader is a thin SwiftUI layer over the work of the
 [`yt-dlp`](https://github.com/yt-dlp/yt-dlp) and
