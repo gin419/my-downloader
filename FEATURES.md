@@ -1,4 +1,4 @@
-# XDownloader v1.0 — Feature List
+# XDownloader — Feature List
 
 ## URL Input
 - **Paste URL** — type or paste any URL into the input field and press Enter or click Download
@@ -36,9 +36,18 @@
 - **Clear Done** — removes all completed items at once
 - **Animated transitions** — rows slide in and fade out
 
+## Download Control
+- **Stop** — cancel an in-progress download (the row can be resumed later)
+- **Pause / Resume** — pause a running download and resume it on demand
+
+## History & Deduplication
+- **Cross-session history** — completed downloads are recorded in a local SQLite store
+- **Duplicate detection** — re-adding a URL you already downloaded prompts before downloading it again
+
 ## Settings
 - **Download folder** — folder picker with "Open in Finder" shortcut (defaults to `~/Downloads/X-Videos`)
 - **Cookie browser** — pick Safari, Chrome, Firefox, or Edge (or None) for authenticated downloads
+- **Cookies file** — point at an exported `cookies.txt` for stubborn authenticated content (e.g. X sensitive/NSFW media); takes precedence over the cookie browser
 - **Download format** — Video+Audio / Single File / Audio Only
 - **Subtitle language & embed toggle**
 - **Max concurrent downloads** — stepper from 1–5
