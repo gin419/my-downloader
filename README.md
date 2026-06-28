@@ -217,5 +217,13 @@ complete corresponding source under the same license.
 
 XDownloader is a thin SwiftUI layer over the work of the
 [`yt-dlp`](https://github.com/yt-dlp/yt-dlp) and
-[`gallery-dl`](https://github.com/mikf/gallery-dl) teams. Please consider
-sponsoring them if this app saves you time.
+[`gallery-dl`](https://github.com/mikf/gallery-dl) teams — it would do nothing
+without them. If this app saves you time, please sponsor them:
+
+- **yt-dlp** — its maintainers each accept sponsorship via the
+  [Maintainers list](https://github.com/yt-dlp/yt-dlp/blob/master/Maintainers.md#maintainers)
+  (e.g. [coletdjnz](https://github.com/sponsors/coletdjnz),
+  [Grub4K](https://github.com/sponsors/Grub4K)).
+- **gallery-dl** — [Ko-fi](https://ko-fi.com/mikofaehrmann) or
+  [PayPal](https://www.paypal.me/mikefaehrmann) (author
+  [@mikf](https://github.com/mikf)).
