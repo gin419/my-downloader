@@ -10,6 +10,11 @@ class DownloadManager: ObservableObject {
     @Published var items: [DownloadItem] = []
     @Published var outputDirectory: URL
     @Published var cookieBrowser: CookieBrowser = .safari
+    @Published var cookiesFilePath: String? = nil   // display / last resolved path
+    private var cookiesFileBookmarkData: Data?       // security-scoped bookmark for sandboxed file access
+    private var _bookmarkForDeinit: Data?            // non-isolated copy for deinit cleanup (avoids actor isolation in deinit)
+    private var grantedCookiesURL: URL?              // the resolved bookmark URL on which startAccessing was successfully called (transfer this to scope for correct grant + paired stop)
+    private let cookieScope = CookieFileScope()      // extracted scope lifetime manager (withScope + defer guarantees end)
     @Published var maxConcurrent: Int = 2
     @Published var showDownloadDate: Bool = false
     @Published var youtubeFormat: YouTubeFormat = .videoAndAudio
@@ -58,6 +63,16 @@ class DownloadManager: ObservableObject {
         checkRequirements()
         refreshHistoryStats()
         drainQueue()
+    }
+
+    deinit {
+        // Use the non-isolated copy to avoid actor-isolated call in deinit
+        if let data = _bookmarkForDeinit {
+            var isStale = false
+            if let url = try? URL(resolvingBookmarkData: data, options: .withSecurityScope, relativeTo: nil, bookmarkDataIsStale: &isStale) {
+                url.stopAccessingSecurityScopedResource()
+            }
+        }
     }
 
     func checkRequirements() {
@@ -196,12 +211,81 @@ class DownloadManager: ObservableObject {
         NSWorkspace.shared.open(outputDirectory)
     }
 
+    // MARK: - Cookies file (security-scoped bookmark for sandbox)
+    /// Resolves the security-scoped bookmark, stores the granted URL in `grantedCookiesURL`,
+    /// and returns the path for `--cookies`. Does NOT start access — `startAccessing` is deferred
+    /// to `CookieFileScope.begin` so the grant is held only for the child process's lifetime.
+    func resolveCookiesFilePath() -> String? {
+        guard let data = cookiesFileBookmarkData else { return cookiesFilePath }
+        var isStale = false
+        guard let url = try? URL(resolvingBookmarkData: data, options: .withSecurityScope, relativeTo: nil, bookmarkDataIsStale: &isStale) else { return nil }
+        // Resolve and keep the granted URL object for later start in withScope (transfer the exact bookmark grant).
+        // Do NOT startAccessing here — activation happens inside withScope for the child lifetime, paired with defer stop.
+        grantedCookiesURL = url
+        cookiesFilePath = url.path
+        return url.path
+    }
+
+    func setCookiesFile(from url: URL) {
+        do {
+            let data = try url.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil)
+            // stop any previous
+            stopAccessingCookiesFile()
+            cookiesFileBookmarkData = data
+            _bookmarkForDeinit = data
+            cookiesFilePath = url.path
+            _ = resolveCookiesFilePath()
+            saveSettings()
+        } catch {
+            // Last resort: plain path with no sandbox grant. Clear any prior grant so a
+            // stale bookmark URL can't be routed to this new file (CookieFileScope.begin
+            // prefers grantedURL over the path, which would activate the OLD file's grant
+            // while --cookies points at the new one — an ungranted read under the sandbox).
+            stopAccessingCookiesFile()
+            if let u = grantedCookiesURL {
+                u.stopAccessingSecurityScopedResource()
+                grantedCookiesURL = nil
+            }
+            cookiesFileBookmarkData = nil
+            _bookmarkForDeinit = nil
+            cookiesFilePath = url.path
+            saveSettings()
+        }
+    }
+
+    func clearCookiesFile() {
+        stopAccessingCookiesFile()
+        if let u = grantedCookiesURL {
+            u.stopAccessingSecurityScopedResource()
+            grantedCookiesURL = nil
+        }
+        cookiesFileBookmarkData = nil
+        _bookmarkForDeinit = nil
+        cookiesFilePath = nil
+        saveSettings()
+    }
+
+    private func stopAccessingCookiesFile() {
+        guard let data = cookiesFileBookmarkData else { return }
+        var isStale = false
+        if let url = try? URL(resolvingBookmarkData: data, options: .withSecurityScope, relativeTo: nil, bookmarkDataIsStale: &isStale) {
+            url.stopAccessingSecurityScopedResource()
+        }
+        _bookmarkForDeinit = nil
+    }
+
     // MARK: - Settings
 
     func saveSettings() {
         let d = UserDefaults.standard
         d.set(outputDirectory.absoluteString, forKey: "outputDirectory")
         d.set(cookieBrowser.rawValue,         forKey: "cookieBrowser")
+        d.set(cookiesFilePath,                forKey: "cookiesFilePath")
+        if let bm = cookiesFileBookmarkData {
+            d.set(bm, forKey: "cookiesFileBookmarkData")
+        } else {
+            d.removeObject(forKey: "cookiesFileBookmarkData")
+        }
         d.set(showDownloadDate,               forKey: "showDownloadDate")
         d.set(youtubeFormat.rawValue,         forKey: "youtubeFormat")
         d.set(videoQuality.rawValue,          forKey: "videoQuality")
@@ -220,6 +304,16 @@ class DownloadManager: ObservableObject {
         let d = UserDefaults.standard
         if let s = d.string(forKey: "outputDirectory"), let u = URL(string: s) { outputDirectory = u }
         if let r = d.string(forKey: "cookieBrowser"),   let v = CookieBrowser(rawValue: r)    { cookieBrowser = v }
+        if let p = d.string(forKey: "cookiesFilePath"), !p.isEmpty { cookiesFilePath = p } else { cookiesFilePath = nil }
+        if let data = d.data(forKey: "cookiesFileBookmarkData") { 
+            cookiesFileBookmarkData = data 
+            _bookmarkForDeinit = data
+            // resolve (no start) to capture the granted URL; start will happen inside withScope for each use
+            var stale = false
+            if let u = try? URL(resolvingBookmarkData: data, options: .withSecurityScope, relativeTo: nil, bookmarkDataIsStale: &stale) {
+                grantedCookiesURL = u
+            }
+        }
         if let r = d.string(forKey: "youtubeFormat"),   let v = YouTubeFormat(rawValue: r)    { youtubeFormat = v }
         if let r = d.string(forKey: "videoQuality"),    let v = VideoQuality(rawValue: r)     { videoQuality = v }
         if let r = d.string(forKey: "audioQuality"),    let v = AudioQuality(rawValue: r)     { audioQuality = v }
@@ -231,6 +325,8 @@ class DownloadManager: ObservableObject {
         saveHistoryEnabled = d.object(forKey: "saveHistoryEnabled") as? Bool ?? true
         let stored = d.integer(forKey: "maxConcurrent")
         if stored > 0 { maxConcurrent = stored }
+        // Pre-resolve the bookmark so grantedCookiesURL is ready (no access started here).
+        if cookiesFileBookmarkData != nil { _ = resolveCookiesFilePath() }
     }
 
     private func drainQueue() {
@@ -253,33 +349,39 @@ class DownloadManager: ObservableObject {
         // drop subtitles on the retry so the video itself can download.
         let effectiveSubtitleLanguage: SubtitleLanguage = item.subtitlesDisabled ? .none : subtitleLanguage
 
-        let args = YtDlpService.buildArguments(
-            for: item,
-            outputDirectory: outputDirectory,
-            format: youtubeFormat,
-            videoQuality: videoQuality,
-            audioQuality: audioQuality,
-            subtitleLanguage: effectiveSubtitleLanguage,
-            embedSubtitles: embedSubtitles,
-            cookieBrowser: cookieBrowser
-        )
+        let fileToPass = resolveCookiesFilePath()
+        var ytExitCode: Int32 = 0
+        await cookieScope.withScope(for: item.id, file: fileToPass, grantedURL: grantedCookiesURL) {
+            let args = YtDlpService.buildArguments(
+                for: item,
+                outputDirectory: outputDirectory,
+                format: youtubeFormat,
+                videoQuality: videoQuality,
+                audioQuality: audioQuality,
+                subtitleLanguage: effectiveSubtitleLanguage,
+                embedSubtitles: embedSubtitles,
+                cookieBrowser: cookieBrowser,
+                cookiesFile: fileToPass
+            )
 
-        let exitCode = await runProcess(
-            executablePath: ytdlpPath,
-            arguments: args,
-            item: item,
-            register:   { [weak self] p in self?.activeProcesses[item.id] = p },
-            unregister: { [weak self]   in self?.activeProcesses.removeValue(forKey: item.id) },
-            lineParser: { [weak self] line, item in
-                YtDlpService.parseLine(line, item: item) {
-                    self?.activeProcesses[item.id]?.terminate()
+            ytExitCode = await runProcess(
+                executablePath: ytdlpPath,
+                arguments: args,
+                item: item,
+                register:   { [weak self] p in self?.activeProcesses[item.id] = p },
+                unregister: { [weak self]   in self?.activeProcesses.removeValue(forKey: item.id) },
+                lineParser: { [weak self] line, item in
+                    YtDlpService.parseLine(line, item: item) {
+                        self?.activeProcesses[item.id]?.terminate()
+                    }
                 }
-            }
-        )
+            )
+        }
 
         // "Empty success": yt-dlp can exit 0 without writing any file. Seen on
         // Twitter for text-only tweets, quote-RTs whose referenced media yt-dlp
-        // can't reach, and sensitive content the current cookies don't unlock.
+        // can't reach, and sensitive content the current cookies don't unlock. Use cookies.txt export for X NSFW videos.
+        // Use a cookies.txt export (Settings) for X adult/NSFW media that browser cookies can't reach.
         // gallery-dl often picks these up, so treat it the same as a non-zero
         // exit and let the fallback below try.
         let mediaCaptured = item.outputPath != nil
@@ -290,7 +392,7 @@ class DownloadManager: ObservableObject {
         // subtitle case so other non-zero exits (e.g. a Twitter multi-video tweet
         // that partially downloaded) still fall through to the fallback below.
         let subtitleOnlyFailure = item.subtitleDownloadFailed && !hasFatalError
-        if mediaCaptured && (exitCode == 0 || subtitleOnlyFailure) {
+        if mediaCaptured && (ytExitCode == 0 || subtitleOnlyFailure) {
             item.status   = .completed
             item.progress = 1.0
             item.speed    = nil
@@ -351,10 +453,10 @@ class DownloadManager: ObservableObject {
         if !ranFallback {
             if case .failed = item.status {
                 // already set by YtDlpService
-            } else if exitCode == 0 {
+            } else if ytExitCode == 0 {
                 item.status = .failed("yt-dlp reported success but found no media to download.")
             } else {
-                item.status = .failed("yt-dlp exited with code \(exitCode)")
+                item.status = .failed("yt-dlp exited with code \(ytExitCode)")
             }
         }
 
@@ -367,7 +469,7 @@ class DownloadManager: ObservableObject {
         // don't waste time re-running obvious network/auth failures.
         let isEmptySuccess: Bool = {
             guard case .failed(let msg) = item.status else { return false }
-            return msg.contains("found no media") || msg.contains("No media found")
+            return msg.contains("found no media") || msg.contains("No media found") || msg.contains("cookies.txt")
         }()
         if isEmptySuccess && !item.autoRetryAttempted {
             item.autoRetryAttempted = true
@@ -405,14 +507,18 @@ class DownloadManager: ObservableObject {
         item.title      = nil
         item.lastToolWarning = nil
 
-        await GalleryDlService.run(
-            item: item,
-            executablePath: executablePath,
-            outputDirectory: outputDirectory,
-            cookieBrowser: cookieBrowser,
-            register:   { [weak self] p in self?.activeProcesses[item.id] = p },
-            unregister: { [weak self]   in self?.activeProcesses.removeValue(forKey: item.id) }
-        )
+        let fileToPass = resolveCookiesFilePath()
+        await cookieScope.withScope(for: item.id, file: fileToPass, grantedURL: grantedCookiesURL) {
+            await GalleryDlService.run(
+                item: item,
+                executablePath: executablePath,
+                outputDirectory: outputDirectory,
+                cookieBrowser: cookieBrowser,
+                cookiesFile: fileToPass,
+                register:   { [weak self] p in self?.activeProcesses[item.id] = p },
+                unregister: { [weak self]   in self?.activeProcesses.removeValue(forKey: item.id) }
+            )
+        }
     }
 
     /// Last-resort fallback: X's GraphQL APIs sometimes hide tweets from

@@ -15,7 +15,7 @@ clean SwiftUI front end.
 [![Swift 5.9](https://img.shields.io/badge/Swift-5.9-F05138?style=flat-square&logo=swift&logoColor=white)](Package.swift)
 [![License: MIT](https://img.shields.io/badge/License-MIT-000?style=flat-square)](#license)
 
-### [⬇ Download XDownloader v1.3.0](https://github.com/gin419/my-downloader/releases/latest) · [🛠 Build from source](#build-from-source) · [✨ Features](#features)
+### [⬇ Download XDownloader](https://github.com/gin419/my-downloader/releases/latest) · [🛠 Build from source](#build-from-source) · [✨ Features](#features)
 
 </div>
 
@@ -78,7 +78,7 @@ brew install yt-dlp gallery-dl ffmpeg
 
 # 2. Grab the latest release
 #    → https://github.com/gin419/my-downloader/releases/latest
-#    Unzip XDownloader-v1.3.0.zip and drag XDownloader.app to /Applications
+#    Unzip the downloaded XDownloader-*.zip and drag XDownloader.app to /Applications
 
 # 3. Launch, paste a URL, press Enter.
 ```
@@ -176,7 +176,6 @@ See [FEATURES.md](FEATURES.md) for the canonical list.
 
 ### Near-term
 - macOS notification when a download completes
-- Pause / cancel an in-progress download
 - Batch input — paste many URLs at once
 - Menu bar icon with live download count
 

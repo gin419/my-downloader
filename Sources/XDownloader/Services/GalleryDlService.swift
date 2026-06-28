@@ -10,12 +10,13 @@ enum GalleryDlService {
         executablePath: String,
         outputDirectory: URL,
         cookieBrowser: CookieBrowser,
+        cookiesFile: String? = nil,
         register: @escaping (Process) -> Void,
         unregister: @escaping () -> Void
     ) async {
         let beforeFiles = Set((try? FileManager.default.contentsOfDirectory(atPath: outputDirectory.path)) ?? [])
 
-        var args = cookieArgs(cookieBrowser)
+        var args = cookieArgs(cookieBrowser, cookiesFile: cookiesFile)
         args += [
             "--dest", outputDirectory.path,
             "-D", ".",
@@ -72,7 +73,7 @@ enum GalleryDlService {
             if let warning = item.lastToolWarning {
                 item.status = .failed("No media found — \(warning)")
             } else {
-                item.status = .failed("No media found — the tweet may be deleted, or try a different cookie browser in Settings.")
+                item.status = .failed("No media found — the tweet may be deleted, or export cookies.txt in Settings (recommended for X sensitive/NSFW content).")
             }
             return
         }
@@ -202,7 +203,7 @@ enum GalleryDlService {
         return stem
     }
 
-    private static func cookieArgs(_ browser: CookieBrowser) -> [String] {
-        browser != .none ? ["--cookies-from-browser", browser.rawValue] : []
+    private static func cookieArgs(_ browser: CookieBrowser, cookiesFile: String? = nil) -> [String] {
+        return CookieArgs.make(browser: browser, file: cookiesFile)
     }
 }

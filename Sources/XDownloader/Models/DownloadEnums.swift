@@ -118,3 +118,14 @@ enum CookieBrowser: String, CaseIterable, Identifiable {
         }
     }
 }
+
+/// Shared pure helper to eliminate duplication between YtDlpService and GalleryDlService.
+/// File path always takes precedence (for sensitive/NSFW X content workaround).
+enum CookieArgs {
+    static func make(browser: CookieBrowser, file: String?) -> [String] {
+        if let f = file, !f.isEmpty {
+            return ["--cookies", f]
+        }
+        return browser != .none ? ["--cookies-from-browser", browser.rawValue] : []
+    }
+}

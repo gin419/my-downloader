@@ -54,6 +54,32 @@ struct SettingsView: View {
                 Text("yt-dlp will use cookies from the selected browser to access your X.com session. Make sure you're logged in to X.com in that browser.")
                     .font(.caption)
                     .foregroundColor(.secondary)
+
+                HStack {
+                    if let path = manager.cookiesFilePath, !path.isEmpty {
+                        Text(URL(fileURLWithPath: path).lastPathComponent)
+                            .font(.caption)
+                            .lineLimit(1)
+                        Button("Clear") {
+                            manager.clearCookiesFile()
+                        }
+                    } else {
+                        Button("Choose cookies.txt...") {
+                            let panel = NSOpenPanel()
+                            panel.allowedContentTypes = [.text, .plainText]
+                            panel.canChooseFiles = true
+                            panel.canChooseDirectories = false
+                            panel.prompt = "Choose"
+                            if panel.runModal() == .OK, let url = panel.url {
+                                manager.setCookiesFile(from: url)
+                            }
+                        }
+                    }
+                }
+
+                Text("For X sensitive/NSFW (adult) videos that --cookies-from-browser cannot unlock, export a Netscape-format cookies.txt from your browser (use an extension like 'Get cookies.txt LOCALLY' while logged into x.com) and select the file here. The file path takes precedence over browser cookies.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
             }
 
             Section("Download Format") {
@@ -187,6 +213,7 @@ struct SettingsView: View {
         .formStyle(.grouped)
         .frame(width: 440)
         .onChange(of: manager.cookieBrowser)      { manager.saveSettings() }
+        .onChange(of: manager.cookiesFilePath)    { manager.saveSettings() }
         .onChange(of: manager.maxConcurrent)      { manager.saveSettings() }
         .onChange(of: manager.youtubeFormat)      { manager.saveSettings() }
         .onChange(of: manager.videoQuality)       { manager.saveSettings() }

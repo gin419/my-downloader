@@ -1,6 +1,6 @@
 # XDownloader — Roadmap
 
-## v1.0 — Shipped
+## Shipped (current: v1.4.2)
 
 All core features are live. See [FEATURES.md](FEATURES.md) for the full list.
 

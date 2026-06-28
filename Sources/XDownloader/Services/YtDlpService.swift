@@ -12,7 +12,8 @@ enum YtDlpService {
         audioQuality: AudioQuality,
         subtitleLanguage: SubtitleLanguage,
         embedSubtitles: Bool,
-        cookieBrowser: CookieBrowser
+        cookieBrowser: CookieBrowser,
+        cookiesFile: String? = nil
     ) -> [String] {
         // %(playlist_index& [%(playlist_index)02d]|)s expands to " [01]" etc. only when
         // a tweet contains multiple videos (yt-dlp treats them as a playlist). For
@@ -22,10 +23,7 @@ enum YtDlpService {
         let profile = SiteRegistry.profile(for: item.url)
         let outputTemplate = outputDirectory.path + "/%(uploader)s - %(title)s\(profile.outputTemplateSuffix).%(ext)s"
         var args: [String] = []
-
-        if cookieBrowser != .none {
-            args += ["--cookies-from-browser", cookieBrowser.rawValue]
-        }
+        args += CookieArgs.make(browser: cookieBrowser, file: cookiesFile)
 
         let hf = videoQuality.heightFilter ?? ""   // e.g. "[height<=1080]" or ""
 
