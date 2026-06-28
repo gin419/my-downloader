@@ -20,9 +20,5 @@ DerivedData/
 # App bundle (built artifact)
 XDownloader.app/
 
-# Icon generation scripts (dev-only)
-make_icon.py
-make_icon.swift
-
 # Claude Code
 .claude/
