@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="Resources/AppIcon.png" width="128" height="128" alt="XDownloader app icon" />
+<img src="Resources/AppIcon.iconset/icon_256x256.png" width="128" height="128" alt="XDownloader app icon" />
 
 # XDownloader
 
@@ -165,7 +165,7 @@ After `./build.sh`, drag the resulting `XDownloader.app` to `/Applications/`.
 
 </details>
 
-See [FEATURES.md](FEATURES.md) for the canonical list.
+See [FEATURES.md](docs/FEATURES.md) for the canonical list.
 
 ---
 
@@ -187,7 +187,7 @@ See [FEATURES.md](FEATURES.md) for the canonical list.
 
 </details>
 
-See [ROADMAP.md](ROADMAP.md) for the source of truth.
+See [ROADMAP.md](docs/ROADMAP.md) for the source of truth.
 
 ---
 

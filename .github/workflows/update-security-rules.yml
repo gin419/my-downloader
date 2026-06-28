@@ -24,18 +24,18 @@ jobs:
         run: |
           curl -sSL \
             "https://raw.githubusercontent.com/gitleaks/gitleaks/master/config/gitleaks.toml" \
-            -o security/layer2-rules.toml
+            -o .github/gitleaks/layer2-rules.toml
 
       - name: Check for changes
         id: diff
         run: |
-          if git diff --quiet security/layer2-rules.toml; then
+          if git diff --quiet .github/gitleaks/layer2-rules.toml; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
             echo "No changes — rules are already up to date."
           else
             echo "changed=true" >> "$GITHUB_OUTPUT"
-            ADDED=$(git diff --shortstat security/layer2-rules.toml | grep -oE '[0-9]+ insertion' || echo "0 insertion")
-            REMOVED=$(git diff --shortstat security/layer2-rules.toml | grep -oE '[0-9]+ deletion' || echo "0 deletion")
+            ADDED=$(git diff --shortstat .github/gitleaks/layer2-rules.toml | grep -oE '[0-9]+ insertion' || echo "0 insertion")
+            REMOVED=$(git diff --shortstat .github/gitleaks/layer2-rules.toml | grep -oE '[0-9]+ deletion' || echo "0 deletion")
             echo "Rules updated: +${ADDED}, -${REMOVED}"
           fi
 
@@ -44,6 +44,6 @@ jobs:
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add security/layer2-rules.toml
+          git add .github/gitleaks/layer2-rules.toml
           git commit -m "chore: update layer 2 security rules [skip ci]"
           git push

@@ -122,7 +122,7 @@ enum FxTwitterService {
 
     /// Keep filenames in step with what gallery-dl produces for the same
     /// tweet: path separators become "_", newlines collapse to spaces.
-    private static func sanitize(_ s: String) -> String {
+    static func sanitize(_ s: String) -> String {
         s.replacingOccurrences(of: "/", with: "_")
             .replacingOccurrences(of: "\n", with: " ")
             .replacingOccurrences(of: "\r", with: " ")
