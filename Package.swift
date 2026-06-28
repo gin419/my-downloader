@@ -9,6 +9,12 @@ let package = Package(
             name: "XDownloader",
             path: "Sources/XDownloader",
             linkerSettings: [.linkedLibrary("sqlite3")]
+        ),
+        .testTarget(
+            name: "XDownloaderTests",
+            dependencies: ["XDownloader"],
+            path: "Tests/XDownloaderTests",
+            linkerSettings: [.linkedLibrary("sqlite3")]
         )
     ]
 )

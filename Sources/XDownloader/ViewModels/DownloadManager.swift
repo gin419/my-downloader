@@ -90,7 +90,7 @@ class DownloadManager: ObservableObject {
     private func addDownload(urlString: String, skipHistoryCheck: Bool) {
         let trimmed = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        let stripped = stripTrackingParams(trimmed)
+        let stripped = Self.stripTrackingParams(trimmed)
 
         if let existing = items.first(where: { $0.url == stripped }) {
             switch existing.status {
@@ -707,7 +707,7 @@ class DownloadManager: ObservableObject {
 
     private static let trackingParamsExact = Set(["si", "s", "ref", "ref_src", "ref_url", "fbclid", "gclid", "msclkid"])
 
-    private func stripTrackingParams(_ urlString: String) -> String {
+    static func stripTrackingParams(_ urlString: String) -> String {
         guard var c = URLComponents(string: urlString) else { return urlString }
         c.queryItems = c.queryItems?.filter { item in
             let name = item.name.lowercased()
