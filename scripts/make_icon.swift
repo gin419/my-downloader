@@ -8,9 +8,12 @@ import CoreImage
 
 let SIZE: CGFloat = 1024
 let CORNER: CGFloat = 229          // macOS standard ≈ 22.4% of 1024
+// Default output goes into the gitignored build/ dir so a stray run doesn't
+// drop untracked litter in the source tree. Pass an explicit path to override.
 let out = URL(fileURLWithPath: CommandLine.arguments.count > 1
               ? CommandLine.arguments[1]
-              : "Resources/AppIcon.png")
+              : "build/AppIcon.png")
+try? FileManager.default.createDirectory(at: out.deletingLastPathComponent(), withIntermediateDirectories: true)
 
 // ─── Colour helpers ───────────────────────────────────────────────────────────
 func rgb(_ r: CGFloat, _ g: CGFloat, _ b: CGFloat, _ a: CGFloat = 1) -> CGColor {
