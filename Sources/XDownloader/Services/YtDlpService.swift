@@ -81,6 +81,24 @@ enum YtDlpService {
 
     // MARK: - Output parsing
 
+    /// Cleans a yt-dlp filename stem into a display title by stripping the suffixes
+    /// yt-dlp adds: a trailing image index (`_2`), a multi-video playlist index
+    /// (` [01]`), and the intermediate format code (`.f136`) left on the pre-merge
+    /// stream's first Destination line (the final merged file has none).
+    static func cleanTitleStem(_ stem: String, isImage: Bool) -> String {
+        var s = stem
+        if isImage, let r = s.range(of: #"_\d+$"#, options: .regularExpression) {
+            s = String(s[..<r.lowerBound])
+        }
+        if let r = s.range(of: #" \[\d+\]$"#, options: .regularExpression) {
+            s = String(s[..<r.lowerBound])
+        }
+        if let r = s.range(of: #"\.f\d+$"#, options: .regularExpression) {
+            s = String(s[..<r.lowerBound])
+        }
+        return s
+    }
+
     /// Parse one line of yt-dlp stdout/stderr, updating `item` in place.
     /// `terminate` is called when yt-dlp is detected following an external redirect
     /// out of an X.com tweet — the caller should kill the process so gallery-dl can take over.
@@ -122,25 +140,9 @@ enum YtDlpService {
             }
 
             if item.title == nil {
-                var stem = URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
-                if isImage, let r = stem.range(of: #"_\d+$"#, options: .regularExpression) {
-                    stem = String(stem[..<r.lowerBound])
-                }
-                // Strip playlist index suffix " [01]" added for multi-video tweets
-                if let r = stem.range(of: #" \[\d+\]$"#, options: .regularExpression) {
-                    stem = String(stem[..<r.lowerBound])
-                }
-                // Strip yt-dlp's intermediate format-code suffix (e.g. ".f136"):
-                // when video+audio are downloaded separately and merged, the first
-                // Destination line is the pre-merge stream "Name.f136.mp4". The
-                // final merged file ("Name.mp4") has none, so without this the
-                // title would display as "Title.f136".
-                if let r = stem.range(of: #"\.f\d+$"#, options: .regularExpression) {
-                    stem = String(stem[..<r.lowerBound])
-                }
-                // Keep the full "Uploader - Title" stem so the displayed name
-                // matches the saved filename (gallery-dl titles already do this).
-                item.title = stem
+                // Keep the full "Uploader - Title" stem (gallery-dl titles already do this).
+                let stem = URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
+                item.title = Self.cleanTitleStem(stem, isImage: isImage)
             }
             if isImage { item.imageCount = (item.imageCount ?? 0) + 1 }
 
