@@ -11,8 +11,7 @@ class DownloadManager: ObservableObject {
     @Published var outputDirectory: URL
     @Published var cookieBrowser: CookieBrowser = .safari
     @Published var cookiesFilePath: String? = nil   // display / last resolved path
-    private var cookiesFileBookmarkData: Data?       // security-scoped bookmark for sandboxed file access
-    private let cookieScope = CookieFileScope()      // per-download scope: startAccessing in begin, paired stop via defer
+    private let cookieAccess = CookieAccessManager()  // security-scoped bookmark + per-download scope for cookies.txt
     @Published var maxConcurrent: Int = 2
     @Published var showDownloadDate: Bool = false
     @Published var youtubeFormat: YouTubeFormat = .videoAndAudio
@@ -204,34 +203,23 @@ class DownloadManager: ObservableObject {
     }
 
     // MARK: - Cookies file (security-scoped bookmark for sandbox)
-    /// Resolves the cookies file for a single download: returns the `--cookies` path
-    /// and the granted security-scoped URL to hand to `CookieFileScope` (which owns
-    /// startAccessing + the paired stop for the child process's lifetime — nothing is
-    /// started here). For a plain path with no bookmark, `granted` is nil and the scope
-    /// falls back to a plain file URL. Resolving fresh each download avoids stale grants.
+    /// Resolves the cookies file for a single download via `CookieAccessManager`.
+    /// Returns the `--cookies` path + granted URL; for a plain path with no bookmark,
+    /// falls back to the display path with no grant.
     func resolveCookiesForDownload() -> (path: String?, granted: URL?) {
-        guard let data = cookiesFileBookmarkData else { return (cookiesFilePath, nil) }
-        var isStale = false
-        guard let url = try? URL(resolvingBookmarkData: data, options: .withSecurityScope, relativeTo: nil, bookmarkDataIsStale: &isStale) else { return (nil, nil) }
-        cookiesFilePath = url.path   // keep the display path in sync with the resolved location
-        return (url.path, url)
+        let resolved = cookieAccess.resolveForDownload()
+        if let p = resolved.path { cookiesFilePath = p }   // keep the display path in sync
+        return (resolved.path ?? cookiesFilePath, resolved.granted)
     }
 
     func setCookiesFile(from url: URL) {
-        do {
-            cookiesFileBookmarkData = try url.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil)
-            cookiesFilePath = url.path
-            saveSettings()
-        } catch {
-            // Last resort: plain path with no sandbox grant.
-            cookiesFileBookmarkData = nil
-            cookiesFilePath = url.path
-            saveSettings()
-        }
+        cookieAccess.setFile(url)   // stores a security-scoped bookmark, or clears it (plain-path fallback)
+        cookiesFilePath = url.path
+        saveSettings()
     }
 
     func clearCookiesFile() {
-        cookiesFileBookmarkData = nil
+        cookieAccess.clear()
         cookiesFilePath = nil
         saveSettings()
     }
@@ -243,7 +231,7 @@ class DownloadManager: ObservableObject {
         d.set(outputDirectory.absoluteString, forKey: "outputDirectory")
         d.set(cookieBrowser.rawValue,         forKey: "cookieBrowser")
         d.set(cookiesFilePath,                forKey: "cookiesFilePath")
-        if let bm = cookiesFileBookmarkData {
+        if let bm = cookieAccess.bookmarkForSaving {
             d.set(bm, forKey: "cookiesFileBookmarkData")
         } else {
             d.removeObject(forKey: "cookiesFileBookmarkData")
@@ -268,7 +256,7 @@ class DownloadManager: ObservableObject {
         if let r = d.string(forKey: "cookieBrowser"),   let v = CookieBrowser(rawValue: r)    { cookieBrowser = v }
         if let p = d.string(forKey: "cookiesFilePath"), !p.isEmpty { cookiesFilePath = p } else { cookiesFilePath = nil }
         if let data = d.data(forKey: "cookiesFileBookmarkData") {
-            cookiesFileBookmarkData = data
+            cookieAccess.loadBookmark(data)
         }
         if let r = d.string(forKey: "youtubeFormat"),   let v = YouTubeFormat(rawValue: r)    { youtubeFormat = v }
         if let r = d.string(forKey: "videoQuality"),    let v = VideoQuality(rawValue: r)     { videoQuality = v }
@@ -305,7 +293,7 @@ class DownloadManager: ObservableObject {
 
         let cookies = resolveCookiesForDownload()
         var ytExitCode: Int32 = 0
-        await cookieScope.withScope(for: item.id, file: cookies.path, grantedURL: cookies.granted) {
+        await cookieAccess.withScope(for: item.id, file: cookies.path, grantedURL: cookies.granted) {
             let args = YtDlpService.buildArguments(
                 for: item,
                 outputDirectory: outputDirectory,
@@ -462,7 +450,7 @@ class DownloadManager: ObservableObject {
         item.lastToolWarning = nil
 
         let cookies = resolveCookiesForDownload()
-        await cookieScope.withScope(for: item.id, file: cookies.path, grantedURL: cookies.granted) {
+        await cookieAccess.withScope(for: item.id, file: cookies.path, grantedURL: cookies.granted) {
             await GalleryDlService.run(
                 item: item,
                 executablePath: executablePath,
