@@ -144,6 +144,16 @@ class DownloadItem: Identifiable, ObservableObject {
         self.addedAt = addedAt
     }
 
+    /// Re-derive `mediaCategory` from the current image/video counts. Audio is
+    /// set explicitly elsewhere, so this only handles the image / video / mixed case.
+    func recomputeMediaCategory() {
+        let hasImg = (imageCount ?? 0) > 0
+        let hasVid = (videoCount ?? 0) > 0
+        if hasImg && hasVid { mediaCategory = .mixed }
+        else if hasImg      { mediaCategory = .image }
+        else if hasVid      { mediaCategory = .video }
+    }
+
     init(persisted p: PersistedDownloadItem) {
         self.url = p.url
         self.addedAt = p.addedAt

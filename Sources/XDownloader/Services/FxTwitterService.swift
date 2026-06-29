@@ -9,8 +9,6 @@ import Foundation
 /// URLSession. Only the tweet id is sent to fxtwitter.
 enum FxTwitterService {
 
-    private static let imageExts = Set(["jpg", "jpeg", "png", "webp", "gif", "avif"])
-
     /// Attempts to resolve and download the tweet's media. On success sets the
     /// item to .completed and returns true. On any failure restores the item's
     /// prior status (keeping the more informative gallery-dl failure message)
@@ -84,12 +82,10 @@ enum FxTwitterService {
             return false
         }
 
-        item.outputPath = savedPaths.first { !imageExts.contains(URL(fileURLWithPath: $0).pathExtension.lowercased()) } ?? first
+        item.outputPath = savedPaths.first { !MediaExtensions.image.contains(URL(fileURLWithPath: $0).pathExtension.lowercased()) } ?? first
         item.imageCount = imageCount > 0 ? imageCount : nil
         item.videoCount = videoCount > 0 ? videoCount : nil
-        if imageCount > 0 && videoCount > 0 { item.mediaCategory = .mixed }
-        else if videoCount > 0             { item.mediaCategory = .video }
-        else                               { item.mediaCategory = .image }
+        item.recomputeMediaCategory()
         if item.title == nil {
             let t = "\(nick) - \(String(text.prefix(100)))".trimmingCharacters(in: .whitespacesAndNewlines)
             item.title = t.hasSuffix("-") ? String(t.dropLast()).trimmingCharacters(in: .whitespaces) : t
