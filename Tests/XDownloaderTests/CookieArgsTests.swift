@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import XDownloader
 
 /// `CookieArgs.make` is the single source of cookie flags for both yt-dlp and

@@ -24,7 +24,8 @@ func runProcess(
     var env = ProcessInfo.processInfo.environment
     let existingPath = env["PATH"] ?? ""
     let homebrewPaths = "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin"
-    env["PATH"] = existingPath.isEmpty
+    env["PATH"] =
+        existingPath.isEmpty
         ? "\(homebrewPaths):/usr/bin:/bin:/usr/sbin:/sbin"
         : "\(homebrewPaths):\(existingPath)"
     process.environment = env

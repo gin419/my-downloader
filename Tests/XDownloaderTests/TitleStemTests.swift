@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import XDownloader
 
 /// `YtDlpService.cleanTitleStem` strips the suffixes yt-dlp leaves on saved
@@ -28,7 +29,8 @@ final class TitleStemTests: XCTestCase {
     func testStripsAreAnchoredToTheEnd() {
         // Each suffix is stripped once, only when it's at the end: removing ".f140"
         // leaves " [02]" no longer terminal, so it stays.
-        XCTAssertEqual(YtDlpService.cleanTitleStem("Uploader - Title [02].f140", isImage: false),
-                       "Uploader - Title [02]")
+        XCTAssertEqual(
+            YtDlpService.cleanTitleStem("Uploader - Title [02].f140", isImage: false),
+            "Uploader - Title [02]")
     }
 }

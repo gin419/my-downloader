@@ -12,8 +12,8 @@ struct SiteProfile {
 
     /// A tool tried after yt-dlp when it fails / finds no media.
     enum Fallback {
-        case galleryDl   // image tweets, Reddit posts/galleries, …
-        case fxTwitter   // X CDN direct download for spam-flagged/hidden tweets
+        case galleryDl  // image tweets, Reddit posts/galleries, …
+        case fxTwitter  // X CDN direct download for spam-flagged/hidden tweets
     }
 
     /// Stable identifier, also used as the history "site" label.

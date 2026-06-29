@@ -32,7 +32,8 @@ enum FxTwitterService {
         var urls: [(url: URL, isVideo: Bool)] = []
         for m in media {
             guard let type = m["type"] as? String,
-                  var raw = m["url"] as? String else { continue }
+                var raw = m["url"] as? String
+            else { continue }
             let isVideo = (type == "video" || type == "gif")
             // pbs.twimg.com photo URLs default to a downscaled variant;
             // ?name=orig requests the original resolution.
@@ -60,7 +61,8 @@ enum FxTwitterService {
                 item.status = priorStatus
                 return false
             }
-            let ext = entry.isVideo
+            let ext =
+                entry.isVideo
                 ? "mp4"
                 : (entry.url.pathExtension.isEmpty ? "jpg" : entry.url.pathExtension.lowercased())
             let name = "\(stemBase) #\(index + 1).\(ext)"
@@ -69,7 +71,8 @@ enum FxTwitterService {
             if !FileManager.default.fileExists(atPath: dest.path) {
                 item.status = .downloading
                 guard let tmp = try? await URLSession.shared.download(from: entry.url).0,
-                      (try? FileManager.default.moveItem(at: tmp, to: dest)) != nil else {
+                    (try? FileManager.default.moveItem(at: tmp, to: dest)) != nil
+                else {
                     continue
                 }
             }
@@ -90,10 +93,10 @@ enum FxTwitterService {
             let t = "\(nick) - \(String(text.prefix(100)))".trimmingCharacters(in: .whitespacesAndNewlines)
             item.title = t.hasSuffix("-") ? String(t.dropLast()).trimmingCharacters(in: .whitespaces) : t
         }
-        item.status   = .completed
+        item.status = .completed
         item.progress = 1.0
-        item.speed    = nil
-        item.eta      = nil
+        item.speed = nil
+        item.eta = nil
         return true
     }
 
@@ -109,10 +112,11 @@ enum FxTwitterService {
         var request = URLRequest(url: url, timeoutInterval: 20)
         request.setValue("XDownloader/1.4 (macOS)", forHTTPHeaderField: "User-Agent")
         guard let (data, response) = try? await URLSession.shared.data(for: request),
-              (response as? HTTPURLResponse)?.statusCode == 200,
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              json["code"] as? Int == 200,
-              let tweet = json["tweet"] as? [String: Any] else { return nil }
+            (response as? HTTPURLResponse)?.statusCode == 200,
+            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            json["code"] as? Int == 200,
+            let tweet = json["tweet"] as? [String: Any]
+        else { return nil }
         return tweet
     }
 

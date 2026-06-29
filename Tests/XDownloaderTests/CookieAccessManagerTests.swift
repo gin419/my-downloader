@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import XDownloader
 
 /// `CookieAccessManager` owns the cookies.txt bookmark + per-download scope.
@@ -25,7 +26,7 @@ final class CookieAccessManagerTests: XCTestCase {
 
     func testInvalidBookmarkResolvesToNil() {
         let m = CookieAccessManager()
-        m.loadBookmark(Data([1, 2, 3]))   // not a real security-scoped bookmark
+        m.loadBookmark(Data([1, 2, 3]))  // not a real security-scoped bookmark
         XCTAssertNil(m.resolveForDownload().path)
     }
 

@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import XDownloader
 
 /// Locks the per-download security-scope lifecycle the cookies.txt feature relies
@@ -19,7 +20,7 @@ final class CookieFileScopeTests: XCTestCase {
         let (path, _) = tempCookies()
         let id = UUID()
         XCTAssertEqual(scope.begin(for: id, file: path), path)
-        scope.end(for: id)   // paired stopAccessing — must not crash
+        scope.end(for: id)  // paired stopAccessing — must not crash
     }
 
     func testBeginReturnsNilWhenNothingUsable() {
@@ -37,7 +38,7 @@ final class CookieFileScopeTests: XCTestCase {
     }
 
     func testEndForUnknownIdIsNoOp() {
-        CookieFileScope().end(for: UUID())   // no registered scope → must not crash
+        CookieFileScope().end(for: UUID())  // no registered scope → must not crash
     }
 
     func testWithScopeReturnsBodyValue() async {
@@ -60,6 +61,6 @@ final class CookieFileScopeTests: XCTestCase {
         } catch {
             XCTFail("unexpected error: \(error)")
         }
-        scope.end(for: id)   // already ended by defer; safe no-op
+        scope.end(for: id)  // already ended by defer; safe no-op
     }
 }

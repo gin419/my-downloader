@@ -1,5 +1,5 @@
-import Foundation
 import AppKit
+import Foundation
 import SwiftUI
 
 @MainActor
@@ -10,7 +10,7 @@ class DownloadManager: ObservableObject {
     @Published var items: [DownloadItem] = []
     @Published var outputDirectory: URL
     @Published var cookieBrowser: CookieBrowser = .safari
-    @Published var cookiesFilePath: String? = nil   // display / last resolved path
+    @Published var cookiesFilePath: String? = nil  // display / last resolved path
     private let cookieAccess = CookieAccessManager()  // security-scoped bookmark + per-download scope for cookies.txt
     @Published var maxConcurrent: Int = 2
     @Published var showDownloadDate: Bool = false
@@ -44,13 +44,14 @@ class DownloadManager: ObservableObject {
     private let queueStore = QueueStore()
 
     // Resolved at runtime via RequirementsService so paths stay in one place.
-    private var ytdlpPath: String  { RequirementsService.ytdlp.installedPath    ?? "yt-dlp"     }
+    private var ytdlpPath: String { RequirementsService.ytdlp.installedPath ?? "yt-dlp" }
     private var galleryDlPath: String? { RequirementsService.galleryDl.installedPath }
 
     // MARK: - Init
 
     init() {
-        let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
+        let downloads =
+            FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
             ?? FileManager.default.homeDirectoryForCurrentUser
         let defaultDir = downloads.appendingPathComponent("X-Videos")
         try? FileManager.default.createDirectory(at: defaultDir, withIntermediateDirectories: true)
@@ -127,22 +128,22 @@ class DownloadManager: ObservableObject {
     }
 
     func retryItem(_ item: DownloadItem) {
-        item.status     = .queued
-        item.progress   = 0
-        item.speed      = nil
-        item.eta        = nil
-        item.totalSize  = nil
+        item.status = .queued
+        item.progress = 0
+        item.speed = nil
+        item.eta = nil
+        item.totalSize = nil
         item.outputPath = nil
-        item.videoPath  = nil
-        item.audioPath  = nil
-        item.title      = nil
-        item.imageCount    = nil
-        item.videoCount    = nil
+        item.videoPath = nil
+        item.audioPath = nil
+        item.title = nil
+        item.imageCount = nil
+        item.videoCount = nil
         item.mediaCategory = .unknown
         item.lastToolWarning = nil
         item.subtitleDownloadFailed = false
-        item.subtitlesDisabled      = false
-        item.retryCount   += 1
+        item.subtitlesDisabled = false
+        item.retryCount += 1
         downloadQueue.append(item)
         saveQueue()
         drainQueue()
@@ -208,12 +209,12 @@ class DownloadManager: ObservableObject {
     /// falls back to the display path with no grant.
     func resolveCookiesForDownload() -> (path: String?, granted: URL?) {
         let resolved = cookieAccess.resolveForDownload()
-        if let p = resolved.path { cookiesFilePath = p }   // keep the display path in sync
+        if let p = resolved.path { cookiesFilePath = p }  // keep the display path in sync
         return (resolved.path ?? cookiesFilePath, resolved.granted)
     }
 
     func setCookiesFile(from url: URL) {
-        cookieAccess.setFile(url)   // stores a security-scoped bookmark, or clears it (plain-path fallback)
+        cookieAccess.setFile(url)  // stores a security-scoped bookmark, or clears it (plain-path fallback)
         cookiesFilePath = url.path
         saveSettings()
     }
@@ -229,23 +230,23 @@ class DownloadManager: ObservableObject {
     func saveSettings() {
         let d = UserDefaults.standard
         d.set(outputDirectory.absoluteString, forKey: "outputDirectory")
-        d.set(cookieBrowser.rawValue,         forKey: "cookieBrowser")
-        d.set(cookiesFilePath,                forKey: "cookiesFilePath")
+        d.set(cookieBrowser.rawValue, forKey: "cookieBrowser")
+        d.set(cookiesFilePath, forKey: "cookiesFilePath")
         if let bm = cookieAccess.bookmarkForSaving {
             d.set(bm, forKey: "cookiesFileBookmarkData")
         } else {
             d.removeObject(forKey: "cookiesFileBookmarkData")
         }
-        d.set(showDownloadDate,               forKey: "showDownloadDate")
-        d.set(youtubeFormat.rawValue,         forKey: "youtubeFormat")
-        d.set(videoQuality.rawValue,          forKey: "videoQuality")
-        d.set(audioQuality.rawValue,          forKey: "audioQuality")
-        d.set(subtitleLanguage.rawValue,      forKey: "subtitleLanguage")
-        d.set(embedSubtitles,                 forKey: "embedSubtitles")
-        d.set(maxConcurrent,                  forKey: "maxConcurrent")
-        d.set(openPreference.rawValue,        forKey: "openPreference")
-        d.set(autoDownloadOnPaste,            forKey: "autoDownloadOnPaste")
-        d.set(saveHistoryEnabled,             forKey: "saveHistoryEnabled")
+        d.set(showDownloadDate, forKey: "showDownloadDate")
+        d.set(youtubeFormat.rawValue, forKey: "youtubeFormat")
+        d.set(videoQuality.rawValue, forKey: "videoQuality")
+        d.set(audioQuality.rawValue, forKey: "audioQuality")
+        d.set(subtitleLanguage.rawValue, forKey: "subtitleLanguage")
+        d.set(embedSubtitles, forKey: "embedSubtitles")
+        d.set(maxConcurrent, forKey: "maxConcurrent")
+        d.set(openPreference.rawValue, forKey: "openPreference")
+        d.set(autoDownloadOnPaste, forKey: "autoDownloadOnPaste")
+        d.set(saveHistoryEnabled, forKey: "saveHistoryEnabled")
     }
 
     // MARK: - Private
@@ -253,18 +254,18 @@ class DownloadManager: ObservableObject {
     private func loadSettings() {
         let d = UserDefaults.standard
         if let s = d.string(forKey: "outputDirectory"), let u = URL(string: s) { outputDirectory = u }
-        if let r = d.string(forKey: "cookieBrowser"),   let v = CookieBrowser(rawValue: r)    { cookieBrowser = v }
+        if let r = d.string(forKey: "cookieBrowser"), let v = CookieBrowser(rawValue: r) { cookieBrowser = v }
         if let p = d.string(forKey: "cookiesFilePath"), !p.isEmpty { cookiesFilePath = p } else { cookiesFilePath = nil }
         if let data = d.data(forKey: "cookiesFileBookmarkData") {
             cookieAccess.loadBookmark(data)
         }
-        if let r = d.string(forKey: "youtubeFormat"),   let v = YouTubeFormat(rawValue: r)    { youtubeFormat = v }
-        if let r = d.string(forKey: "videoQuality"),    let v = VideoQuality(rawValue: r)     { videoQuality = v }
-        if let r = d.string(forKey: "audioQuality"),    let v = AudioQuality(rawValue: r)     { audioQuality = v }
-        if let r = d.string(forKey: "subtitleLanguage"),let v = SubtitleLanguage(rawValue: r) { subtitleLanguage = v }
-        if let r = d.string(forKey: "openPreference"),  let v = OpenPreference(rawValue: r)   { openPreference = v }
-        showDownloadDate  = d.bool(forKey: "showDownloadDate")
-        embedSubtitles    = d.object(forKey: "embedSubtitles") as? Bool ?? true
+        if let r = d.string(forKey: "youtubeFormat"), let v = YouTubeFormat(rawValue: r) { youtubeFormat = v }
+        if let r = d.string(forKey: "videoQuality"), let v = VideoQuality(rawValue: r) { videoQuality = v }
+        if let r = d.string(forKey: "audioQuality"), let v = AudioQuality(rawValue: r) { audioQuality = v }
+        if let r = d.string(forKey: "subtitleLanguage"), let v = SubtitleLanguage(rawValue: r) { subtitleLanguage = v }
+        if let r = d.string(forKey: "openPreference"), let v = OpenPreference(rawValue: r) { openPreference = v }
+        showDownloadDate = d.bool(forKey: "showDownloadDate")
+        embedSubtitles = d.object(forKey: "embedSubtitles") as? Bool ?? true
         autoDownloadOnPaste = d.bool(forKey: "autoDownloadOnPaste")
         saveHistoryEnabled = d.object(forKey: "saveHistoryEnabled") as? Bool ?? true
         let stored = d.integer(forKey: "maxConcurrent")
@@ -310,8 +311,8 @@ class DownloadManager: ObservableObject {
                 executablePath: ytdlpPath,
                 arguments: args,
                 item: item,
-                register:   { [weak self] p in self?.activeProcesses[item.id] = p },
-                unregister: { [weak self]   in self?.activeProcesses.removeValue(forKey: item.id) },
+                register: { [weak self] p in self?.activeProcesses[item.id] = p },
+                unregister: { [weak self] in self?.activeProcesses.removeValue(forKey: item.id) },
                 lineParser: { [weak self] line, item in
                     YtDlpService.parseLine(line, item: item) {
                         self?.activeProcesses[item.id]?.terminate()
@@ -327,7 +328,8 @@ class DownloadManager: ObservableObject {
         // gallery-dl often picks these up, so treat it the same as a non-zero
         // exit and let the fallback below try.
         let mediaCaptured = item.outputPath != nil
-        var hasFatalError = false; if case .failed = item.status { hasFatalError = true }
+        var hasFatalError = false
+        if case .failed = item.status { hasFatalError = true }
         // Subtitles are best-effort: if the video already reached disk but yt-dlp
         // exited non-zero *only* because the (optional) subtitle download was
         // rate-limited, keep the video rather than failing. Scoped to the
@@ -335,10 +337,10 @@ class DownloadManager: ObservableObject {
         // that partially downloaded) still fall through to the fallback below.
         let subtitleOnlyFailure = item.subtitleDownloadFailed && !hasFatalError
         if mediaCaptured && (ytExitCode == 0 || subtitleOnlyFailure) {
-            item.status   = .completed
+            item.status = .completed
             item.progress = 1.0
-            item.speed    = nil
-            item.eta      = nil
+            item.speed = nil
+            item.eta = nil
             finalize(item)
             return
         }
@@ -347,8 +349,8 @@ class DownloadManager: ObservableObject {
         // row at its current progress so Resume can pick up from the .part file.
         if pausedItemIDs.remove(item.id) != nil {
             item.status = .paused
-            item.speed  = nil
-            item.eta    = nil
+            item.speed = nil
+            item.eta = nil
             saveQueue()
             return
         }
@@ -361,10 +363,10 @@ class DownloadManager: ObservableObject {
         // video, so this branch only fires when nothing landed on disk.)
         if item.subtitleDownloadFailed && !item.subtitlesDisabled && item.outputPath == nil {
             item.subtitlesDisabled = true
-            item.status   = .fetching
+            item.status = .fetching
             item.progress = 0
-            item.speed    = nil
-            item.eta      = nil
+            item.speed = nil
+            item.eta = nil
             saveQueue()
             await runDownload(item)
             return
@@ -377,16 +379,16 @@ class DownloadManager: ObservableObject {
         let profile = SiteRegistry.profile(for: item.url)
         var ranFallback = false
         for fallback in profile.fallbacks {
-            if case .completed = item.status { break }   // a prior fallback already won
+            if case .completed = item.status { break }  // a prior fallback already won
             switch fallback {
             case .galleryDl:
-                guard let gdlPath = galleryDlPath else { continue }   // tool not installed
+                guard let gdlPath = galleryDlPath else { continue }  // tool not installed
                 ranFallback = true
                 await runGalleryDlFallback(item, executablePath: gdlPath)
             case .fxTwitter:
-                guard case .failed = item.status else { continue }    // only as a rescue
+                guard case .failed = item.status else { continue }  // only as a rescue
                 ranFallback = true
-                if await runFxTwitterFallback(item) { return }        // user pressed Stop mid-run
+                if await runFxTwitterFallback(item) { return }  // user pressed Stop mid-run
             }
         }
 
@@ -415,16 +417,16 @@ class DownloadManager: ObservableObject {
         }()
         if isEmptySuccess && !item.autoRetryAttempted {
             item.autoRetryAttempted = true
-            item.status        = .fetching
-            item.progress      = 0
-            item.speed         = nil
-            item.eta           = nil
-            item.imageCount    = nil
-            item.videoCount    = nil
-            item.outputPath    = nil
-            item.videoPath     = nil
-            item.audioPath     = nil
-            item.title         = nil
+            item.status = .fetching
+            item.progress = 0
+            item.speed = nil
+            item.eta = nil
+            item.imageCount = nil
+            item.videoCount = nil
+            item.outputPath = nil
+            item.videoPath = nil
+            item.audioPath = nil
+            item.title = nil
             item.mediaCategory = .unknown
             item.lastToolWarning = nil
             saveQueue()
@@ -440,13 +442,13 @@ class DownloadManager: ObservableObject {
     /// Process — pause kills it via `activeProcesses`). On return `item.status`
     /// is `.completed` or `.failed`.
     private func runGalleryDlFallback(_ item: DownloadItem, executablePath: String) async {
-        item.status     = .fetching
-        item.progress   = 0
+        item.status = .fetching
+        item.progress = 0
         item.imageCount = nil
         item.outputPath = nil
-        item.videoPath  = nil
-        item.audioPath  = nil
-        item.title      = nil
+        item.videoPath = nil
+        item.audioPath = nil
+        item.title = nil
         item.lastToolWarning = nil
 
         let cookies = resolveCookiesForDownload()
@@ -457,8 +459,8 @@ class DownloadManager: ObservableObject {
                 outputDirectory: outputDirectory,
                 cookieBrowser: cookieBrowser,
                 cookiesFile: cookies.path,
-                register:   { [weak self] p in self?.activeProcesses[item.id] = p },
-                unregister: { [weak self]   in self?.activeProcesses.removeValue(forKey: item.id) }
+                register: { [weak self] p in self?.activeProcesses[item.id] = p },
+                unregister: { [weak self] in self?.activeProcesses.removeValue(forKey: item.id) }
             )
         }
     }
@@ -477,8 +479,8 @@ class DownloadManager: ObservableObject {
 
         if pausedItemIDs.remove(item.id) != nil, item.status != .completed {
             item.status = .paused
-            item.speed  = nil
-            item.eta    = nil
+            item.speed = nil
+            item.eta = nil
             saveQueue()
             return true
         }
@@ -519,7 +521,8 @@ class DownloadManager: ObservableObject {
         let outputPath = item.outputPath ?? item.videoPath ?? item.audioPath
         let fileSize: Int64? = {
             guard let p = outputPath,
-                  let attrs = try? FileManager.default.attributesOfItem(atPath: p) else { return nil }
+                let attrs = try? FileManager.default.attributesOfItem(atPath: p)
+            else { return nil }
             return attrs[.size] as? Int64
         }()
         let entry = HistoryEntry(
@@ -615,8 +618,10 @@ class DownloadManager: ObservableObject {
         // was ever recorded (no title/media chip in the UI). Re-queue them so
         // they run through the current yt-dlp → gallery-dl → fxtwitter chain
         // instead of posing as completed forever.
-        for item in restored where item.status == .completed
-            && item.outputPath == nil && item.videoPath == nil && item.audioPath == nil {
+        for item in restored
+        where item.status == .completed
+            && item.outputPath == nil && item.videoPath == nil && item.audioPath == nil
+        {
             item.status = .queued
         }
 

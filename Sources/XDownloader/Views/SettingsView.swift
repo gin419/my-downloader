@@ -1,5 +1,5 @@
-import SwiftUI
 import AppKit
+import SwiftUI
 
 struct SettingsView: View {
     @EnvironmentObject var manager: DownloadManager
@@ -51,9 +51,11 @@ struct SettingsView: View {
                 }
                 .pickerStyle(.segmented)
 
-                Text("yt-dlp will use cookies from the selected browser to access your X.com session. Make sure you're logged in to X.com in that browser.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                Text(
+                    "yt-dlp will use cookies from the selected browser to access your X.com session. Make sure you're logged in to X.com in that browser."
+                )
+                .font(.caption)
+                .foregroundColor(.secondary)
 
                 HStack {
                     if let path = manager.cookiesFilePath, !path.isEmpty {
@@ -77,9 +79,11 @@ struct SettingsView: View {
                     }
                 }
 
-                Text("For X sensitive/NSFW (adult) videos that --cookies-from-browser cannot unlock, export a Netscape-format cookies.txt from your browser (use an extension like 'Get cookies.txt LOCALLY' while logged into x.com) and select the file here. The file path takes precedence over browser cookies.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                Text(
+                    "For X sensitive/NSFW (adult) videos that --cookies-from-browser cannot unlock, export a Netscape-format cookies.txt from your browser (use an extension like 'Get cookies.txt LOCALLY' while logged into x.com) and select the file here. The file path takes precedence over browser cookies."
+                )
+                .font(.caption)
+                .foregroundColor(.secondary)
             }
 
             Section("Download Format") {
@@ -135,9 +139,11 @@ struct SettingsView: View {
 
             Section("History") {
                 Toggle("Save download history to database", isOn: $manager.saveHistoryEnabled)
-                Text("Records completed and failed downloads to a local SQLite file. When enabled, you'll be warned before re-downloading a link that's already in your history.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                Text(
+                    "Records completed and failed downloads to a local SQLite file. When enabled, you'll be warned before re-downloading a link that's already in your history."
+                )
+                .font(.caption)
+                .foregroundColor(.secondary)
 
                 if manager.saveHistoryEnabled {
                     HStack(spacing: 6) {
@@ -171,7 +177,8 @@ struct SettingsView: View {
                         Spacer(minLength: 12)
                         Button("Import \(manager.importableTaskCount)") {
                             let n = manager.importTaskListToHistory()
-                            lastImportMessage = n == 0
+                            lastImportMessage =
+                                n == 0
                                 ? "Nothing to import."
                                 : "Imported \(n) \(n == 1 ? "entry" : "entries")."
                         }
@@ -205,24 +212,26 @@ struct SettingsView: View {
                 }
                 .pickerStyle(.segmented)
 
-                Text("\"Audio\" opens the audio stream when available (e.g. Audio Only downloads). Falls back to the video file if the audio file no longer exists.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                Text(
+                    "\"Audio\" opens the audio stream when available (e.g. Audio Only downloads). Falls back to the video file if the audio file no longer exists."
+                )
+                .font(.caption)
+                .foregroundColor(.secondary)
             }
         }
         .formStyle(.grouped)
         .frame(width: 440)
-        .onChange(of: manager.cookieBrowser)      { manager.saveSettings() }
-        .onChange(of: manager.cookiesFilePath)    { manager.saveSettings() }
-        .onChange(of: manager.maxConcurrent)      { manager.saveSettings() }
-        .onChange(of: manager.youtubeFormat)      { manager.saveSettings() }
-        .onChange(of: manager.videoQuality)       { manager.saveSettings() }
-        .onChange(of: manager.audioQuality)       { manager.saveSettings() }
-        .onChange(of: manager.subtitleLanguage)   { manager.saveSettings() }
-        .onChange(of: manager.embedSubtitles)     { manager.saveSettings() }
-        .onChange(of: manager.showDownloadDate)   { manager.saveSettings() }
-        .onChange(of: manager.openPreference)     { manager.saveSettings() }
-        .onChange(of: manager.autoDownloadOnPaste){ manager.saveSettings() }
+        .onChange(of: manager.cookieBrowser) { manager.saveSettings() }
+        .onChange(of: manager.cookiesFilePath) { manager.saveSettings() }
+        .onChange(of: manager.maxConcurrent) { manager.saveSettings() }
+        .onChange(of: manager.youtubeFormat) { manager.saveSettings() }
+        .onChange(of: manager.videoQuality) { manager.saveSettings() }
+        .onChange(of: manager.audioQuality) { manager.saveSettings() }
+        .onChange(of: manager.subtitleLanguage) { manager.saveSettings() }
+        .onChange(of: manager.embedSubtitles) { manager.saveSettings() }
+        .onChange(of: manager.showDownloadDate) { manager.saveSettings() }
+        .onChange(of: manager.openPreference) { manager.saveSettings() }
+        .onChange(of: manager.autoDownloadOnPaste) { manager.saveSettings() }
         .onChange(of: manager.saveHistoryEnabled) {
             manager.saveSettings()
             manager.refreshHistoryStats()

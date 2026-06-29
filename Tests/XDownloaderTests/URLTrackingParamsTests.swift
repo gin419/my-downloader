@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import XDownloader
 
 /// `DownloadManager.stripTrackingParams` removes `utm_*` and a fixed set of

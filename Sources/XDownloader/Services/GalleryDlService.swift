@@ -41,7 +41,8 @@ enum GalleryDlService {
         )
 
         guard exitCode == 0 else {
-            if case .failed = item.status { } else {
+            if case .failed = item.status {
+            } else {
                 item.status = .failed("gallery-dl exit code \(exitCode)")
             }
             return
@@ -73,7 +74,8 @@ enum GalleryDlService {
             if let warning = item.lastToolWarning {
                 item.status = .failed("No media found — \(warning)")
             } else {
-                item.status = .failed("No media found — the tweet may be deleted, or export cookies.txt in Settings (recommended for X sensitive/NSFW content).")
+                item.status = .failed(
+                    "No media found — the tweet may be deleted, or export cookies.txt in Settings (recommended for X sensitive/NSFW content).")
             }
             return
         }
@@ -91,9 +93,13 @@ enum GalleryDlService {
         // Sync category from final counts (overrides whatever parseLine may have set).
         let hasImg = (item.imageCount ?? 0) > 0
         let hasVid = (item.videoCount ?? 0) > 0
-        if hasImg && hasVid       { item.mediaCategory = .mixed }
-        else if hasImg            { item.mediaCategory = .image }
-        else if hasVid            { item.mediaCategory = .video }
+        if hasImg && hasVid {
+            item.mediaCategory = .mixed
+        } else if hasImg {
+            item.mediaCategory = .image
+        } else if hasVid {
+            item.mediaCategory = .video
+        }
 
         // Rename single-image files: strip trailing " #1" suffix.
         if newImages.count == 1, let path = item.outputPath {
@@ -114,10 +120,10 @@ enum GalleryDlService {
             item.title = displayTitle(forPath: path)
         }
 
-        item.status   = .completed
+        item.status = .completed
         item.progress = 1.0
-        item.speed    = nil
-        item.eta      = nil
+        item.speed = nil
+        item.eta = nil
     }
 
     // MARK: - Output parsing
@@ -140,14 +146,14 @@ enum GalleryDlService {
 
             let isImage = MediaExtensions.image.contains(ext)
             let isVideo = MediaExtensions.video.contains(ext)
-            item.status     = .downloading
+            item.status = .downloading
             item.outputPath = pathLine
             if isImage {
                 item.imageCount = (item.imageCount ?? 0) + 1
             } else if isVideo {
                 item.videoCount = (item.videoCount ?? 0) + 1
             }
-            item.recomputeMediaCategory()   // update category progressively
+            item.recomputeMediaCategory()  // update category progressively
 
             if item.title == nil {
                 item.title = displayTitle(forPath: pathLine)

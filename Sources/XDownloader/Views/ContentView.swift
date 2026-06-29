@@ -1,5 +1,5 @@
-import SwiftUI
 import AppKit
+import SwiftUI
 
 enum DownloadFilter: String, CaseIterable, Identifiable {
     case all, downloading, queued, completed, failed
@@ -8,11 +8,11 @@ enum DownloadFilter: String, CaseIterable, Identifiable {
 
     var label: String {
         switch self {
-        case .all:         return "All"
+        case .all: return "All"
         case .downloading: return "Downloading"
-        case .queued:      return "Queued"
-        case .completed:   return "Done"
-        case .failed:      return "Failed"
+        case .queued: return "Queued"
+        case .completed: return "Done"
+        case .failed: return "Failed"
         }
     }
 
@@ -24,9 +24,9 @@ enum DownloadFilter: String, CaseIterable, Identifiable {
             case .downloading, .fetching, .paused: return true
             default: return false
             }
-        case .queued:    if case .queued    = status { return true } else { return false }
+        case .queued: if case .queued = status { return true } else { return false }
         case .completed: if case .completed = status { return true } else { return false }
-        case .failed:    if case .failed    = status { return true } else { return false }
+        case .failed: if case .failed = status { return true } else { return false }
         }
     }
 }
@@ -165,7 +165,9 @@ struct ContentView: View {
                         .onSubmit { submitURL() }
 
                     if !urlInput.isEmpty {
-                        Button { urlInput = "" } label: {
+                        Button {
+                            urlInput = ""
+                        } label: {
                             Image(systemName: "xmark.circle.fill")
                                 .foregroundColor(.secondary)
                                 .font(.system(size: 14))
@@ -241,19 +243,20 @@ struct ContentView: View {
                                 onRemove: {
                                     withAnimation(.easeOut(duration: 0.2)) { manager.removeItem(item) }
                                 },
-                                onRetry:    { manager.retryItem(item) },
+                                onRetry: { manager.retryItem(item) },
                                 onCopyLink: {
                                     NSPasteboard.general.clearContents()
                                     NSPasteboard.general.setString(item.url, forType: .string)
                                 },
-                                onOpen:   { openFile(item) },
-                                onPause:  { manager.pauseItem(item) },
+                                onOpen: { openFile(item) },
+                                onPause: { manager.pauseItem(item) },
                                 onResume: { manager.resumeItem(item) }
                             )
-                            .transition(.asymmetric(
-                                insertion: .move(edge: .top).combined(with: .opacity),
-                                removal: .opacity
-                            ))
+                            .transition(
+                                .asymmetric(
+                                    insertion: .move(edge: .top).combined(with: .opacity),
+                                    removal: .opacity
+                                ))
                         }
                     }
                     .padding(.horizontal, 16)
@@ -376,8 +379,10 @@ struct ContentView: View {
     }
 
     private func pasteFromClipboard() {
-        guard let text = NSPasteboard.general.string(forType: .string)?
-            .trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else { return }
+        guard
+            let text = NSPasteboard.general.string(forType: .string)?
+                .trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty
+        else { return }
         if manager.autoDownloadOnPaste {
             withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
                 manager.addDownload(urlString: text)
@@ -395,13 +400,19 @@ struct ContentView: View {
         }
         let path: String?
         if manager.openPreference == .audio {
-            path = exists(item.audioPath) ? item.audioPath
-                 : exists(item.videoPath) ? item.videoPath
-                 : item.outputPath
+            path =
+                exists(item.audioPath)
+                ? item.audioPath
+                : exists(item.videoPath)
+                    ? item.videoPath
+                    : item.outputPath
         } else {
-            path = exists(item.videoPath) ? item.videoPath
-                 : exists(item.audioPath) ? item.audioPath
-                 : item.outputPath
+            path =
+                exists(item.videoPath)
+                ? item.videoPath
+                : exists(item.audioPath)
+                    ? item.audioPath
+                    : item.outputPath
         }
         guard let p = path else { return }
         let url = URL(fileURLWithPath: p)
@@ -409,10 +420,12 @@ struct ContentView: View {
         if (item.imageCount ?? 0) > 1 {
             let siblings = siblingImageURLs(forImageAt: url)
             if siblings.count > 1,
-               let appURL = NSWorkspace.shared.urlForApplication(toOpen: url) {
-                NSWorkspace.shared.open(siblings,
-                                        withApplicationAt: appURL,
-                                        configuration: NSWorkspace.OpenConfiguration())
+                let appURL = NSWorkspace.shared.urlForApplication(toOpen: url)
+            {
+                NSWorkspace.shared.open(
+                    siblings,
+                    withApplicationAt: appURL,
+                    configuration: NSWorkspace.OpenConfiguration())
                 return
             }
         }

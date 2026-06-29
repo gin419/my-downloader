@@ -11,7 +11,7 @@ struct HistoryEntry {
     var mediaCategory: String?
     var outputPath: String?
     var fileSizeBytes: Int64?
-    var status: String   // "completed" or "failed"
+    var status: String  // "completed" or "failed"
     var errorMessage: String?
     var startedAt: Date?
     var finishedAt: Date
@@ -27,7 +27,8 @@ final class HistoryStore {
 
     init() {
         let fm = FileManager.default
-        let base = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+        let base =
+            fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? fm.homeDirectoryForCurrentUser
         let dir = base.appendingPathComponent("XDownloader", isDirectory: true)
         try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -52,31 +53,31 @@ final class HistoryStore {
 
     private func createSchema() {
         let sql = """
-        CREATE TABLE IF NOT EXISTS download_history (
-            id TEXT PRIMARY KEY,
-            url TEXT NOT NULL,
-            title TEXT,
-            site TEXT,
-            media_category TEXT,
-            output_path TEXT,
-            file_size_bytes INTEGER,
-            status TEXT NOT NULL,
-            error_message TEXT,
-            started_at REAL,
-            finished_at REAL NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_history_url ON download_history(url);
-        CREATE INDEX IF NOT EXISTS idx_history_finished_at ON download_history(finished_at DESC);
-        """
+            CREATE TABLE IF NOT EXISTS download_history (
+                id TEXT PRIMARY KEY,
+                url TEXT NOT NULL,
+                title TEXT,
+                site TEXT,
+                media_category TEXT,
+                output_path TEXT,
+                file_size_bytes INTEGER,
+                status TEXT NOT NULL,
+                error_message TEXT,
+                started_at REAL,
+                finished_at REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_history_url ON download_history(url);
+            CREATE INDEX IF NOT EXISTS idx_history_finished_at ON download_history(finished_at DESC);
+            """
         sqlite3_exec(db, sql, nil, nil, nil)
     }
 
     func record(_ entry: HistoryEntry) {
         let sql = """
-        INSERT OR REPLACE INTO download_history
-        (id, url, title, site, media_category, output_path, file_size_bytes, status, error_message, started_at, finished_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?);
-        """
+            INSERT OR REPLACE INTO download_history
+            (id, url, title, site, media_category, output_path, file_size_bytes, status, error_message, started_at, finished_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?);
+            """
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
         defer { sqlite3_finalize(stmt) }
@@ -100,12 +101,12 @@ final class HistoryStore {
     /// don't trigger duplicate warnings.
     func mostRecentCompleted(for url: String) -> HistoryEntry? {
         let sql = """
-        SELECT id, url, title, site, media_category, output_path, file_size_bytes, status, error_message, started_at, finished_at
-        FROM download_history
-        WHERE url = ? AND status = 'completed'
-        ORDER BY finished_at DESC
-        LIMIT 1;
-        """
+            SELECT id, url, title, site, media_category, output_path, file_size_bytes, status, error_message, started_at, finished_at
+            FROM download_history
+            WHERE url = ? AND status = 'completed'
+            ORDER BY finished_at DESC
+            LIMIT 1;
+            """
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return nil }
         defer { sqlite3_finalize(stmt) }

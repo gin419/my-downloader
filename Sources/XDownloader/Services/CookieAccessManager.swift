@@ -19,8 +19,10 @@ final class CookieAccessManager {
     /// can't be created — the caller then falls back to a plain path with no grant.
     @discardableResult
     func setFile(_ url: URL) -> Bool {
-        if let data = try? url.bookmarkData(options: .withSecurityScope,
-                                            includingResourceValuesForKeys: nil, relativeTo: nil) {
+        if let data = try? url.bookmarkData(
+            options: .withSecurityScope,
+            includingResourceValuesForKeys: nil, relativeTo: nil)
+        {
             bookmarkData = data
             return true
         }
@@ -36,15 +38,20 @@ final class CookieAccessManager {
     func resolveForDownload() -> (path: String?, granted: URL?) {
         guard let data = bookmarkData else { return (nil, nil) }
         var isStale = false
-        guard let url = try? URL(resolvingBookmarkData: data, options: .withSecurityScope,
-                                 relativeTo: nil, bookmarkDataIsStale: &isStale) else { return (nil, nil) }
+        guard
+            let url = try? URL(
+                resolvingBookmarkData: data, options: .withSecurityScope,
+                relativeTo: nil, bookmarkDataIsStale: &isStale)
+        else { return (nil, nil) }
         return (url.path, url)
     }
 
     /// Hold the security-scoped grant for `id` across `body` (started in `begin`,
     /// stopped via `defer`). Delegates to the per-item `CookieFileScope`.
-    func withScope<T>(for id: UUID, file: String?, grantedURL: URL?,
-                      _ body: () async throws -> T) async rethrows -> T {
+    func withScope<T>(
+        for id: UUID, file: String?, grantedURL: URL?,
+        _ body: () async throws -> T
+    ) async rethrows -> T {
         try await scope.withScope(for: id, file: file, grantedURL: grantedURL, body)
     }
 }
