@@ -93,10 +93,7 @@ enum FxTwitterService {
             let t = "\(nick) - \(String(text.prefix(100)))".trimmingCharacters(in: .whitespacesAndNewlines)
             item.title = t.hasSuffix("-") ? String(t.dropLast()).trimmingCharacters(in: .whitespaces) : t
         }
-        item.status = .completed
-        item.progress = 1.0
-        item.speed = nil
-        item.eta = nil
+        item.markCompleted()
         return true
     }
 

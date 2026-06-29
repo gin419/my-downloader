@@ -3,11 +3,10 @@ import Foundation
 /// Everything that distinguishes one site from another, gathered in one place.
 ///
 /// Goal of this abstraction: adding a site = add one profile to `SiteRegistry`;
-/// changing a site = edit only its profile, without risking other sites. This
-/// is the foundation (Phase 1) — it owns URL detection, the fallback-pipeline
-/// declaration, and the capability flags that used to be scattered as
-/// `SiteKind(url:) == .x` / `isYouTube` checks across the services. Later phases
-/// move the per-site *argument construction* itself in here too.
+/// changing a site = edit only its profile, without risking other sites. It owns
+/// URL detection, the fallback-pipeline declaration, the per-site argument
+/// construction (`galleryDlArgs` / `outputTemplateSuffix`), and the capability
+/// flags that used to be scattered as `SiteKind(url:) == .x` / `isYouTube` checks.
 struct SiteProfile {
 
     /// A tool tried after yt-dlp when it fails / finds no media.
@@ -20,9 +19,8 @@ struct SiteProfile {
     let id: String
     /// Whether this profile handles the given URL.
     let matches: (String) -> Bool
-    /// Ordered fallbacks tried after yt-dlp. Declared here as the single source
-    /// of truth; the orchestrator consumes the convenience flags below today and
-    /// will drive its whole fallback loop from this list in a later phase.
+    /// Ordered fallbacks tried after yt-dlp — the single source of truth; the
+    /// orchestrator drives its whole fallback loop from this list.
     let fallbacks: [Fallback]
 
     // MARK: Capability flags (replace the old scattered site checks)

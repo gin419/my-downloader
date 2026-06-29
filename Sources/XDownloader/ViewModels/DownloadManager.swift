@@ -132,7 +132,6 @@ class DownloadManager: ObservableObject {
         item.resetForReattempt()
         item.subtitleDownloadFailed = false
         item.subtitlesDisabled = false
-        item.retryCount += 1
         downloadQueue.append(item)
         saveQueue()
         drainQueue()
@@ -320,7 +319,7 @@ class DownloadManager: ObservableObject {
 
         // "Empty success": yt-dlp can exit 0 without writing any file. Seen on
         // Twitter for text-only tweets, quote-RTs whose referenced media yt-dlp
-        // can't reach, and sensitive content the current cookies don't unlock. Use cookies.txt export for X NSFW videos.
+        // can't reach, and sensitive content the current cookies don't unlock.
         // Use a cookies.txt export (Settings) for X adult/NSFW media that browser cookies can't reach.
         // gallery-dl often picks these up, so treat it the same as a non-zero
         // exit and let the fallback below try.
@@ -334,10 +333,7 @@ class DownloadManager: ObservableObject {
         // that partially downloaded) still fall through to the fallback below.
         let subtitleOnlyFailure = item.subtitleDownloadFailed && !hasFatalError
         if mediaCaptured && (ytExitCode == 0 || subtitleOnlyFailure) {
-            item.status = .completed
-            item.progress = 1.0
-            item.speed = nil
-            item.eta = nil
+            item.markCompleted()
             finalize(item)
             return
         }
