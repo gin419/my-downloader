@@ -91,15 +91,7 @@ enum GalleryDlService {
         }
 
         // Sync category from final counts (overrides whatever parseLine may have set).
-        let hasImg = (item.imageCount ?? 0) > 0
-        let hasVid = (item.videoCount ?? 0) > 0
-        if hasImg && hasVid {
-            item.mediaCategory = .mixed
-        } else if hasImg {
-            item.mediaCategory = .image
-        } else if hasVid {
-            item.mediaCategory = .video
-        }
+        item.recomputeMediaCategory()
 
         // Rename single-image files: strip trailing " #1" suffix.
         if newImages.count == 1, let path = item.outputPath {
@@ -120,10 +112,7 @@ enum GalleryDlService {
             item.title = displayTitle(forPath: path)
         }
 
-        item.status = .completed
-        item.progress = 1.0
-        item.speed = nil
-        item.eta = nil
+        item.markCompleted()
     }
 
     // MARK: - Output parsing

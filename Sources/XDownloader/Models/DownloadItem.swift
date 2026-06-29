@@ -117,7 +117,6 @@ class DownloadItem: Identifiable, ObservableObject {
     @Published var imageCount: Int?
     @Published var videoCount: Int?
     @Published var mediaCategory: MediaCategory = .unknown
-    @Published var retryCount: Int = 0
     /// In-memory only (NOT persisted). True once the auto-retry for an
     /// "empty success" — yt-dlp/gallery-dl exit 0 with no media — has fired
     /// for this item. Prevents infinite retry loops for tweets that are
@@ -169,6 +168,14 @@ class DownloadItem: Identifiable, ObservableObject {
         lastToolWarning = nil
     }
 
+    /// Mark this item finished: completed status, full progress, no live speed/eta.
+    func markCompleted() {
+        status = .completed
+        progress = 1.0
+        speed = nil
+        eta = nil
+    }
+
     init(persisted p: PersistedDownloadItem) {
         self.url = p.url
         self.addedAt = p.addedAt
@@ -182,7 +189,6 @@ class DownloadItem: Identifiable, ObservableObject {
         self.imageCount = p.imageCount
         self.videoCount = p.videoCount
         self.mediaCategory = p.mediaCategory
-        self.retryCount = p.retryCount
     }
 
     func toPersisted() -> PersistedDownloadItem {
@@ -205,8 +211,7 @@ class DownloadItem: Identifiable, ObservableObject {
             audioPath: audioPath,
             imageCount: imageCount,
             videoCount: videoCount,
-            mediaCategory: mediaCategory,
-            retryCount: retryCount
+            mediaCategory: mediaCategory
         )
     }
 
@@ -265,5 +270,4 @@ struct PersistedDownloadItem: Codable {
     let imageCount: Int?
     let videoCount: Int?
     let mediaCategory: MediaCategory
-    let retryCount: Int
 }
