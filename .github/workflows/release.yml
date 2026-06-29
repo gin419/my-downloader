@@ -1,10 +1,10 @@
 name: Release
 
-# Trigger by pushing a version tag: git tag v1.1 && git push origin v1.1
+# Trigger by pushing a 3-segment SemVer tag: git tag v1.5.0 && git push origin v1.5.0
 on:
   push:
     tags:
-      - 'v[0-9]*'
+      - 'v[0-9]+.[0-9]+.[0-9]+'
 
 jobs:
   # ── Step 1: security must pass before anything is built or published ─────────
