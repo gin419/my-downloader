@@ -31,7 +31,7 @@ enum GalleryDlService {
             item.url,
         ]
 
-        let exitCode = await runProcess(
+        let exitCode = await ProcessRunner.run(
             executablePath: executablePath,
             arguments: args,
             item: item,
