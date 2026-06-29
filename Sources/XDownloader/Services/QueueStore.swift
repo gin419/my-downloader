@@ -8,12 +8,7 @@ struct QueueStore {
 
     /// `directory` is injectable for tests; defaults to `~/Library/Application Support/XDownloader`.
     init(directory: URL? = nil) {
-        let fm = FileManager.default
-        let dir =
-            directory
-            ?? (fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? fm.homeDirectoryForCurrentUser).appendingPathComponent("XDownloader", isDirectory: true)
-        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        let dir = directory ?? FileManager.default.xdownloaderAppSupportDir()
         self.fileURL = dir.appendingPathComponent("queue.json")
     }
 

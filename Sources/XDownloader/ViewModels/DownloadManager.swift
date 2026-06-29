@@ -42,6 +42,7 @@ class DownloadManager: ObservableObject {
     private var pausedItemIDs: Set<UUID> = []
     private let history = HistoryStore()
     private let queueStore = QueueStore()
+    private let settingsStore = SettingsStore()
 
     // Resolved at runtime via RequirementsService so paths stay in one place.
     private var ytdlpPath: String { RequirementsService.ytdlp.installedPath ?? "yt-dlp" }
@@ -224,48 +225,46 @@ class DownloadManager: ObservableObject {
     // MARK: - Settings
 
     func saveSettings() {
-        let d = UserDefaults.standard
-        d.set(outputDirectory.absoluteString, forKey: "outputDirectory")
-        d.set(cookieBrowser.rawValue, forKey: "cookieBrowser")
-        d.set(cookiesFilePath, forKey: "cookiesFilePath")
-        if let bm = cookieAccess.bookmarkForSaving {
-            d.set(bm, forKey: "cookiesFileBookmarkData")
-        } else {
-            d.removeObject(forKey: "cookiesFileBookmarkData")
-        }
-        d.set(showDownloadDate, forKey: "showDownloadDate")
-        d.set(youtubeFormat.rawValue, forKey: "youtubeFormat")
-        d.set(videoQuality.rawValue, forKey: "videoQuality")
-        d.set(audioQuality.rawValue, forKey: "audioQuality")
-        d.set(subtitleLanguage.rawValue, forKey: "subtitleLanguage")
-        d.set(embedSubtitles, forKey: "embedSubtitles")
-        d.set(maxConcurrent, forKey: "maxConcurrent")
-        d.set(openPreference.rawValue, forKey: "openPreference")
-        d.set(autoDownloadOnPaste, forKey: "autoDownloadOnPaste")
-        d.set(saveHistoryEnabled, forKey: "saveHistoryEnabled")
+        settingsStore.save(currentSettings())
+    }
+
+    private func currentSettings() -> AppSettings {
+        AppSettings(
+            outputDirectory: outputDirectory,
+            cookieBrowser: cookieBrowser,
+            cookiesFilePath: cookiesFilePath,
+            cookiesFileBookmarkData: cookieAccess.bookmarkForSaving,
+            showDownloadDate: showDownloadDate,
+            youtubeFormat: youtubeFormat,
+            videoQuality: videoQuality,
+            audioQuality: audioQuality,
+            subtitleLanguage: subtitleLanguage,
+            embedSubtitles: embedSubtitles,
+            maxConcurrent: maxConcurrent,
+            openPreference: openPreference,
+            autoDownloadOnPaste: autoDownloadOnPaste,
+            saveHistoryEnabled: saveHistoryEnabled
+        )
     }
 
     // MARK: - Private
 
     private func loadSettings() {
-        let d = UserDefaults.standard
-        if let s = d.string(forKey: "outputDirectory"), let u = URL(string: s) { outputDirectory = u }
-        if let r = d.string(forKey: "cookieBrowser"), let v = CookieBrowser(rawValue: r) { cookieBrowser = v }
-        if let p = d.string(forKey: "cookiesFilePath"), !p.isEmpty { cookiesFilePath = p } else { cookiesFilePath = nil }
-        if let data = d.data(forKey: "cookiesFileBookmarkData") {
-            cookieAccess.loadBookmark(data)
-        }
-        if let r = d.string(forKey: "youtubeFormat"), let v = YouTubeFormat(rawValue: r) { youtubeFormat = v }
-        if let r = d.string(forKey: "videoQuality"), let v = VideoQuality(rawValue: r) { videoQuality = v }
-        if let r = d.string(forKey: "audioQuality"), let v = AudioQuality(rawValue: r) { audioQuality = v }
-        if let r = d.string(forKey: "subtitleLanguage"), let v = SubtitleLanguage(rawValue: r) { subtitleLanguage = v }
-        if let r = d.string(forKey: "openPreference"), let v = OpenPreference(rawValue: r) { openPreference = v }
-        showDownloadDate = d.bool(forKey: "showDownloadDate")
-        embedSubtitles = d.object(forKey: "embedSubtitles") as? Bool ?? true
-        autoDownloadOnPaste = d.bool(forKey: "autoDownloadOnPaste")
-        saveHistoryEnabled = d.object(forKey: "saveHistoryEnabled") as? Bool ?? true
-        let stored = d.integer(forKey: "maxConcurrent")
-        if stored > 0 { maxConcurrent = stored }
+        let s = settingsStore.load(fallback: currentSettings())
+        outputDirectory = s.outputDirectory
+        cookieBrowser = s.cookieBrowser
+        cookiesFilePath = s.cookiesFilePath
+        if let bm = s.cookiesFileBookmarkData { cookieAccess.loadBookmark(bm) }
+        showDownloadDate = s.showDownloadDate
+        youtubeFormat = s.youtubeFormat
+        videoQuality = s.videoQuality
+        audioQuality = s.audioQuality
+        subtitleLanguage = s.subtitleLanguage
+        embedSubtitles = s.embedSubtitles
+        maxConcurrent = s.maxConcurrent
+        openPreference = s.openPreference
+        autoDownloadOnPaste = s.autoDownloadOnPaste
+        saveHistoryEnabled = s.saveHistoryEnabled
     }
 
     private func drainQueue() {
@@ -303,7 +302,7 @@ class DownloadManager: ObservableObject {
                 cookiesFile: cookies.path
             )
 
-            ytExitCode = await runProcess(
+            ytExitCode = await ProcessRunner.run(
                 executablePath: ytdlpPath,
                 arguments: args,
                 item: item,

@@ -26,12 +26,7 @@ final class HistoryStore {
     private var db: OpaquePointer?
 
     init() {
-        let fm = FileManager.default
-        let base =
-            fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? fm.homeDirectoryForCurrentUser
-        let dir = base.appendingPathComponent("XDownloader", isDirectory: true)
-        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        let dir = FileManager.default.xdownloaderAppSupportDir()
         self.fileURL = dir.appendingPathComponent("history.sqlite")
         open()
     }

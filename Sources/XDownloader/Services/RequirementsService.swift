@@ -84,9 +84,9 @@ enum RequirementsService {
     ) async -> Int32 {
         guard let brew = brewPath else { return -1 }
         var env = ProcessInfo.processInfo.environment
-        env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+        env["PATH"] = Homebrew.fullPATH
         env["HOMEBREW_NO_AUTO_UPDATE"] = "1"
-        return await runRawProcess(
+        return await ProcessRunner.runRaw(
             executablePath: brew,
             arguments: ["install"] + tools.map(\.brewPackage),
             environment: env,
