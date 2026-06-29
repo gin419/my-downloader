@@ -3,13 +3,13 @@ import SwiftUI
 struct DownloadRowView: View {
     @ObservedObject var item: DownloadItem
     @EnvironmentObject var manager: DownloadManager
-    let onReveal:   () -> Void
-    let onRemove:   () -> Void
-    let onRetry:    () -> Void
+    let onReveal: () -> Void
+    let onRemove: () -> Void
+    let onRetry: () -> Void
     let onCopyLink: () -> Void
-    let onOpen:     () -> Void
-    let onPause:    () -> Void
-    let onResume:   () -> Void
+    let onOpen: () -> Void
+    let onPause: () -> Void
+    let onResume: () -> Void
 
     @State private var titleHovered = false
 
@@ -289,15 +289,15 @@ struct DownloadRowView: View {
 
     private var rowBackground: some ShapeStyle {
         if item.status == .completed { return AnyShapeStyle(Color.green.opacity(0.05)) }
-        if item.status == .paused    { return AnyShapeStyle(Color.yellow.opacity(0.06)) }
-        if isFailed                  { return AnyShapeStyle(Color.red.opacity(0.05)) }
+        if item.status == .paused { return AnyShapeStyle(Color.yellow.opacity(0.06)) }
+        if isFailed { return AnyShapeStyle(Color.red.opacity(0.05)) }
         return AnyShapeStyle(Color(nsColor: .controlBackgroundColor))
     }
 
     private var borderColor: Color {
         if item.status == .completed { return .green.opacity(0.2) }
-        if item.status == .paused    { return .yellow.opacity(0.25) }
-        if isFailed                  { return .red.opacity(0.2) }
+        if item.status == .paused { return .yellow.opacity(0.25) }
+        if isFailed { return .red.opacity(0.2) }
         return Color.primary.opacity(0.08)
     }
 

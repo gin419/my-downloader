@@ -9,7 +9,9 @@ struct QueueStore {
     /// `directory` is injectable for tests; defaults to `~/Library/Application Support/XDownloader`.
     init(directory: URL? = nil) {
         let fm = FileManager.default
-        let dir = directory ?? (fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+        let dir =
+            directory
+            ?? (fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? fm.homeDirectoryForCurrentUser).appendingPathComponent("XDownloader", isDirectory: true)
         try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
         self.fileURL = dir.appendingPathComponent("queue.json")
@@ -30,8 +32,9 @@ struct QueueStore {
     /// The persisted snapshot, or `[]` when the file is missing or unreadable.
     func load() -> [PersistedDownloadItem] {
         guard FileManager.default.fileExists(atPath: fileURL.path),
-              let data = try? Data(contentsOf: fileURL),
-              let persisted = try? JSONDecoder().decode([PersistedDownloadItem].self, from: data) else {
+            let data = try? Data(contentsOf: fileURL),
+            let persisted = try? JSONDecoder().decode([PersistedDownloadItem].self, from: data)
+        else {
             return []
         }
         return persisted

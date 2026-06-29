@@ -14,7 +14,7 @@ final class CookieFileScope {
         let url: URL
         if let g = grantedURL {
             url = g
-            _ = g.startAccessingSecurityScopedResource() // re-ensure while we hold ref
+            _ = g.startAccessingSecurityScopedResource()  // re-ensure while we hold ref
         } else if let f = file, !f.isEmpty {
             url = URL(fileURLWithPath: f)
             if !url.startAccessingSecurityScopedResource() { return nil }

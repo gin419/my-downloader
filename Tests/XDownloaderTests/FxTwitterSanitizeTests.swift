@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import XDownloader
 
 /// `FxTwitterService.sanitize` keeps fxtwitter filenames in step with what

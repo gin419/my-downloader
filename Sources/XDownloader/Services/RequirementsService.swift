@@ -1,7 +1,7 @@
 import Foundation
 
 struct ToolRequirement: Identifiable {
-    let id: String          // stable, used as dict key
+    let id: String  // stable, used as dict key
     let name: String
     let brewPackage: String
     let docsURL: String

@@ -10,54 +10,54 @@ enum YouTubeFormat: String, CaseIterable, Identifiable {
     var displayName: String {
         switch self {
         case .videoAndAudio: return "Video + Audio"
-        case .singleFile:    return "Video Only"
-        case .audioOnly:     return "Audio Only"
+        case .singleFile: return "Video Only"
+        case .audioOnly: return "Audio Only"
         }
     }
 }
 
 enum SubtitleLanguage: String, CaseIterable, Identifiable {
-    case none              = ""
-    case english           = "en"
+    case none = ""
+    case english = "en"
     case chineseTraditional = "zh-Hant"
-    case chineseSimplified  = "zh-Hans"
-    case japanese          = "ja"
-    case korean            = "ko"
-    case spanish           = "es"
-    case french            = "fr"
+    case chineseSimplified = "zh-Hans"
+    case japanese = "ja"
+    case korean = "ko"
+    case spanish = "es"
+    case french = "fr"
 
     var id: String { rawValue }
 
     var displayName: String {
         switch self {
-        case .none:               return "None"
-        case .english:            return "English"
+        case .none: return "None"
+        case .english: return "English"
         case .chineseTraditional: return "Chinese (Traditional)"
-        case .chineseSimplified:  return "Chinese (Simplified)"
-        case .japanese:           return "Japanese"
-        case .korean:             return "Korean"
-        case .spanish:            return "Spanish"
-        case .french:             return "French"
+        case .chineseSimplified: return "Chinese (Simplified)"
+        case .japanese: return "Japanese"
+        case .korean: return "Korean"
+        case .spanish: return "Spanish"
+        case .french: return "French"
         }
     }
 }
 
 enum VideoQuality: String, CaseIterable, Identifiable {
-    case best  = "best"
+    case best = "best"
     case p1080 = "1080"
-    case p720  = "720"
-    case p480  = "480"
-    case p360  = "360"
+    case p720 = "720"
+    case p480 = "480"
+    case p360 = "360"
 
     var id: String { rawValue }
 
     var displayName: String {
         switch self {
-        case .best:  return "Best"
+        case .best: return "Best"
         case .p1080: return "1080p"
-        case .p720:  return "720p"
-        case .p480:  return "480p"
-        case .p360:  return "360p"
+        case .p720: return "720p"
+        case .p480: return "480p"
+        case .p360: return "360p"
         }
     }
 
@@ -100,21 +100,21 @@ enum OpenPreference: String, CaseIterable, Identifiable {
 }
 
 enum CookieBrowser: String, CaseIterable, Identifiable {
-    case safari  = "safari"
-    case chrome  = "chrome"
+    case safari = "safari"
+    case chrome = "chrome"
     case firefox = "firefox"
-    case edge    = "edge"
-    case none    = ""
+    case edge = "edge"
+    case none = ""
 
     var id: String { rawValue }
 
     var displayName: String {
         switch self {
-        case .safari:  return "Safari"
-        case .chrome:  return "Chrome"
+        case .safari: return "Safari"
+        case .chrome: return "Chrome"
         case .firefox: return "Firefox"
-        case .edge:    return "Edge"
-        case .none:    return "None"
+        case .edge: return "Edge"
+        case .none: return "None"
         }
     }
 }

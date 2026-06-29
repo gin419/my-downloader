@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import XDownloader
 
 /// `YtDlpService.buildArguments` assembles the full yt-dlp command line. It is the
@@ -9,11 +10,13 @@ final class YtDlpServiceArgsTests: XCTestCase {
 
     private let out = URL(fileURLWithPath: "/out")
 
-    private func args(_ item: DownloadItem,
-                      format: YouTubeFormat = .videoAndAudio,
-                      subtitle: SubtitleLanguage = .none,
-                      browser: CookieBrowser = .none,
-                      file: String? = nil) -> [String] {
+    private func args(
+        _ item: DownloadItem,
+        format: YouTubeFormat = .videoAndAudio,
+        subtitle: SubtitleLanguage = .none,
+        browser: CookieBrowser = .none,
+        file: String? = nil
+    ) -> [String] {
         YtDlpService.buildArguments(
             for: item, outputDirectory: out, format: format,
             videoQuality: .best, audioQuality: .best, subtitleLanguage: subtitle,

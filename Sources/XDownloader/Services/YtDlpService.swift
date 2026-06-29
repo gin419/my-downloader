@@ -25,7 +25,7 @@ enum YtDlpService {
         var args: [String] = []
         args += CookieArgs.make(browser: cookieBrowser, file: cookiesFile)
 
-        let hf = videoQuality.heightFilter ?? ""   // e.g. "[height<=1080]" or ""
+        let hf = videoQuality.heightFilter ?? ""  // e.g. "[height<=1080]" or ""
 
         switch format {
         case .audioOnly:
@@ -41,14 +41,16 @@ enum YtDlpService {
             // "Requested format is not available" failure.
             if profile.usesYouTubeFormatSelector {
                 args += [
-                    "--format", "bestvideo[vcodec^=avc][ext=mp4]\(hf)+bestaudio[ext=m4a]/bestvideo[ext=mp4]\(hf)+bestaudio[ext=m4a]/bestvideo\(hf)+bestaudio/bestvideo+bestaudio/bv*+ba/b",
+                    "--format",
+                    "bestvideo[vcodec^=avc][ext=mp4]\(hf)+bestaudio[ext=m4a]/bestvideo[ext=mp4]\(hf)+bestaudio[ext=m4a]/bestvideo\(hf)+bestaudio/bestvideo+bestaudio/bv*+ba/b",
                     "--merge-output-format", "mp4",
                 ]
             } else {
                 // Prefer HTTPS combined streams; m3u8/HLS tokens expire quickly and can
                 // cause "Requested format is not available" before the download starts.
                 args += [
-                    "--format", "bestvideo*[acodec!=none][ext=mp4][protocol^=https]\(hf)/bestvideo*[acodec!=none][ext=mp4]\(hf)/best[acodec!=none]\(hf)/bv*+ba/b",
+                    "--format",
+                    "bestvideo*[acodec!=none][ext=mp4][protocol^=https]\(hf)/bestvideo*[acodec!=none][ext=mp4]\(hf)/best[acodec!=none]\(hf)/bv*+ba/b",
                     "--merge-output-format", "mp4",
                 ]
             }
@@ -58,7 +60,8 @@ enum YtDlpService {
             // streams too (not just video-only), so even degenerate YouTube
             // responses with only HLS combined streams still resolve.
             args += [
-                "--format", "bestvideo[vcodec^=avc][ext=mp4]\(hf)+bestaudio[ext=m4a]/bestvideo[ext=mp4]\(hf)+bestaudio[ext=m4a]/bestvideo\(hf)+bestaudio/bestvideo+bestaudio/bv*+ba/b",
+                "--format",
+                "bestvideo[vcodec^=avc][ext=mp4]\(hf)+bestaudio[ext=m4a]/bestvideo[ext=mp4]\(hf)+bestaudio[ext=m4a]/bestvideo\(hf)+bestaudio/bestvideo+bestaudio/bv*+ba/b",
                 "--merge-output-format", "mp4",
             ]
         }
@@ -114,23 +117,26 @@ enum YtDlpService {
                 if token.hasSuffix("%"), let pct = Double(token.dropLast()) {
                     item.progress = min(pct / 100.0, 1.0)
                 }
-                if token == "of",  i + 1 < tokens.count { item.totalSize = tokens[i + 1] }
-                if token == "at",  i + 1 < tokens.count { item.speed    = tokens[i + 1] }
-                if token == "ETA", i + 1 < tokens.count { item.eta      = tokens[i + 1] }
+                if token == "of", i + 1 < tokens.count { item.totalSize = tokens[i + 1] }
+                if token == "at", i + 1 < tokens.count { item.speed = tokens[i + 1] }
+                if token == "ETA", i + 1 < tokens.count { item.eta = tokens[i + 1] }
             }
             return
         }
 
         // Destination: track video/audio/image paths and infer title
         if line.hasPrefix("[download]") && line.contains("Destination:"),
-           let range = line.range(of: "Destination: ") {
+            let range = line.range(of: "Destination: ")
+        {
             let path = String(line[range.upperBound...])
-            let ext  = (path as NSString).pathExtension.lowercased()
+            let ext = (path as NSString).pathExtension.lowercased()
             let isImage = MediaExtensions.image.contains(ext)
             let isAudio = MediaExtensions.audio.contains(ext)
 
             if !isImage {
-                if isAudio { item.audioPath = path } else {
+                if isAudio {
+                    item.audioPath = path
+                } else {
                     item.videoPath = path
                     item.videoCount = (item.videoCount ?? 0) + 1
                 }
@@ -146,28 +152,30 @@ enum YtDlpService {
             }
             if isImage { item.imageCount = (item.imageCount ?? 0) + 1 }
 
-            item.recomputeMediaCategory()   // update category progressively as files land
+            item.recomputeMediaCategory()  // update category progressively as files land
 
             return
         }
 
         // Merger: final merged output file
         if (line.hasPrefix("[Merger]") || line.hasPrefix("[ffmpeg]")) && line.contains("Merging formats into"),
-           let q1 = line.firstIndex(of: "\""),
-           let q2 = line.lastIndex(of: "\""),
-           q1 != q2 {
+            let q1 = line.firstIndex(of: "\""),
+            let q2 = line.lastIndex(of: "\""),
+            q1 != q2
+        {
             let path = String(line[line.index(after: q1)..<q2])
-            item.videoPath  = path
+            item.videoPath = path
             item.outputPath = path
             return
         }
 
         // ExtractAudio: final audio-only output file
         if line.hasPrefix("[ExtractAudio]") && line.contains("Destination:"),
-           let range = line.range(of: "Destination: ") {
+            let range = line.range(of: "Destination: ")
+        {
             let path = String(line[range.upperBound...])
-            item.audioPath     = path
-            item.outputPath    = path
+            item.audioPath = path
+            item.outputPath = path
             item.mediaCategory = .audio
             return
         }
@@ -175,10 +183,11 @@ enum YtDlpService {
         // External redirect detection: yt-dlp followed a link out of the tweet.
         // Kill the process immediately so gallery-dl can handle the original tweet URL.
         if SiteRegistry.profile(for: item.url).detectsExternalRedirect,
-           (line.hasPrefix("[generic]") || line.hasPrefix("[redirect]")),
-           let urlRange = line.range(of: "(?:Extracting URL|Following redirect to): (https?://\\S+)", options: .regularExpression),
-           let detected = line[urlRange].components(separatedBy: ": ").last,
-           !SiteRegistry.isTwitterContent(detected) {
+            line.hasPrefix("[generic]") || line.hasPrefix("[redirect]"),
+            let urlRange = line.range(of: "(?:Extracting URL|Following redirect to): (https?://\\S+)", options: .regularExpression),
+            let detected = line[urlRange].components(separatedBy: ": ").last,
+            !SiteRegistry.isTwitterContent(detected)
+        {
             terminate()
             item.status = .failed("external_redirect")
             return

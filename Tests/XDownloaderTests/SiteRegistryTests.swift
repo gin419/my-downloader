@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import XDownloader
 
 /// `SiteRegistry` is the single source of truth for per-site behavior. First

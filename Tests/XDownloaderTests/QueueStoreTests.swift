@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import XDownloader
 
 /// `QueueStore` persists the download queue to JSON. Tests use an injected temp

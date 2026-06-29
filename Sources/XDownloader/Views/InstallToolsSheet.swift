@@ -1,5 +1,5 @@
-import SwiftUI
 import AppKit
+import SwiftUI
 
 struct InstallToolsSheet: View {
     @EnvironmentObject var manager: DownloadManager
@@ -11,7 +11,10 @@ struct InstallToolsSheet: View {
     @State private var log: [String] = []
     @State private var scrollProxy: ScrollViewProxy? = nil
 
-    enum InstallState { case idle, running, done(success: Bool) }
+    enum InstallState {
+        case idle, running
+        case done(success: Bool)
+    }
 
     // MARK: - Body
 
@@ -210,7 +213,10 @@ struct InstallToolsSheet: View {
 
     private func startInstall() {
         let stillMissing = tools.filter { !$0.isInstalled }
-        guard !stillMissing.isEmpty else { dismiss(); return }
+        guard !stillMissing.isEmpty else {
+            dismiss()
+            return
+        }
 
         log = []
         withAnimation { installState = .running }
