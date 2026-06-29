@@ -178,8 +178,10 @@ struct InstallToolsSheet: View {
                         Text(tool.name)
                             .font(.system(size: 13, weight: .medium))
                         Spacer()
-                        Link("Docs ↗", destination: URL(string: tool.docsURL)!)
-                            .font(.system(size: 11))
+                        if let docs = URL(string: tool.docsURL) {
+                            Link("Docs ↗", destination: docs)
+                                .font(.system(size: 11))
+                        }
                     }
 
                     HStack(spacing: 8) {

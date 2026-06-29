@@ -129,18 +129,7 @@ class DownloadManager: ObservableObject {
 
     func retryItem(_ item: DownloadItem) {
         item.status = .queued
-        item.progress = 0
-        item.speed = nil
-        item.eta = nil
-        item.totalSize = nil
-        item.outputPath = nil
-        item.videoPath = nil
-        item.audioPath = nil
-        item.title = nil
-        item.imageCount = nil
-        item.videoCount = nil
-        item.mediaCategory = .unknown
-        item.lastToolWarning = nil
+        item.resetForReattempt()
         item.subtitleDownloadFailed = false
         item.subtitlesDisabled = false
         item.retryCount += 1
@@ -208,9 +197,17 @@ class DownloadManager: ObservableObject {
     /// Returns the `--cookies` path + granted URL; for a plain path with no bookmark,
     /// falls back to the display path with no grant.
     func resolveCookiesForDownload() -> (path: String?, granted: URL?) {
-        let resolved = cookieAccess.resolveForDownload()
-        if let p = resolved.path { cookiesFilePath = p }  // keep the display path in sync
-        return (resolved.path ?? cookiesFilePath, resolved.granted)
+        switch cookieAccess.resolveForDownload() {
+        case .none:
+            return (cookiesFilePath, nil)  // no bookmark: plain display path (or nil), no grant
+        case .resolved(let path, let granted):
+            cookiesFilePath = path  // keep the display path in sync with the resolved location
+            return (path, granted)
+        case .bookmarkFailed:
+            // Stale/moved cookies.txt: don't hand yt-dlp an ungranted --cookies path that would
+            // override and break browser cookies — fall back to --cookies-from-browser.
+            return (nil, nil)
+        }
     }
 
     func setCookiesFile(from url: URL) {
@@ -418,17 +415,7 @@ class DownloadManager: ObservableObject {
         if isEmptySuccess && !item.autoRetryAttempted {
             item.autoRetryAttempted = true
             item.status = .fetching
-            item.progress = 0
-            item.speed = nil
-            item.eta = nil
-            item.imageCount = nil
-            item.videoCount = nil
-            item.outputPath = nil
-            item.videoPath = nil
-            item.audioPath = nil
-            item.title = nil
-            item.mediaCategory = .unknown
-            item.lastToolWarning = nil
+            item.resetForReattempt()
             saveQueue()
             try? await Task.sleep(nanoseconds: 5_000_000_000)
             await runDownload(item)
@@ -443,13 +430,7 @@ class DownloadManager: ObservableObject {
     /// is `.completed` or `.failed`.
     private func runGalleryDlFallback(_ item: DownloadItem, executablePath: String) async {
         item.status = .fetching
-        item.progress = 0
-        item.imageCount = nil
-        item.outputPath = nil
-        item.videoPath = nil
-        item.audioPath = nil
-        item.title = nil
-        item.lastToolWarning = nil
+        item.resetForReattempt()
 
         let cookies = resolveCookiesForDownload()
         await cookieAccess.withScope(for: item.id, file: cookies.path, grantedURL: cookies.granted) {

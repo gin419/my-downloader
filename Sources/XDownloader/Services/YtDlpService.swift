@@ -136,6 +136,7 @@ enum YtDlpService {
             if !isImage {
                 if isAudio {
                     item.audioPath = path
+                    item.mediaCategory = .audio  // a direct .mp3/.m4a download (not via [ExtractAudio])
                 } else {
                     item.videoPath = path
                     item.videoCount = (item.videoCount ?? 0) + 1

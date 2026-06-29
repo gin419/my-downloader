@@ -6,6 +6,13 @@ import Foundation
 /// `DownloadManager` because it's `@Published` and bound to the Settings UI.
 @MainActor
 final class CookieAccessManager {
+    /// Outcome of resolving the saved cookies bookmark for a download.
+    enum Resolution {
+        case none  // no cookies file configured
+        case resolved(path: String, granted: URL)  // bookmark resolved to a usable URL
+        case bookmarkFailed  // a bookmark exists but won't resolve (file moved/deleted/stale)
+    }
+
     private var bookmarkData: Data?
     private let scope = CookieFileScope()
 
@@ -32,18 +39,23 @@ final class CookieAccessManager {
 
     func clear() { bookmarkData = nil }
 
-    /// Resolve the bookmark fresh for one download: the `--cookies` path and the
-    /// granted security-scoped URL. `(nil, nil)` when there's no usable bookmark
-    /// (the caller then uses its plain display path). Resolving fresh avoids stale grants.
-    func resolveForDownload() -> (path: String?, granted: URL?) {
-        guard let data = bookmarkData else { return (nil, nil) }
+    /// Resolve the bookmark fresh for one download. Distinguishes "no bookmark"
+    /// (caller uses its plain display path) from "bookmark failed" (caller should
+    /// fall back to the cookie browser instead of an ungranted --cookies path).
+    /// Resolving fresh each time avoids stale grants.
+    func resolveForDownload() -> Resolution {
+        guard let data = bookmarkData else { return .none }
         var isStale = false
         guard
             let url = try? URL(
                 resolvingBookmarkData: data, options: .withSecurityScope,
                 relativeTo: nil, bookmarkDataIsStale: &isStale)
-        else { return (nil, nil) }
-        return (url.path, url)
+        else { return .bookmarkFailed }
+        // It resolved, so it's usable for this download; if the file later truly
+        // moves we hit .bookmarkFailed and fall back to the browser. (We don't
+        // regenerate a stale bookmark here — that needs an active access scope.)
+        _ = isStale
+        return .resolved(path: url.path, granted: url)
     }
 
     /// Hold the security-scoped grant for `id` across `body` (started in `begin`,
