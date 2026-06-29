@@ -12,6 +12,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history + tags so build.sh can stamp the version from the git tag
 
       - name: Select Xcode
         run: sudo xcode-select -s /Applications/Xcode_16.app
@@ -24,3 +26,11 @@ jobs:
 
       - name: Build (release)
         run: swift build -c release
+
+      # Exercise build.sh end-to-end (bundling + tag version-stamping) without publishing.
+      - name: Bundle smoke test
+        run: |
+          ./build.sh release
+          test -x build/XDownloader.app/Contents/MacOS/XDownloader
+          echo "Stamped version: $(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' build/XDownloader.app/Contents/Info.plist)"
+          /usr/libexec/PlistBuddy -c "Print :CFBundleVersion" build/XDownloader.app/Contents/Info.plist >/dev/null
