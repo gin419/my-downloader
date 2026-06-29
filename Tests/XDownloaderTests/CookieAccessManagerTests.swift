@@ -9,11 +9,9 @@ import XCTest
 @MainActor
 final class CookieAccessManagerTests: XCTestCase {
 
-    func testNoBookmarkResolvesToNil() {
+    func testNoBookmarkResolvesToNone() {
         let m = CookieAccessManager()
-        let r = m.resolveForDownload()
-        XCTAssertNil(r.path)
-        XCTAssertNil(r.granted)
+        guard case .none = m.resolveForDownload() else { return XCTFail("expected .none") }
         XCTAssertNil(m.bookmarkForSaving)
     }
 
@@ -24,10 +22,13 @@ final class CookieAccessManagerTests: XCTestCase {
         XCTAssertEqual(m.bookmarkForSaving, data)
     }
 
-    func testInvalidBookmarkResolvesToNil() {
+    /// A saved bookmark that no longer resolves (file moved/deleted) must report
+    /// .bookmarkFailed so DownloadManager falls back to the cookie browser rather
+    /// than handing yt-dlp an ungranted --cookies path.
+    func testInvalidBookmarkResolvesToBookmarkFailed() {
         let m = CookieAccessManager()
         m.loadBookmark(Data([1, 2, 3]))  // not a real security-scoped bookmark
-        XCTAssertNil(m.resolveForDownload().path)
+        guard case .bookmarkFailed = m.resolveForDownload() else { return XCTFail("expected .bookmarkFailed") }
     }
 
     func testClearRemovesBookmark() {

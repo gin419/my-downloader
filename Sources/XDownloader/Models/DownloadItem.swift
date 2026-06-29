@@ -152,6 +152,23 @@ class DownloadItem: Identifiable, ObservableObject {
         if hasImg && hasVid { mediaCategory = .mixed } else if hasImg { mediaCategory = .image } else if hasVid { mediaCategory = .video }
     }
 
+    /// Clear all per-attempt media-result state so a re-run starts fresh. Keeps
+    /// url/addedAt and the retry/subtitle flags; callers set `status` as needed.
+    func resetForReattempt() {
+        progress = 0
+        speed = nil
+        eta = nil
+        totalSize = nil
+        outputPath = nil
+        videoPath = nil
+        audioPath = nil
+        title = nil
+        imageCount = nil
+        videoCount = nil
+        mediaCategory = .unknown
+        lastToolWarning = nil
+    }
+
     init(persisted p: PersistedDownloadItem) {
         self.url = p.url
         self.addedAt = p.addedAt
@@ -224,7 +241,9 @@ class DownloadItem: Identifiable, ObservableObject {
         case "TIB": multiplier = 1_099_511_627_776
         default: return nil
         }
-        return Int64(value * multiplier)
+        let bytes = value * multiplier
+        guard bytes.isFinite, bytes >= 0 else { return nil }
+        return Int64(exactly: bytes.rounded())
     }
 
     /// True when total size is known and ≥ 100 MB — gates the Stop/Resume controls.

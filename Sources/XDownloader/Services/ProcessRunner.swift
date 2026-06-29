@@ -1,5 +1,31 @@
 import Foundation
 
+/// Accumulates bytes across reads and yields only complete newline-terminated lines
+/// (lossily UTF-8 decoded), so a line — or a multi-byte character — split across two
+/// `availableData` chunks isn't truncated or dropped. `flush()` returns any trailing
+/// partial line. Reads for one pipe are serialized; the lock guards the race with
+/// `flush()` after the handler is detached.
+private final class LineBuffer: @unchecked Sendable {
+    private var data = Data()
+    private let lock = NSLock()
+    func take(_ chunk: Data) -> [String] {
+        lock.lock(); defer { lock.unlock() }
+        data.append(chunk)
+        var lines: [String] = []
+        while let nl = data.firstIndex(of: 0x0A) {
+            lines.append(String(decoding: data[data.startIndex..<nl], as: UTF8.self))
+            data.removeSubrange(data.startIndex...nl)
+        }
+        return lines
+    }
+    func flush() -> String? {
+        lock.lock(); defer { lock.unlock() }
+        guard !data.isEmpty else { return nil }
+        defer { data.removeAll() }
+        return String(decoding: data, as: UTF8.self)
+    }
+}
+
 /// Runs an external process and streams its stdout/stderr through `lineParser`.
 /// `register` is called with the live Process before launch (for cancellation support).
 /// `unregister` is called after the process exits.
@@ -37,20 +63,22 @@ func runProcess(
 
     register(process)
 
-    let makeHandler: (FileHandle) -> @Sendable (FileHandle) -> Void = { handle in
-        return { @Sendable _ in
-            let data = handle.availableData
-            guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
+    let stdoutBuffer = LineBuffer()
+    let stderrBuffer = LineBuffer()
+    func makeHandler(_ buffer: LineBuffer) -> @Sendable (FileHandle) -> Void {
+        return { @Sendable handle in
+            let lines = buffer.take(handle.availableData)
+            guard !lines.isEmpty else { return }
             Task { @MainActor in
-                for line in text.components(separatedBy: .newlines) {
+                for line in lines {
                     lineParser(line.trimmingCharacters(in: .whitespaces), item)
                 }
             }
         }
     }
 
-    stdout.fileHandleForReading.readabilityHandler = makeHandler(stdout.fileHandleForReading)
-    stderr.fileHandleForReading.readabilityHandler = makeHandler(stderr.fileHandleForReading)
+    stdout.fileHandleForReading.readabilityHandler = makeHandler(stdoutBuffer)
+    stderr.fileHandleForReading.readabilityHandler = makeHandler(stderrBuffer)
 
     do {
         try process.run()
@@ -66,6 +94,12 @@ func runProcess(
 
     stdout.fileHandleForReading.readabilityHandler = nil
     stderr.fileHandleForReading.readabilityHandler = nil
+    // Flush any trailing partial line (final output without a newline).
+    for tail in [stdoutBuffer.flush(), stderrBuffer.flush()] {
+        if let trimmed = tail?.trimmingCharacters(in: .whitespaces), !trimmed.isEmpty {
+            lineParser(trimmed, item)
+        }
+    }
     unregister()
 
     return process.terminationStatus
@@ -91,18 +125,22 @@ func runRawProcess(
     process.standardOutput = stdout
     process.standardError = stderr
 
-    let handler: @Sendable (FileHandle) -> Void = { handle in
-        let data = handle.availableData
-        guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
-        Task { @MainActor in
-            for line in text.components(separatedBy: .newlines) {
-                let t = line.trimmingCharacters(in: .whitespaces)
-                if !t.isEmpty { onLine(t) }
+    let stdoutBuffer = LineBuffer()
+    let stderrBuffer = LineBuffer()
+    func makeHandler(_ buffer: LineBuffer) -> @Sendable (FileHandle) -> Void {
+        return { @Sendable handle in
+            let lines = buffer.take(handle.availableData)
+            guard !lines.isEmpty else { return }
+            Task { @MainActor in
+                for line in lines {
+                    let t = line.trimmingCharacters(in: .whitespaces)
+                    if !t.isEmpty { onLine(t) }
+                }
             }
         }
     }
-    stdout.fileHandleForReading.readabilityHandler = { @Sendable h in handler(h) }
-    stderr.fileHandleForReading.readabilityHandler = { @Sendable h in handler(h) }
+    stdout.fileHandleForReading.readabilityHandler = makeHandler(stdoutBuffer)
+    stderr.fileHandleForReading.readabilityHandler = makeHandler(stderrBuffer)
 
     do { try process.run() } catch { return -1 }
 
@@ -112,5 +150,10 @@ func runRawProcess(
 
     stdout.fileHandleForReading.readabilityHandler = nil
     stderr.fileHandleForReading.readabilityHandler = nil
+    for tail in [stdoutBuffer.flush(), stderrBuffer.flush()] {
+        if let t = tail?.trimmingCharacters(in: .whitespaces), !t.isEmpty {
+            await MainActor.run { onLine(t) }
+        }
+    }
     return process.terminationStatus
 }
