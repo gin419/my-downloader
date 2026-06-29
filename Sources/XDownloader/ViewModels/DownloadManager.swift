@@ -42,6 +42,7 @@ class DownloadManager: ObservableObject {
     /// `terminate()` from a real download failure when the process exits.
     private var pausedItemIDs: Set<UUID> = []
     private let history = HistoryStore()
+    private let queueStore = QueueStore()
 
     // Resolved at runtime via RequirementsService so paths stay in one place.
     private var ytdlpPath: String  { RequirementsService.ytdlp.installedPath    ?? "yt-dlp"     }
@@ -609,34 +610,13 @@ class DownloadManager: ObservableObject {
 
     // MARK: - Queue persistence
 
-    private var queueFileURL: URL {
-        let fm = FileManager.default
-        let base = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? fm.homeDirectoryForCurrentUser
-        let dir = base.appendingPathComponent("XDownloader", isDirectory: true)
-        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir.appendingPathComponent("queue.json")
-    }
-
     private func saveQueue() {
-        let snapshot = items.map { $0.toPersisted() }
-        do {
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            let data = try encoder.encode(snapshot)
-            try data.write(to: queueFileURL, options: .atomic)
-        } catch {
-            // best-effort: don't surface persistence failures to the user
-        }
+        queueStore.save(items.map { $0.toPersisted() })
     }
 
     private func loadQueue() {
-        let url = queueFileURL
-        guard FileManager.default.fileExists(atPath: url.path),
-              let data = try? Data(contentsOf: url),
-              let persisted = try? JSONDecoder().decode([PersistedDownloadItem].self, from: data) else {
-            return
-        }
+        let persisted = queueStore.load()
+        guard !persisted.isEmpty else { return }
 
         // Preserve display order (newest first). Re-queue non-completed items
         // in original chronological order (oldest first) so they download in
