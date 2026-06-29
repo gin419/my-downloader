@@ -10,10 +10,12 @@
     <string>X Downloader</string>
     <key>CFBundleDisplayName</key>
     <string>X Downloader</string>
+    <!-- Sentinel: the real version is stamped from the git tag by build.sh /
+         release.yml. If a build ever ships "0.0.0", the tag-stamping was skipped. -->
     <key>CFBundleVersion</key>
-    <string>1.4.2</string>
+    <string>0</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.4.2</string>
+    <string>0.0.0</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleIconFile</key>

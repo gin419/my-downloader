@@ -36,6 +36,14 @@ if GIT_DESC=$(git describe --tags --long --dirty=-dirty 2>/dev/null); then
         -c "Set :CFBundleVersion $BUILD" \
         "$BUNDLE_NAME/Contents/Info.plist"
     echo "📌 Stamped: $SHORT_VERSION (build $BUILD, $GIT_DESC)"
+elif [ "$CONFIG" = "release" ]; then
+    # The source Info.plist carries a 0.0.0 sentinel, so a release with no tag
+    # would ship "0.0.0". Make the tag the single source of truth: fail loudly.
+    echo "❌ No git tag found — release builds must come from a tagged commit so the" >&2
+    echo "   version can be stamped. Tag first:  git tag vX.Y.Z && ./build.sh release" >&2
+    exit 1
+else
+    echo "⚠️  No git tag found — leaving the 0.0.0 sentinel version (debug build)."
 fi
 
 if [ -f "Resources/AppIcon.icns" ]; then
