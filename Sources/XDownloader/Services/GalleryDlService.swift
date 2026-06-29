@@ -16,7 +16,7 @@ enum GalleryDlService {
     ) async {
         let beforeFiles = Set((try? FileManager.default.contentsOfDirectory(atPath: outputDirectory.path)) ?? [])
 
-        var args = cookieArgs(cookieBrowser, cookiesFile: cookiesFile)
+        var args = CookieArgs.make(browser: cookieBrowser, file: cookiesFile)
         args += [
             "--dest", outputDirectory.path,
             "-D", ".",
@@ -48,8 +48,8 @@ enum GalleryDlService {
         }
 
         // Detect newly created media files since the download started.
-        let imageExts = Set(["jpg", "jpeg", "png", "webp", "gif", "avif"])
-        let videoExts = Set(["mp4", "mov", "webm", "mkv", "m4v"])
+        let imageExts = MediaExtensions.image
+        let videoExts = MediaExtensions.video
         let afterFiles = (try? FileManager.default.contentsOfDirectory(atPath: outputDirectory.path)) ?? []
 
         func ext(_ name: String) -> String { URL(fileURLWithPath: name).pathExtension.lowercased() }
@@ -136,11 +136,10 @@ enum GalleryDlService {
         let pathLine = isSkipLine ? String(line.dropFirst(2)) : line
         if pathLine.hasPrefix("/") || pathLine.hasPrefix("~") {
             let ext = (pathLine as NSString).pathExtension.lowercased()
-            let knownMedia = ["jpg", "jpeg", "png", "webp", "gif", "avif", "mp4", "mov", "webm", "m4a", "mp3"]
-            guard knownMedia.contains(ext) else { return }
+            guard MediaExtensions.all.contains(ext) else { return }
 
-            let isImage = ["jpg", "jpeg", "png", "webp", "gif", "avif"].contains(ext)
-            let isVideo = ["mp4", "mov", "webm", "mkv", "m4v"].contains(ext)
+            let isImage = MediaExtensions.image.contains(ext)
+            let isVideo = MediaExtensions.video.contains(ext)
             item.status     = .downloading
             item.outputPath = pathLine
             if isImage {
@@ -148,12 +147,7 @@ enum GalleryDlService {
             } else if isVideo {
                 item.videoCount = (item.videoCount ?? 0) + 1
             }
-            // Update category progressively
-            let hasImg = (item.imageCount ?? 0) > 0
-            let hasVid = (item.videoCount ?? 0) > 0
-            if hasImg && hasVid       { item.mediaCategory = .mixed }
-            else if hasImg            { item.mediaCategory = .image }
-            else if hasVid            { item.mediaCategory = .video }
+            item.recomputeMediaCategory()   // update category progressively
 
             if item.title == nil {
                 item.title = displayTitle(forPath: pathLine)
@@ -201,9 +195,5 @@ enum GalleryDlService {
             }
         }
         return stem
-    }
-
-    private static func cookieArgs(_ browser: CookieBrowser, cookiesFile: String? = nil) -> [String] {
-        return CookieArgs.make(browser: browser, file: cookiesFile)
     }
 }

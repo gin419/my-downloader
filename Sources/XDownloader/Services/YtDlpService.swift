@@ -108,8 +108,8 @@ enum YtDlpService {
            let range = line.range(of: "Destination: ") {
             let path = String(line[range.upperBound...])
             let ext  = (path as NSString).pathExtension.lowercased()
-            let isImage = ["jpg", "jpeg", "png", "webp"].contains(ext)
-            let isAudio = ["m4a", "aac", "ogg", "opus", "weba"].contains(ext)
+            let isImage = MediaExtensions.image.contains(ext)
+            let isAudio = MediaExtensions.audio.contains(ext)
 
             if !isImage {
                 if isAudio { item.audioPath = path } else {
@@ -144,12 +144,7 @@ enum YtDlpService {
             }
             if isImage { item.imageCount = (item.imageCount ?? 0) + 1 }
 
-            // Update category progressively as files land
-            let hasImg = (item.imageCount ?? 0) > 0
-            let hasVid = (item.videoCount ?? 0) > 0
-            if hasImg && hasVid       { item.mediaCategory = .mixed }
-            else if hasImg            { item.mediaCategory = .image }
-            else if hasVid            { item.mediaCategory = .video }
+            item.recomputeMediaCategory()   // update category progressively as files land
 
             return
         }

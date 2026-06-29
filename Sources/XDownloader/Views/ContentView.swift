@@ -428,7 +428,7 @@ struct ContentView: View {
         }
         let prefix = String(stem[..<range.lowerBound]) + " #"
         let dir = url.deletingLastPathComponent()
-        let imageExts: Set<String> = ["jpg", "jpeg", "png", "webp", "gif", "avif"]
+        let imageExts = MediaExtensions.image
 
         guard let entries = try? FileManager.default.contentsOfDirectory(atPath: dir.path) else {
             return [url]
