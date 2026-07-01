@@ -62,11 +62,6 @@ Entries before _Unreleased_ were back-filled from git history.
 ### Fixed
 - Include the Homebrew `PATH` when launching yt-dlp/gallery-dl (so `ffmpeg`/`deno` resolve).
 
-## [1.1] — 2026-05-28
-
-### Added
-- Automated GitHub release workflow; made the security scan a reusable workflow.
-
 ## [1.0.1] — 2026-05-29
 
 ### Added
@@ -75,6 +70,11 @@ Entries before _Unreleased_ were back-filled from git history.
 ### Fixed
 - Set `mediaCategory` across all gallery-dl download paths.
 - Renamed the "Single File" format label to "Video Only".
+
+## [1.1] — 2026-05-28
+
+### Added
+- Automated GitHub release workflow; made the security scan a reusable workflow.
 
 ## [1.0] — 2026-05-28
 

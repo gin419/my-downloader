@@ -70,9 +70,14 @@ enum FxTwitterService {
 
             if !FileManager.default.fileExists(atPath: dest.path) {
                 item.status = .downloading
-                guard let tmp = try? await URLSession.shared.download(from: entry.url).0,
-                    (try? FileManager.default.moveItem(at: tmp, to: dest)) != nil
-                else {
+                guard let tmp = try? await URLSession.shared.download(from: entry.url).0
+                else { continue }
+                do {
+                    try FileManager.default.moveItem(at: tmp, to: dest)
+                } catch {
+                    // Don't strand the downloaded bytes in the temp dir when the
+                    // move fails (e.g. destination volume full or unwritable).
+                    try? FileManager.default.removeItem(at: tmp)
                     continue
                 }
             }
