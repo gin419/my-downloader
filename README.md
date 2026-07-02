@@ -170,23 +170,12 @@ See [FEATURES.md](docs/FEATURES.md) for the canonical list.
 
 ## Roadmap
 
-<details>
-<summary><strong>What's next</strong></summary>
+The end state: an app you could hand to someone who has never heard of
+`yt-dlp` — one gesture in, file out, no Homebrew, no terminal. Next up:
+finish notifications, batch input, then menu bar presence and self-managed
+tools.
 
-### Near-term
-- macOS notification when a download completes
-- Batch input — paste many URLs at once
-- Menu bar icon with live download count
-
-### Future
-- In-app preview (thumbnail or inline player)
-- Per-download format override
-- Share Sheet / browser extension
-- Import from a text file of URLs
-
-</details>
-
-See [ROADMAP.md](docs/ROADMAP.md) for the source of truth.
+See [ROADMAP.md](docs/ROADMAP.md) for the full plan — it's the source of truth.
 
 ---
 
