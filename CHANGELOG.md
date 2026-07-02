@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Entries before _Unreleased_ were back-filled from git history.
 
+## [Unreleased]
+
+### Added
+- **Quiet Funnel main window** — hero "Paste & Download" button reads the clipboard and downloads in one click; with text in the URL field the same slot morphs to "Download" (#36).
+- **Status-line feedback** — a fixed line under the capture row answers every capture ("Queued 3 links", "No link found in the clipboard", "Already in your list" with scroll-and-pulse) without shifting the layout; a macOS 15.4+ clipboard-permission denial is called out with a System Settings shortcut (#36).
+- **Cancel on every row** — queued and in-progress downloads can be removed with their ✕, and cancelling genuinely stops the download: no fallback resurrection, no history entry (#36).
+
+### Changed
+- **The paste button always downloads** — the "Auto-download on paste" setting is removed; the button label is the behavior. The review-first flow remains: click the field, ⌘V, Enter (#36).
+- A batch containing several already-downloaded links asks once ("Download All Again / Skip All") instead of once per link (#36).
+- Rows are more compact: the URL appears once per row, media counts moved into the chip's tooltip, and "Stop" is renamed "Pause" (#36).
+- Notification permission is requested at the first finished download (chained into delivery) instead of the first enqueue, keeping it clear of the clipboard consent prompt (#36).
+- Link hygiene: wrapping punctuation is trimmed from pasted links, a lone bare `x.com/…` works without `https://`, and `t` joined the tracking-param strip list so x.com share links dedup (#36).
+
+### Fixed
+- Progress bars expose their value to VoiceOver, and the mouse cursor no longer sticks as a pointing hand when a hovered row is removed (#36).
+
 ## [1.5.0] — 2026-07-02
 
 ### Added
