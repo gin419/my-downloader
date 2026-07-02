@@ -16,7 +16,7 @@ final class SettingsStoreTests: XCTestCase {
             showDownloadDate: false, youtubeFormat: .videoAndAudio, videoQuality: .best,
             audioQuality: .best, subtitleLanguage: .none, embedSubtitles: true,
             maxConcurrent: 2, openPreference: .video,
-            saveHistoryEnabled: true)
+            saveHistoryEnabled: true, showMenuBarExtra: true)
     }
 
     func testSaveLoadRoundtrip() {
@@ -27,6 +27,7 @@ final class SettingsStoreTests: XCTestCase {
         saved.maxConcurrent = 4
         saved.embedSubtitles = false
         saved.saveHistoryEnabled = false
+        saved.showMenuBarExtra = false
         saved.cookiesFilePath = "/c.txt"
         saved.cookiesFileBookmarkData = Data([9])
         store.save(saved)
@@ -37,6 +38,7 @@ final class SettingsStoreTests: XCTestCase {
         XCTAssertEqual(loaded.maxConcurrent, 4)
         XCTAssertFalse(loaded.embedSubtitles)  // round-tripped false, not the `true` fallback
         XCTAssertFalse(loaded.saveHistoryEnabled)
+        XCTAssertFalse(loaded.showMenuBarExtra)
         XCTAssertEqual(loaded.cookiesFilePath, "/c.txt")
         XCTAssertEqual(loaded.cookiesFileBookmarkData, Data([9]))
     }

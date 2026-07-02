@@ -5,7 +5,10 @@ struct XDownloaderApp: App {
     @StateObject private var manager = DownloadManager()
 
     var body: some Scene {
-        WindowGroup {
+        // Window (not WindowGroup): the menu bar's "Open XDownloader" must
+        // raise the ONE existing window via openWindow(id:), never spawn a
+        // second queue view.
+        Window("X Downloader", id: "main") {
             ContentView()
                 .environmentObject(manager)
                 .frame(minWidth: 560, minHeight: 460)
@@ -24,9 +27,28 @@ struct XDownloaderApp: App {
             }
         }
 
+        MenuBarExtra(isInserted: menuBarInserted) {
+            MenuBarMenuView(manager: manager)
+        } label: {
+            MenuBarLabelView(manager: manager)
+        }
+        .menuBarExtraStyle(.menu)
+
         Settings {
             SettingsView()
                 .environmentObject(manager)
         }
+    }
+
+    /// Routed through saveSettings so ⌘-dragging the icon out of the menu bar
+    /// (which flips isInserted without touching SettingsView) persists too.
+    private var menuBarInserted: Binding<Bool> {
+        Binding(
+            get: { manager.showMenuBarExtra },
+            set: { inserted in
+                manager.showMenuBarExtra = inserted
+                manager.saveSettings()
+            }
+        )
     }
 }
