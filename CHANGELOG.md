@@ -9,6 +9,8 @@ Entries before _Unreleased_ were back-filled from git history.
 ## [Unreleased]
 
 ### Added
+- **Finish notifications** — a macOS notification announces a completed or failed download while the app is in the background.
+- **Batch input** — paste, drop, or ⌘D text containing any number of links and they all queue at once; multiple "already downloaded" warnings are shown one after another.
 - **cookies.txt file support** — point Settings at an exported `cookies.txt` for stubborn authenticated content (e.g. X sensitive/NSFW media); it takes precedence over the cookie-browser setting and is accessed under a sandbox security-scoped bookmark (#13).
 - Test suite — a `XDownloaderTests` target run on CI (#16, #18).
 - App-icon generator tracked at `scripts/make_icon.swift`, so the icon is reproducible from source (#17).
@@ -16,8 +18,12 @@ Entries before _Unreleased_ were back-filled from git history.
 ### Changed
 - Relicensed **MIT → AGPL-3.0** (copyleft) (#15).
 - Repository restructure: gitleaks config under `.github/gitleaks/`, docs under `docs/`, build output to a gitignored `build/` (#16).
+- Internal hardening wave (#19–#31): back-filled CHANGELOG, version single-sourced from the git tag, swift-format + test + bundle-smoke CI gates, and `DownloadManager` decomposed into `QueueStore`/`CookieAccessManager`/`SettingsStore` services.
 
 ### Fixed
+- The **⌘D "Paste and Download"** menu command was wired to nothing and had never worked; it now pastes and downloads immediately (#33).
+- FxTwitter fallback no longer strands temp files when the move to the download folder fails (#33).
+- CI Security Scan false positive: gitleaks' community rules self-matched their own literal patterns in the repo's history (#32).
 - Media-extension classification: the image/video extension lists had drifted apart across services — yt-dlp's image check omitted `gif`/`avif`, and gallery-dl's known-media set omitted `mkv`/`m4v` (a dead branch). Unified into `MediaExtensions` (#18).
 
 ## [1.4.2] — 2026-06-22

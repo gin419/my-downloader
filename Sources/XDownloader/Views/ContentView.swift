@@ -92,7 +92,7 @@ struct ContentView: View {
                 } else {
                     _ = provider.loadObject(ofClass: String.self) { str, _ in
                         if let s = str {
-                            Task { @MainActor in manager.addDownload(urlString: s) }
+                            Task { @MainActor in manager.addDownloads(from: s) }
                         }
                     }
                 }
@@ -114,9 +114,9 @@ struct ContentView: View {
         ) { dup in
             Button("Cancel", role: .cancel) { manager.dismissDuplicate() }
             if dup.priorFileExists {
-                Button("Show in Finder") { manager.revealDuplicatePriorFile() }
+                Button("Show in Finder") { manager.revealDuplicatePriorFile(dup) }
             }
-            Button("Download again") { manager.confirmDuplicateDownload() }
+            Button("Download again") { manager.confirmDuplicateDownload(dup) }
         } message: { dup in
             Text(duplicateMessage(dup))
         }
@@ -377,7 +377,7 @@ struct ContentView: View {
         guard !trimmed.isEmpty else { return }
         let before = manager.items.count
         withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
-            manager.addDownload(urlString: trimmed)
+            manager.addDownloads(from: trimmed)
         }
         if manager.items.count > before { urlInput = "" }
     }
@@ -389,7 +389,7 @@ struct ContentView: View {
         else { return }
         if manager.autoDownloadOnPaste || forceDownload {
             withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
-                manager.addDownload(urlString: text)
+                manager.addDownloads(from: text)
             }
         } else {
             urlInput = text
