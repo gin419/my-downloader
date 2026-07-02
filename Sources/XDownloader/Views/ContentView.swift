@@ -33,6 +33,8 @@ enum DownloadFilter: String, CaseIterable, Identifiable {
 
 struct ContentView: View {
     @EnvironmentObject var manager: DownloadManager
+    @EnvironmentObject var appDelegate: AppDelegate
+    @Environment(\.openWindow) private var openWindow
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var urlInput: String = ""
     @State private var isHoveringDrop = false
@@ -76,7 +78,18 @@ struct ContentView: View {
             }
         }
         .background(Color(nsColor: .windowBackgroundColor))
-        .onChange(of: manager.captureFeedback) { _, feedback in
+        .onAppear {
+            appDelegate.attach(
+                manager: manager,
+                openMainWindow: {
+                    openWindow(id: "main")
+                    NSApp.activate(ignoringOtherApps: true)
+                })
+        }
+        // initial: true — a capture can land while the window is closed
+        // (URL scheme, import); when the window then opens, its side effects
+        // (filter reset, highlight, announcement) must still run.
+        .onChange(of: manager.captureFeedback, initial: true) { _, feedback in
             guard let feedback else { return }
             // The status line must never lie: if it says "Queued 3", the list
             // has to show them — so a successful capture resets the filter.

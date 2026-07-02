@@ -28,5 +28,16 @@
     <true/>
     <key>NSHumanReadableCopyright</key>
     <string>Copyright © 2025–2026</string>
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>com.gin.xdownloader.url</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>xdownloader</string>
+            </array>
+        </dict>
+    </array>
 </dict>
 </plist>

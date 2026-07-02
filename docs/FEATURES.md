@@ -6,6 +6,8 @@
 - **Batch input** — text with any number of links (one per line, or mixed with prose) queues them all at once; works via paste, drop, and ⌘D
 - **Drag & drop** — drag a URL from any app directly onto the window
 - **`⌘D` shortcut** — "Paste and Download" from the menu bar
+- **Import from file (`⌘O`)** — File → Import Links… reads a plain-text file (one link per line, or mixed with prose) and queues everything through the same capture flow
+- **`xdownloader://` URL scheme** — for Shortcuts, Raycast, and scripts: `xdownloader://download?url=<percent-encoded link>` (repeat `url=` for batches, `urls=` works too); queues quietly in the background and only raises the window when something needs attention. There is deliberately no clipboard verb — webpages can fire scheme URLs, and clipboard reads stay tied to in-app gestures
 - **Status line feedback** — every capture answers in place ("Queued 3 links", "No link found in the clipboard", "Already in your list — highlighted below") without shifting the layout; on macOS 15.4+ a denied clipboard permission is called out with a System Settings shortcut
 - **Link cleanup** — wrapping punctuation is trimmed from pasted links, and a bare `x.com/…` link works without typing `https://`
 
