@@ -25,6 +25,14 @@ final class URLTrackingParamsTests: XCTestCase {
             "https://youtu.be/abc")
     }
 
+    func testStripsXShareLinkParams() {
+        // x.com share links carry ?s=46&t=… — both must go or the same post
+        // never dedups against its bare URL.
+        XCTAssertEqual(
+            DownloadManager.stripTrackingParams("https://x.com/a/status/1?s=46&t=AbC_dEf"),
+            "https://x.com/a/status/1")
+    }
+
     func testLeavesNonTrackingParamsUntouched() {
         XCTAssertEqual(
             DownloadManager.stripTrackingParams("https://example.com/p?keep=1"),

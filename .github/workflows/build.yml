@@ -15,7 +15,8 @@ jobs:
           fetch-depth: 0   # full history + tags so build.sh can stamp the version from the git tag
 
       - name: Select Xcode
-        run: sudo xcode-select -s /Applications/Xcode_16.app
+        # Needs the macOS 15.4 SDK (NSPasteboard.accessBehavior) → Xcode 16.3+.
+        run: sudo xcode-select -s /Applications/Xcode_16.4.app
 
       - name: Lint (swift-format)
         run: swift format lint --strict --recursive Sources Tests

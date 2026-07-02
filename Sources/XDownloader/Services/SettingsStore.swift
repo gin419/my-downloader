@@ -16,7 +16,6 @@ struct AppSettings {
     var embedSubtitles: Bool
     var maxConcurrent: Int
     var openPreference: OpenPreference
-    var autoDownloadOnPaste: Bool
     var saveHistoryEnabled: Bool
 }
 
@@ -45,8 +44,10 @@ struct SettingsStore {
         d.set(s.embedSubtitles, forKey: "embedSubtitles")
         d.set(s.maxConcurrent, forKey: "maxConcurrent")
         d.set(s.openPreference.rawValue, forKey: "openPreference")
-        d.set(s.autoDownloadOnPaste, forKey: "autoDownloadOnPaste")
         d.set(s.saveHistoryEnabled, forKey: "saveHistoryEnabled")
+        // v1.6 removed the auto-download-on-paste toggle — the Paste & Download
+        // button's label IS the behavior now. Clean up the orphaned key.
+        d.removeObject(forKey: "autoDownloadOnPaste")
     }
 
     /// Load persisted settings, using `fallback` for any key not present.
@@ -64,7 +65,6 @@ struct SettingsStore {
         if let r = d.string(forKey: "openPreference"), let v = OpenPreference(rawValue: r) { s.openPreference = v }
         s.showDownloadDate = d.bool(forKey: "showDownloadDate")
         s.embedSubtitles = d.object(forKey: "embedSubtitles") as? Bool ?? fallback.embedSubtitles
-        s.autoDownloadOnPaste = d.bool(forKey: "autoDownloadOnPaste")
         s.saveHistoryEnabled = d.object(forKey: "saveHistoryEnabled") as? Bool ?? fallback.saveHistoryEnabled
         let stored = d.integer(forKey: "maxConcurrent")
         if stored > 0 { s.maxConcurrent = stored }

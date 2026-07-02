@@ -33,11 +33,17 @@ enum DownloadFilter: String, CaseIterable, Identifiable {
 
 struct ContentView: View {
     @EnvironmentObject var manager: DownloadManager
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var urlInput: String = ""
     @State private var isHoveringDrop = false
     @State private var showInstallSheet = false
     @State private var bannerDismissed = false
     @State private var statusFilter: DownloadFilter = .all
+    /// "Already in your list": the row to scroll to and pulse.
+    @State private var scrollTarget: UUID?
+    @State private var pulseID: UUID?
+    @State private var pulseVisible = false
+    @State private var pulseTask: Task<Void, Never>?
     @FocusState private var isInputFocused: Bool
 
     private var showBanner: Bool {
@@ -70,32 +76,42 @@ struct ContentView: View {
             }
         }
         .background(Color(nsColor: .windowBackgroundColor))
-        .onReceive(NotificationCenter.default.publisher(for: .pasteAndDownload)) { _ in
-            // ⌘D is an explicit "download this now" — bypass the auto-download-on-paste setting.
-            pasteFromClipboard(forceDownload: true)
+        .onChange(of: manager.captureFeedback) { _, feedback in
+            guard let feedback else { return }
+            // The status line must never lie: if it says "Queued 3", the list
+            // has to show them — so a successful capture resets the filter.
+            if feedback.kind == .success || feedback.highlightItemID != nil {
+                statusFilter = .all
+            }
+            if let id = feedback.highlightItemID {
+                scrollTarget = id
+                if !reduceMotion { pulse(id) }
+            }
+            AccessibilityNotification.Announcement(feedback.message).post()
         }
         .sheet(isPresented: $showInstallSheet, onDismiss: { bannerDismissed = manager.missingTools.isEmpty }) {
             InstallToolsSheet(tools: manager.missingTools)
                 .environmentObject(manager)
         }
         .onDrop(of: [.plainText, .url], isTargeted: $isHoveringDrop) { providers in
-            for provider in providers {
-                // Prefer the URL representation; only fall back to plain text if a
-                // URL isn't available — otherwise both handlers fire and the same
-                // link gets queued twice.
-                if provider.canLoadObject(ofClass: URL.self) {
-                    _ = provider.loadObject(ofClass: URL.self) { url, _ in
-                        if let u = url {
-                            Task { @MainActor in manager.addDownload(urlString: u.absoluteString) }
+            // Collect every provider first so one drop gesture is ONE capture —
+            // one status line, one merged duplicate dialog — instead of N.
+            Task { @MainActor in
+                var tokens: [String] = []
+                for provider in providers {
+                    // Prefer the URL representation; only fall back to plain
+                    // text if a URL isn't available — otherwise both handlers
+                    // fire and the same link gets queued twice.
+                    if provider.canLoadObject(ofClass: URL.self) {
+                        if let url = await loadDropped(URL.self, from: provider) {
+                            tokens.append(url.absoluteString)
                         }
-                    }
-                } else {
-                    _ = provider.loadObject(ofClass: String.self) { str, _ in
-                        if let s = str {
-                            Task { @MainActor in manager.addDownloads(from: s) }
-                        }
+                    } else if let text = await loadDropped(String.self, from: provider) {
+                        tokens.append(text)
                     }
                 }
+                guard !tokens.isEmpty else { return }
+                manager.capture(text: tokens.joined(separator: "\n"), source: .drop)
             }
             return true
         }
@@ -107,22 +123,30 @@ struct ContentView: View {
         .alert(
             "Already downloaded",
             isPresented: Binding(
-                get: { manager.pendingDuplicate != nil },
-                set: { if !$0 { manager.dismissDuplicate() } }
+                get: { manager.pendingDuplicates != nil },
+                set: { if !$0 { manager.dismissDuplicates() } }
             ),
-            presenting: manager.pendingDuplicate
-        ) { dup in
-            Button("Cancel", role: .cancel) { manager.dismissDuplicate() }
-            if dup.priorFileExists {
-                Button("Show in Finder") { manager.revealDuplicatePriorFile(dup) }
+            presenting: manager.pendingDuplicates
+        ) { batch in
+            if let dup = batch.single {
+                Button("Cancel", role: .cancel) { manager.dismissDuplicates() }
+                if dup.priorFileExists {
+                    Button("Show in Finder") { manager.revealDuplicatePriorFile(dup) }
+                }
+                Button("Download again") { manager.confirmDuplicateDownloads(batch) }
+            } else {
+                Button("Skip All", role: .cancel) { manager.dismissDuplicates() }
+                Button("Download All Again") { manager.confirmDuplicateDownloads(batch) }
             }
-            Button("Download again") { manager.confirmDuplicateDownload(dup) }
-        } message: { dup in
-            Text(duplicateMessage(dup))
+        } message: { batch in
+            Text(duplicateMessage(batch))
         }
     }
 
-    private func duplicateMessage(_ dup: DuplicateConfirmation) -> String {
+    private func duplicateMessage(_ batch: DuplicateBatch) -> String {
+        guard let dup = batch.single else {
+            return "\(batch.confirmations.count) of these links are already in your download history."
+        }
         let dateStr = dup.priorEntry.finishedAt.formatted(date: .abbreviated, time: .shortened)
         var lines = ["You downloaded this link on \(dateStr)."]
         if let path = dup.priorEntry.outputPath {
@@ -138,31 +162,14 @@ struct ContentView: View {
     // MARK: - URL Input
 
     private var urlInputSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            if let notice = manager.notice {
-                HStack(spacing: 6) {
-                    Image(systemName: "info.circle.fill")
-                        .font(.system(size: 12))
-                        .foregroundColor(.orange)
-                    Text(notice)
-                        .font(.system(size: 12))
-                        .foregroundColor(.orange)
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.orange.opacity(0.1))
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-                .transition(.move(edge: .top).combined(with: .opacity))
-            }
-
+        VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 10) {
                 HStack(spacing: 8) {
                     Image(systemName: "link")
                         .font(.system(size: 14, weight: .medium))
                         .foregroundColor(urlInput.isEmpty ? .secondary : .blue)
 
-                    TextField("Paste an X.com URL...", text: $urlInput)
+                    TextField("Type or paste a URL...", text: $urlInput)
                         .textFieldStyle(.plain)
                         .font(.system(size: 14))
                         .focused($isInputFocused)
@@ -194,35 +201,91 @@ struct ContentView: View {
                 )
                 .animation(.easeInOut(duration: 0.15), value: isInputFocused)
 
-                Button(action: submitURL) {
-                    Text("Download")
-                        .font(.system(size: 13, weight: .semibold))
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 9)
-                        .background(
-                            RoundedRectangle(cornerRadius: 10)
-                                .fill(urlInput.isEmpty ? Color.blue.opacity(0.4) : Color.blue)
-                        )
-                        .foregroundColor(.white)
-                }
-                .buttonStyle(.plain)
-                .disabled(urlInput.isEmpty)
+                captureButton
             }
 
+            statusLine
+        }
+    }
+
+    /// The hero button: one fixed-width slot whose label always tells the
+    /// truth. Empty field → "Paste & Download" reads the clipboard and
+    /// downloads; field has text → the same slot morphs to "Download".
+    /// Deliberately NOT the window's default button — Enter on an empty
+    /// field must never trigger a clipboard read.
+    private var captureButton: some View {
+        Button {
+            if urlInput.isEmpty {
+                manager.captureFromClipboard()
+            } else {
+                submitURL()
+            }
+        } label: {
             HStack(spacing: 6) {
-                Button(action: { pasteFromClipboard() }) {
-                    Label("Paste from Clipboard", systemImage: "doc.on.clipboard")
-                        .font(.system(size: 12))
+                if urlInput.isEmpty {
+                    Image(systemName: "doc.on.clipboard")
+                        .font(.system(size: 12, weight: .semibold))
                 }
-                .buttonStyle(.plain)
-                .foregroundColor(.secondary)
-
-                Text("·").foregroundColor(.secondary)
-
-                Text("or drag & drop a URL here")
-                    .font(.system(size: 12))
-                    .foregroundColor(.secondary)
+                Text(urlInput.isEmpty ? "Paste & Download" : "Download")
+                    .font(.system(size: 13, weight: .semibold))
             }
+            .frame(width: 150)
+            .padding(.vertical, 9)
+            .background(RoundedRectangle(cornerRadius: 10).fill(Color.blue))
+            .foregroundColor(.white)
+        }
+        .buttonStyle(.plain)
+        .help(
+            urlInput.isEmpty
+                ? "Download the link(s) on the clipboard"
+                : "Download this link")
+    }
+
+    /// Fixed-height feedback slot under the capture row — messages fade in
+    /// place and never push the layout (unlike the old orange banner).
+    private var statusLine: some View {
+        HStack(spacing: 6) {
+            if let feedback = manager.captureFeedback {
+                Image(systemName: feedbackSymbol(feedback))
+                    .font(.system(size: 11))
+                Text(feedback.message)
+                    .lineLimit(1)
+                if feedback.offersPrivacySettings {
+                    Button("Open System Settings") { manager.openPasteboardPrivacySettings() }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 11, weight: .semibold))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 1)
+                        .background(
+                            Capsule().strokeBorder(Color.primary.opacity(0.25), lineWidth: 0.5)
+                        )
+                        .foregroundColor(.primary)
+                }
+            } else {
+                Text("Drop links anywhere · multiple links OK")
+            }
+        }
+        .font(.system(size: 12))
+        .foregroundColor(manager.captureFeedback.map(feedbackColor) ?? .secondary)
+        .frame(height: 18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .transition(.opacity)
+    }
+
+    private func feedbackSymbol(_ feedback: CaptureFeedback) -> String {
+        if feedback.offersPrivacySettings { return "nosign" }
+        switch feedback.kind {
+        case .success: return "checkmark.circle.fill"
+        case .info: return "info.circle.fill"
+        case .warning: return "exclamationmark.triangle.fill"
+        }
+    }
+
+    private func feedbackColor(_ feedback: CaptureFeedback) -> Color {
+        switch feedback.kind {
+        case .success: return .green
+        case .info: return .blue
+        case .warning: return .orange
         }
     }
 
@@ -238,33 +301,50 @@ struct ContentView: View {
             if filtered.isEmpty {
                 emptyFilterState
             } else {
-                ScrollView {
-                    LazyVStack(spacing: 8) {
-                        ForEach(filtered) { item in
-                            DownloadRowView(
-                                item: item,
-                                onReveal: { manager.revealInFinder(item) },
-                                onRemove: {
-                                    withAnimation(.easeOut(duration: 0.2)) { manager.removeItem(item) }
-                                },
-                                onRetry: { manager.retryItem(item) },
-                                onCopyLink: {
-                                    NSPasteboard.general.clearContents()
-                                    NSPasteboard.general.setString(item.url, forType: .string)
-                                },
-                                onOpen: { openFile(item) },
-                                onPause: { manager.pauseItem(item) },
-                                onResume: { manager.resumeItem(item) }
-                            )
-                            .transition(
-                                .asymmetric(
-                                    insertion: .move(edge: .top).combined(with: .opacity),
-                                    removal: .opacity
-                                ))
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(spacing: 8) {
+                            ForEach(filtered) { item in
+                                DownloadRowView(
+                                    item: item,
+                                    onReveal: { manager.revealInFinder(item) },
+                                    onRemove: {
+                                        withAnimation(.easeOut(duration: 0.2)) { manager.removeItem(item) }
+                                    },
+                                    onRetry: { manager.retryItem(item) },
+                                    onCopyLink: {
+                                        NSPasteboard.general.clearContents()
+                                        NSPasteboard.general.setString(item.url, forType: .string)
+                                    },
+                                    onOpen: { openFile(item) },
+                                    onPause: { manager.pauseItem(item) },
+                                    onResume: { manager.resumeItem(item) }
+                                )
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 12)
+                                        .strokeBorder(Color.blue, lineWidth: 2)
+                                        .opacity(pulseID == item.id && pulseVisible ? 1 : 0)
+                                )
+                                .transition(
+                                    .asymmetric(
+                                        insertion: .move(edge: .top).combined(with: .opacity),
+                                        removal: .opacity
+                                    ))
+                            }
                         }
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 16)
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 16)
+                    // initial: true — when the highlight lands while a filter
+                    // shows the empty state, this ScrollViewReader is inserted
+                    // in the same render pass that sets scrollTarget, and a
+                    // plain onChange would never fire for it.
+                    .onChange(of: scrollTarget, initial: true) { _, target in
+                        guard let target else { return }
+                        // No scroll animation — the pulse is the attention cue.
+                        proxy.scrollTo(target, anchor: .center)
+                        scrollTarget = nil
+                    }
                 }
             }
         }
@@ -359,7 +439,7 @@ struct ContentView: View {
                 Text("No downloads yet")
                     .font(.system(size: 16, weight: .semibold))
 
-                Text("Paste an X.com post URL above to\ndownload videos or images.")
+                Text("Paste a link above to download\nvideos or images.")
                     .font(.system(size: 13))
                     .foregroundColor(.secondary)
                     .multilineTextAlignment(.center)
@@ -375,25 +455,46 @@ struct ContentView: View {
     private func submitURL() {
         let trimmed = urlInput.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        let before = manager.items.count
-        withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
-            manager.addDownloads(from: trimmed)
-        }
-        if manager.items.count > before { urlInput = "" }
+        let result = manager.capture(text: trimmed, source: .field)
+        // Clear only once the text actually landed (queued, or already in the
+        // list). "No link" keeps it for fixing in place; a pending duplicate
+        // confirmation keeps it so Cancel doesn't swallow the URL.
+        if result.queued > 0 || result.alreadyPresent > 0 { urlInput = "" }
     }
 
-    private func pasteFromClipboard(forceDownload: Bool = false) {
-        guard
-            let text = NSPasteboard.general.string(forType: .string)?
-                .trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty
-        else { return }
-        if manager.autoDownloadOnPaste || forceDownload {
-            withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
-                manager.addDownloads(from: text)
+    private func loadDropped(_ type: URL.Type, from provider: NSItemProvider) async -> URL? {
+        await withCheckedContinuation { continuation in
+            _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                continuation.resume(returning: url)
             }
-        } else {
-            urlInput = text
-            isInputFocused = true
+        }
+    }
+
+    private func loadDropped(_ type: String.Type, from provider: NSItemProvider) async -> String? {
+        await withCheckedContinuation { continuation in
+            _ = provider.loadObject(ofClass: String.self) { text, _ in
+                continuation.resume(returning: text)
+            }
+        }
+    }
+
+    /// Pulse the row's border twice, then clear. Skipped entirely under
+    /// Reduce Motion (the scroll-to still happens). A newer pulse cancels the
+    /// older task so two never fight over the shared blink state.
+    private func pulse(_ id: UUID) {
+        pulseTask?.cancel()
+        pulseID = id
+        pulseVisible = false
+        pulseTask = Task { @MainActor in
+            for _ in 0..<2 {
+                guard !Task.isCancelled else { return }
+                withAnimation(.easeInOut(duration: 0.3)) { pulseVisible = true }
+                try? await Task.sleep(nanoseconds: 350_000_000)
+                guard !Task.isCancelled else { return }
+                withAnimation(.easeInOut(duration: 0.3)) { pulseVisible = false }
+                try? await Task.sleep(nanoseconds: 350_000_000)
+            }
+            if !Task.isCancelled, pulseID == id { pulseID = nil }
         }
     }
 

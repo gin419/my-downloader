@@ -15,7 +15,7 @@ final class SettingsStoreTests: XCTestCase {
             cookieBrowser: .safari, cookiesFilePath: nil, cookiesFileBookmarkData: nil,
             showDownloadDate: false, youtubeFormat: .videoAndAudio, videoQuality: .best,
             audioQuality: .best, subtitleLanguage: .none, embedSubtitles: true,
-            maxConcurrent: 2, openPreference: .video, autoDownloadOnPaste: false,
+            maxConcurrent: 2, openPreference: .video,
             saveHistoryEnabled: true)
     }
 

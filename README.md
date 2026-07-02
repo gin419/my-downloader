@@ -38,7 +38,7 @@ own session cookies**, and quietly gets out of the way.
 Other things you'll notice the first day:
 
 - **Drag a URL onto the window** from any app — Safari tab, Notes, Messages — and the download starts.
-- **Auto-download on paste** — flip a switch in Settings and any URL on your clipboard is queued the moment you focus the app.
+- **Paste & Download** — the big blue button reads your clipboard and downloads every link on it; type in the field instead and the same button becomes plain **Download**.
 - **Click the row title** to open the file. **Show in Finder** is always one click away. Failed download? **Retry** or **Copy Link** are right there.
 - **Live progress** — real speed, real ETA, real file size. Status badges for *Queued / Fetching / Downloading / Done / Failed*.
 - **Cross-session memory** — your queue and download history survive an app restart (SQLite-backed, deduped across sessions).
@@ -122,10 +122,10 @@ After `./build.sh`, drag the resulting `XDownloader.app` to `/Applications/`.
 
 ### URL input
 - Paste or type any URL and press Enter
-- **Paste from Clipboard** button — one click
+- **Paste & Download** button — one click from clipboard to download
 - **Drag & drop** a URL from any app onto the window
 - **`⌘D`** menu shortcut for "Paste and Download"
-- Optional **auto-download on paste**
+- Status-line feedback for every capture (queued / no link / already in your list)
 
 ### Download engine
 - **X / Twitter videos** via `yt-dlp` + your browser cookies
@@ -159,7 +159,6 @@ After `./build.sh`, drag the resulting `XDownloader.app` to `/Applications/`.
 - Cookie browser: Safari / Chrome / Firefox / Edge / None
 - Format, subtitle language, embed toggle
 - Max concurrent downloads (1–5)
-- Auto-download on paste toggle
 - Show download date & time per row
 - "Open completed file as" Video / Audio preference
 
