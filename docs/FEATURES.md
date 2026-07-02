@@ -3,9 +3,13 @@
 ## URL Input
 - **Paste URL** — type or paste any URL into the input field and press Enter or click Download
 - **Paste from Clipboard** button — one-click grab from clipboard
+- **Batch input** — text with any number of links (one per line, or mixed with prose) queues them all at once; works via paste, drop, and ⌘D
 - **Drag & drop** — drag a URL from any app directly onto the window
-- **`⌘D` shortcut** — "Paste and Download" from the menu bar
+- **`⌘D` shortcut** — "Paste and Download" from the menu bar (downloads immediately, even when auto-download on paste is off)
 - **Auto-download on paste** — optional setting to start downloading immediately on clipboard paste (no confirmation step)
+
+## Notifications
+- **Finish notifications** — when the app is in the background, a macOS notification announces each completed or failed download (delivery is controlled per-app in System Settings → Notifications)
 
 ## Download Engine
 - **X.com / Twitter videos** — downloaded via yt-dlp using your browser's session cookies

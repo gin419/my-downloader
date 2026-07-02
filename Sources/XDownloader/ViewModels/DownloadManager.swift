@@ -35,6 +35,9 @@ class DownloadManager: ObservableObject {
     /// Task.cancel() rather than Process.terminate() when the user hits Stop.
     private var activeFxTasks: [UUID: Task<Bool, Never>] = [:]
     private var downloadQueue: [DownloadItem] = []
+    /// Overflow behind `pendingDuplicate`: a batch paste can hit several
+    /// already-in-history URLs at once, and the alert shows one at a time.
+    private var duplicateQueue: [DuplicateConfirmation] = []
     private var activeCount: Int = 0
     private var noticeTask: Task<Void, Never>?
     /// IDs of items the user explicitly paused — distinguishes a user-initiated
@@ -78,6 +81,33 @@ class DownloadManager: ObservableObject {
         addDownload(urlString: urlString, skipHistoryCheck: false)
     }
 
+    /// Batch entry point: splits pasted/dropped text into URLs and enqueues
+    /// each one. Text without at least two URLs takes the single-item path
+    /// unchanged, so non-URL input keeps its existing error surface.
+    func addDownloads(from text: String) {
+        let urls = Self.extractURLs(from: text)
+        guard urls.count > 1 else {
+            addDownload(urlString: text)
+            return
+        }
+        for url in urls {
+            addDownload(urlString: url)
+        }
+    }
+
+    /// Every whitespace-separated token that parses as an http(s) URL with a
+    /// host, in input order.
+    nonisolated static func extractURLs(from text: String) -> [String] {
+        text.split(whereSeparator: \.isWhitespace)
+            .map(String.init)
+            .filter { token in
+                guard let url = URL(string: token), url.host != nil,
+                    let scheme = url.scheme?.lowercased()
+                else { return false }
+                return scheme == "http" || scheme == "https"
+            }
+    }
+
     /// `skipHistoryCheck` is set by `confirmDuplicateDownload` so the user's
     /// "Download again" choice doesn't re-trigger the same warning.
     private func addDownload(urlString: String, skipHistoryCheck: Bool) {
@@ -97,11 +127,16 @@ class DownloadManager: ObservableObject {
 
         if saveHistoryEnabled, !skipHistoryCheck, let prior = history.mostRecentCompleted(for: stripped) {
             let fileExists = prior.outputPath.map { FileManager.default.fileExists(atPath: $0) } ?? false
-            pendingDuplicate = DuplicateConfirmation(
+            let confirmation = DuplicateConfirmation(
                 url: stripped,
                 priorEntry: prior,
                 priorFileExists: fileExists
             )
+            if pendingDuplicate == nil {
+                pendingDuplicate = confirmation
+            } else {
+                duplicateQueue.append(confirmation)
+            }
             return
         }
 
@@ -109,23 +144,41 @@ class DownloadManager: ObservableObject {
         items.insert(item, at: 0)
         downloadQueue.append(item)
         saveQueue()
+        NotificationService.requestAuthorizationIfNeeded()
         drainQueue()
     }
 
-    func confirmDuplicateDownload() {
-        guard let dup = pendingDuplicate else { return }
-        pendingDuplicate = nil
+    func confirmDuplicateDownload(_ dup: DuplicateConfirmation) {
+        advanceDuplicateQueue()
         addDownload(urlString: dup.url, skipHistoryCheck: true)
     }
 
     func dismissDuplicate() {
-        pendingDuplicate = nil
+        // The alert's isPresented binding fires a trailing `false` after every
+        // button action; by then the slot is already empty, so this no-ops
+        // instead of eating the next queued confirmation.
+        guard pendingDuplicate != nil else { return }
+        advanceDuplicateQueue()
     }
 
-    func revealDuplicatePriorFile() {
-        guard let dup = pendingDuplicate, let path = dup.priorEntry.outputPath else { return }
+    func revealDuplicatePriorFile(_ dup: DuplicateConfirmation) {
+        advanceDuplicateQueue()
+        guard let path = dup.priorEntry.outputPath else { return }
         NSWorkspace.shared.selectFile(path, inFileViewerRootedAtPath: "")
+    }
+
+    /// Closes the current confirmation and re-presents the next queued one on
+    /// the following runloop tick — the alert must finish its dismissal pass
+    /// before `pendingDuplicate` becomes non-nil again, or SwiftUI won't
+    /// re-present it.
+    private func advanceDuplicateQueue() {
         pendingDuplicate = nil
+        guard !duplicateQueue.isEmpty else { return }
+        Task { @MainActor in
+            if self.pendingDuplicate == nil, !self.duplicateQueue.isEmpty {
+                self.pendingDuplicate = self.duplicateQueue.removeFirst()
+            }
+        }
     }
 
     func retryItem(_ item: DownloadItem) {
@@ -466,6 +519,11 @@ class DownloadManager: ObservableObject {
     private func finalize(_ item: DownloadItem) {
         saveQueue()
         recordHistory(for: item)
+        // Skip items the user removed mid-download — their terminal state is
+        // just the terminated process winding down, not news.
+        if items.contains(where: { $0.id == item.id }) {
+            NotificationService.downloadFinished(item)
+        }
     }
 
     /// Only terminal states (completed/failed) are persisted. Crash recovery for
