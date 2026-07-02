@@ -3,8 +3,7 @@ name: Security Scan
 on:
   push:
     branches: [main]
-  pull_request:
-    branches: [main]
+  pull_request:  # all bases, so stacked PRs get CI too
   workflow_call:   # allows release.yml (and others) to call this workflow
 
 jobs:
@@ -71,7 +70,7 @@ jobs:
         if: github.event_name == 'pull_request'
         run: |
           gitleaks detect \
-            --config .github/gitleaks/layer2-rules.toml \
+            --config .github/gitleaks/layer2-config.toml \
             --source . \
             --log-opts="origin/${{ github.base_ref }}...HEAD" \
             --redact \
@@ -81,7 +80,7 @@ jobs:
         if: github.event_name != 'pull_request'
         run: |
           gitleaks detect \
-            --config .github/gitleaks/layer2-rules.toml \
+            --config .github/gitleaks/layer2-config.toml \
             --source . \
             --redact \
             --verbose
