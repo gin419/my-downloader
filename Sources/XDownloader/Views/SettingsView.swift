@@ -198,6 +198,11 @@ struct SettingsView: View {
             }
 
             Section("Display") {
+                Toggle("Show XDownloader in menu bar", isOn: $manager.showMenuBarExtra)
+                Text("A live count of active downloads next to the icon; failures raise a small warning triangle.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+
                 Toggle("Show download date & time", isOn: $manager.showDownloadDate)
 
                 Picker("Open completed file as", selection: $manager.openPreference) {
@@ -223,6 +228,7 @@ struct SettingsView: View {
         .onChange(of: manager.subtitleLanguage) { manager.saveSettings() }
         .onChange(of: manager.embedSubtitles) { manager.saveSettings() }
         .onChange(of: manager.showDownloadDate) { manager.saveSettings() }
+        .onChange(of: manager.showMenuBarExtra) { manager.saveSettings() }
         .onChange(of: manager.openPreference) { manager.saveSettings() }
         .onChange(of: manager.saveHistoryEnabled) {
             manager.saveSettings()

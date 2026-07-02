@@ -9,6 +9,11 @@
 - **Status line feedback** — every capture answers in place ("Queued 3 links", "No link found in the clipboard", "Already in your list — highlighted below") without shifting the layout; on macOS 15.4+ a denied clipboard permission is called out with a System Settings shortcut
 - **Link cleanup** — wrapping punctuation is trimmed from pasted links, and a bare `x.com/…` link works without typing `https://`
 
+## Menu Bar
+- **Live status item** — download-arrow icon with a live count of unfinished downloads (capped at "9+"); a small warning triangle appears when a download fails while the app is in the background
+- **Status menu** — Paste and Download, an activity summary ("2 downloading · 3 queued · 4.2 MB/s"), up to five live item rows with progress badges, paused and failed summaries with "Retry All Failed", plus Open / Settings… / Quit
+- **Optional** — hide it via "Show XDownloader in menu bar" in Settings, or ⌘-drag the icon out of the menu bar
+
 ## Notifications
 - **Finish notifications** — when the app is in the background, a macOS notification announces each completed or failed download (delivery is controlled per-app in System Settings → Notifications)
 

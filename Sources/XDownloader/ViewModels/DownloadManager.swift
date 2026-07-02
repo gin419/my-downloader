@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import Foundation
 import SwiftUI
 
@@ -7,7 +8,12 @@ class DownloadManager: ObservableObject {
 
     // MARK: - Published state
 
-    @Published var items: [DownloadItem] = []
+    @Published var items: [DownloadItem] = [] {
+        didSet {
+            resubscribeItemObservation()
+            recomputeMenuBarState()
+        }
+    }
     @Published var outputDirectory: URL
     @Published var cookieBrowser: CookieBrowser = .safari
     @Published var cookiesFilePath: String? = nil  // display / last resolved path
@@ -28,6 +34,12 @@ class DownloadManager: ObservableObject {
     /// Result of the most recent capture, shown in the window's fixed status
     /// line. Non-persistent feedback clears itself after a few seconds.
     @Published var captureFeedback: CaptureFeedback? = nil
+    /// Menu bar visibility — bound to both the Settings toggle and
+    /// MenuBarExtra's isInserted (⌘-dragging the icon out flips it too).
+    @Published var showMenuBarExtra: Bool = true
+    /// Everything the menu bar extra renders, recomputed as one value struct —
+    /// the scene can't observe each DownloadItem individually.
+    @Published private(set) var menuBarState = MenuBarState.empty
 
     // MARK: - Private state
 
@@ -44,6 +56,19 @@ class DownloadManager: ObservableObject {
     /// IDs of items the user explicitly paused — distinguishes a user-initiated
     /// `terminate()` from a real download failure when the process exits.
     private var pausedItemIDs: Set<UUID> = []
+    /// Attention contract: set when a download fails while the app is in the
+    /// background; cleared when the app comes frontmost, on retry/remove, or
+    /// via the menu's failure row — never by merely opening the menu.
+    private var hasUnseenFailures = false
+    /// One merged subscription to every item's objectWillChange, throttled —
+    /// progress ticks arrive many times a second and the menu bar only needs
+    /// a 0.5s cadence.
+    private var itemObservation: AnyCancellable?
+    private var mainWindowKeyObserver: AnyCancellable?
+    /// IDs whose `runDownload` Task is still running (including fallbacks) —
+    /// a transient `.failed` mid-chain must not be retryable into a second
+    /// concurrent download of the same item.
+    private var inFlightItemIDs: Set<UUID> = []
     private let history = HistoryStore()
     private let queueStore = QueueStore()
     private let settingsStore = SettingsStore()
@@ -67,6 +92,22 @@ class DownloadManager: ObservableObject {
         checkRequirements()
         refreshHistoryStats()
         drainQueue()
+
+        resubscribeItemObservation()
+        recomputeMenuBarState()
+        // Spec contract: the ⚠ clears when the MAIN WINDOW becomes key — not
+        // on mere app activation (⌘-tabbing onto a windowless app shows the
+        // user nothing) and never by just opening the status menu.
+        mainWindowKeyObserver = NotificationCenter.default
+            .publisher(for: NSWindow.didBecomeKeyNotification)
+            .sink { [weak self] note in
+                // AppKit posts window notifications on the main thread.
+                MainActor.assumeIsolated {
+                    guard let window = note.object as? NSWindow, Self.isMainWindow(window)
+                    else { return }
+                    self?.markFailuresSeen()
+                }
+            }
     }
 
     // No deinit cleanup needed: security-scoped access is started and stopped
@@ -74,6 +115,60 @@ class DownloadManager: ObservableObject {
 
     func checkRequirements() {
         missingTools = RequirementsService.missingTools()
+    }
+
+    // MARK: - Menu bar state
+
+    /// `items` is `@Published`, but each DownloadItem is its own
+    /// ObservableObject — the menu bar scene would never hear a progress or
+    /// status change without merging every item's objectWillChange. Rebuilt
+    /// whenever the array itself changes.
+    private func resubscribeItemObservation() {
+        itemObservation = Publishers.MergeMany(items.map(\.objectWillChange))
+            .throttle(for: .milliseconds(500), scheduler: DispatchQueue.main, latest: true)
+            .sink { [weak self] _ in self?.recomputeMenuBarState() }
+    }
+
+    /// Cheap enough to call eagerly at every queue transition (add, pause,
+    /// resume, retry, remove, finalize) — the throttled item subscription only
+    /// covers the in-between progress ticks.
+    private func recomputeMenuBarState() {
+        let state = MenuBarState.compute(
+            items: items,
+            showsAttention: hasUnseenFailures,
+            wasOverflowing: menuBarState.isOverflowing)
+        if state != menuBarState { menuBarState = state }
+    }
+
+    func markFailuresSeen() {
+        guard hasUnseenFailures else { return }
+        hasUnseenFailures = false
+        recomputeMenuBarState()
+    }
+
+    func retryAllFailed() {
+        for item in items {
+            if case .failed = item.status { retryItem(item) }
+        }
+    }
+
+    /// SwiftUI's `Window(id: "main")` stamps its NSWindow identifier with the
+    /// scene id (e.g. "main-AppWindow-1").
+    private static func isMainWindow(_ window: NSWindow) -> Bool {
+        window.identifier?.rawValue.hasPrefix("main") == true
+    }
+
+    /// True only when the main queue window is actually in front of the user.
+    /// App-active alone isn't enough: the window can be closed, miniaturized,
+    /// or on another Space while the app stays frontmost.
+    private var isMainWindowShowing: Bool {
+        guard NSApp.isActive else { return false }
+        return NSApp.windows.contains { window in
+            Self.isMainWindow(window)
+                && window.isVisible
+                && window.isOnActiveSpace
+                && window.occlusionState.contains(.visible)
+        }
     }
 
     // MARK: - Capture funnel
@@ -126,10 +221,13 @@ class DownloadManager: ObservableObject {
     }
 
     /// Reads the clipboard and funnels it through `capture`. The read happens
-    /// only inside this explicit user action (Paste & Download button, ⌘D) —
-    /// never on a timer or focus change — so macOS 15.4+ pasteboard-privacy
-    /// prompts stay tied to a gesture the user just made.
-    func captureFromClipboard() {
+    /// only inside this explicit user action (Paste & Download button, ⌘D,
+    /// menu bar) — never on a timer or focus change — so macOS 15.4+
+    /// pasteboard-privacy prompts stay tied to a gesture the user just made.
+    /// Returns nil when the read itself failed (feedback already shown) —
+    /// callers without a visible window use this to decide to raise one.
+    @discardableResult
+    func captureFromClipboard() -> CaptureResult? {
         if #available(macOS 15.4, *), NSPasteboard.general.accessBehavior == .alwaysDeny {
             showFeedback(
                 CaptureFeedback(
@@ -137,7 +235,7 @@ class DownloadManager: ObservableObject {
                     message: "Clipboard access is off — ⌘V into the field still works",
                     isPersistent: true,
                     offersPrivacySettings: true))
-            return
+            return nil
         }
         guard
             let text = NSPasteboard.general.string(forType: .string)?
@@ -150,9 +248,9 @@ class DownloadManager: ObservableObject {
                 CaptureFeedback(
                     kind: .warning,
                     message: hasContent ? "No link found in the clipboard" : "The clipboard is empty"))
-            return
+            return nil
         }
-        capture(text: text, source: .clipboard)
+        return capture(text: text, source: .clipboard)
     }
 
     /// macOS 15.4+ pasteboard privacy lives under Privacy & Security; there is
@@ -355,6 +453,10 @@ class DownloadManager: ObservableObject {
     }
 
     func retryItem(_ item: DownloadItem) {
+        // A `.failed` status can be transient — yt-dlp sets it mid-chain while
+        // the fallback loop is still about to run. Re-queueing such an item
+        // would start a second concurrent download of the same file.
+        guard !inFlightItemIDs.contains(item.id) else { return }
         item.status = .queued
         item.resetForReattempt()
         item.subtitleDownloadFailed = false
@@ -362,6 +464,8 @@ class DownloadManager: ObservableObject {
         downloadQueue.append(item)
         saveQueue()
         drainQueue()
+        markFailuresSeen()
+        recomputeMenuBarState()
     }
 
     func removeItem(_ item: DownloadItem) {
@@ -373,6 +477,7 @@ class DownloadManager: ObservableObject {
         downloadQueue.removeAll { $0.id == item.id }
         items.removeAll { $0.id == item.id }
         saveQueue()
+        markFailuresSeen()
     }
 
     func pauseItem(_ item: DownloadItem) {
@@ -397,6 +502,7 @@ class DownloadManager: ObservableObject {
         downloadQueue.append(item)
         saveQueue()
         drainQueue()
+        recomputeMenuBarState()
     }
 
     func clearCompleted() {
@@ -468,7 +574,8 @@ class DownloadManager: ObservableObject {
             embedSubtitles: embedSubtitles,
             maxConcurrent: maxConcurrent,
             openPreference: openPreference,
-            saveHistoryEnabled: saveHistoryEnabled
+            saveHistoryEnabled: saveHistoryEnabled,
+            showMenuBarExtra: showMenuBarExtra
         )
     }
 
@@ -489,14 +596,17 @@ class DownloadManager: ObservableObject {
         maxConcurrent = s.maxConcurrent
         openPreference = s.openPreference
         saveHistoryEnabled = s.saveHistoryEnabled
+        showMenuBarExtra = s.showMenuBarExtra
     }
 
     private func drainQueue() {
         while activeCount < maxConcurrent, !downloadQueue.isEmpty {
             let item = downloadQueue.removeFirst()
             activeCount += 1
+            inFlightItemIDs.insert(item.id)
             Task {
                 await runDownload(item)
+                inFlightItemIDs.remove(item.id)
                 activeCount -= 1
                 drainQueue()
             }
@@ -707,6 +817,14 @@ class DownloadManager: ObservableObject {
         guard stillInList(item) else { return }
         recordHistory(for: item)
         NotificationService.downloadFinished(item)
+        // Failures that land while the user isn't looking raise the menu bar
+        // ⚠. Only a failure with the main window actually on screen (not
+        // merely app-active — the window may be closed or on another Space)
+        // is already visible as a red row and doesn't count as "unseen".
+        if case .failed = item.status, !isMainWindowShowing {
+            hasUnseenFailures = true
+        }
+        recomputeMenuBarState()
     }
 
     /// Only terminal states (completed/failed) are persisted. Crash recovery for

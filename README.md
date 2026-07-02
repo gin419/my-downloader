@@ -41,6 +41,7 @@ Other things you'll notice the first day:
 - **Paste & Download** — the big blue button reads your clipboard and downloads every link on it; type in the field instead and the same button becomes plain **Download**.
 - **Click the row title** to open the file. **Show in Finder** is always one click away. Failed download? **Retry** or **Copy Link** are right there.
 - **Live progress** — real speed, real ETA, real file size. Status badges for *Queued / Fetching / Downloading / Done / Failed*.
+- **Menu bar counter** — a status item counts active downloads and flags failures you haven't seen; its menu pastes, retries, and jumps back to the window.
 - **Cross-session memory** — your queue and download history survive an app restart (SQLite-backed, deduped across sessions).
 
 ---

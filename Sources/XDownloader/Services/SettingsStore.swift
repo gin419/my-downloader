@@ -17,6 +17,7 @@ struct AppSettings {
     var maxConcurrent: Int
     var openPreference: OpenPreference
     var saveHistoryEnabled: Bool
+    var showMenuBarExtra: Bool
 }
 
 /// Owns all the UserDefaults key strings + marshalling for the app's settings, so
@@ -45,6 +46,7 @@ struct SettingsStore {
         d.set(s.maxConcurrent, forKey: "maxConcurrent")
         d.set(s.openPreference.rawValue, forKey: "openPreference")
         d.set(s.saveHistoryEnabled, forKey: "saveHistoryEnabled")
+        d.set(s.showMenuBarExtra, forKey: "showMenuBarExtra")
         // v1.6 removed the auto-download-on-paste toggle — the Paste & Download
         // button's label IS the behavior now. Clean up the orphaned key.
         d.removeObject(forKey: "autoDownloadOnPaste")
@@ -66,6 +68,7 @@ struct SettingsStore {
         s.showDownloadDate = d.bool(forKey: "showDownloadDate")
         s.embedSubtitles = d.object(forKey: "embedSubtitles") as? Bool ?? fallback.embedSubtitles
         s.saveHistoryEnabled = d.object(forKey: "saveHistoryEnabled") as? Bool ?? fallback.saveHistoryEnabled
+        s.showMenuBarExtra = d.object(forKey: "showMenuBarExtra") as? Bool ?? fallback.showMenuBarExtra
         let stored = d.integer(forKey: "maxConcurrent")
         if stored > 0 { s.maxConcurrent = stored }
         return s
