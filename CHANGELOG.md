@@ -6,11 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Entries before _Unreleased_ were back-filled from git history.
 
-## [Unreleased]
+## [1.5.0] — 2026-07-02
 
 ### Added
-- **Finish notifications** — a macOS notification announces a completed or failed download while the app is in the background.
-- **Batch input** — paste, drop, or ⌘D text containing any number of links and they all queue at once; multiple "already downloaded" warnings are shown one after another.
+- **Finish notifications** — a macOS notification announces a completed or failed download while the app is in the background (#35).
+- **Batch input** — paste, drop, or ⌘D text containing any number of links and they all queue at once; multiple "already downloaded" warnings are shown one after another (#35).
 - **cookies.txt file support** — point Settings at an exported `cookies.txt` for stubborn authenticated content (e.g. X sensitive/NSFW media); it takes precedence over the cookie-browser setting and is accessed under a sandbox security-scoped bookmark (#13).
 - Test suite — a `XDownloaderTests` target run on CI (#16, #18).
 - App-icon generator tracked at `scripts/make_icon.swift`, so the icon is reproducible from source (#17).
