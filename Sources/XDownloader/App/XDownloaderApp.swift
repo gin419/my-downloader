@@ -46,6 +46,12 @@ struct XDownloaderApp: App {
         Binding(
             get: { manager.showMenuBarExtra },
             set: { inserted in
+                // SwiftUI re-sets this binding on EVERY scene update, not just
+                // user removal. Writing the @Published unconditionally fires
+                // objectWillChange → App body re-evaluates → set again — an
+                // infinite scene-update loop pegging a core and leaking the
+                // whole view graph. Only a real change may write.
+                guard manager.showMenuBarExtra != inserted else { return }
                 manager.showMenuBarExtra = inserted
                 manager.saveSettings()
             }
