@@ -266,17 +266,23 @@ class DownloadManager: ObservableObject {
     /// reads the clipboard: any webpage can fire a scheme URL, and clipboard
     /// reads must stay tied to an in-app user gesture.
     nonisolated static func schemeCommand(from url: URL) -> SchemeCommand? {
-        guard url.scheme?.lowercased() == "xdownloader" else { return nil }
-        let verb = (url.host ?? url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")))
-            .lowercased()
-        switch verb {
+        // URL.host/path disagree across macOS versions for the opaque
+        // hostless form (xdownloader:download?…) — normalize the string to
+        // hierarchical and let URLComponents (stable RFC 3986 parsing on
+        // every OS) extract both the verb and the query.
+        var s = url.absoluteString
+        let prefix = "xdownloader:"
+        guard s.lowercased().hasPrefix(prefix) else { return nil }
+        s.removeFirst(prefix.count)
+        if !s.hasPrefix("//") { s = "//" + s }
+        guard let components = URLComponents(string: prefix + s) else { return nil }
+
+        switch (components.host ?? "").lowercased() {
         case "download":
             // URLComponents hands values back percent-decoded. An empty text
             // still counts as a download command — capture() then answers
             // with the truthful "carried no link" feedback.
-            let queryItems = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
-            let text =
-                queryItems
+            let text = (components.queryItems ?? [])
                 .filter { ["url", "urls"].contains($0.name.lowercased()) }
                 .compactMap(\.value)
                 .joined(separator: "\n")
