@@ -3,8 +3,7 @@ name: Security Scan
 on:
   push:
     branches: [main]
-  pull_request:
-    branches: [main]
+  pull_request:  # all bases, so stacked PRs get CI too
   workflow_call:   # allows release.yml (and others) to call this workflow
 
 jobs:

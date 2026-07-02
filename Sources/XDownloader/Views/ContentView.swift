@@ -70,6 +70,10 @@ struct ContentView: View {
             }
         }
         .background(Color(nsColor: .windowBackgroundColor))
+        .onReceive(NotificationCenter.default.publisher(for: .pasteAndDownload)) { _ in
+            // ⌘D is an explicit "download this now" — bypass the auto-download-on-paste setting.
+            pasteFromClipboard(forceDownload: true)
+        }
         .sheet(isPresented: $showInstallSheet, onDismiss: { bannerDismissed = manager.missingTools.isEmpty }) {
             InstallToolsSheet(tools: manager.missingTools)
                 .environmentObject(manager)
@@ -206,7 +210,7 @@ struct ContentView: View {
             }
 
             HStack(spacing: 6) {
-                Button(action: pasteFromClipboard) {
+                Button(action: { pasteFromClipboard() }) {
                     Label("Paste from Clipboard", systemImage: "doc.on.clipboard")
                         .font(.system(size: 12))
                 }
@@ -378,12 +382,12 @@ struct ContentView: View {
         if manager.items.count > before { urlInput = "" }
     }
 
-    private func pasteFromClipboard() {
+    private func pasteFromClipboard(forceDownload: Bool = false) {
         guard
             let text = NSPasteboard.general.string(forType: .string)?
                 .trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty
         else { return }
-        if manager.autoDownloadOnPaste {
+        if manager.autoDownloadOnPaste || forceDownload {
             withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
                 manager.addDownload(urlString: text)
             }

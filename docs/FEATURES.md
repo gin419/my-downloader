@@ -43,6 +43,8 @@
 ## History & Deduplication
 - **Cross-session history** — completed downloads are recorded in a local SQLite store
 - **Duplicate detection** — re-adding a URL you already downloaded prompts before downloading it again
+- **History toggle** — turn database recording on or off in Settings, with a live count/size readout, "Reveal in Finder", and "Clear History"
+- **Import task list** — back-fill the completed and failed items already in the task list into the history database (safe to run repeatedly)
 
 ## Settings
 - **Download folder** — folder picker with "Open in Finder" shortcut (defaults to `~/Downloads/X-Videos`)
