@@ -1,5 +1,8 @@
 import AppKit
-import UserNotifications
+
+// UNUserNotificationCenter/UNNotificationRequest predate Sendable; their
+// completion handlers are safe here (no shared mutable state is captured).
+@preconcurrency import UserNotifications
 
 /// Posts a user notification when a download reaches a terminal state while
 /// the app is in the background, so a queued-and-forgotten download announces
@@ -12,23 +15,15 @@ import UserNotifications
 @MainActor
 enum NotificationService {
     private static var hasBundle: Bool { Bundle.main.bundleIdentifier != nil }
-    private static var authorizationRequested = false
-
-    /// Ask for permission lazily on the first enqueue — the user has just
-    /// interacted with the app, which is the moment the prompt makes sense
-    /// (never at launch).
-    static func requestAuthorizationIfNeeded() {
-        guard hasBundle, !authorizationRequested else { return }
-        authorizationRequested = true
-        let center = UNUserNotificationCenter.current()
-        center.getNotificationSettings { settings in
-            guard settings.authorizationStatus == .notDetermined else { return }
-            center.requestAuthorization(options: [.alert, .sound]) { _, _ in }
-        }
-    }
 
     /// Announce a finished download. Skipped while the app is frontmost —
     /// the row's status badge is already visible.
+    ///
+    /// Permission is requested lazily on the FIRST finished download — the
+    /// first moment a notification could matter, and safely clear of capture
+    /// time, where the macOS 15.4+ pasteboard consent prompt may already be
+    /// on screen. The request chains into delivery, so even that first
+    /// notification arrives once the user grants.
     static func downloadFinished(_ item: DownloadItem) {
         guard hasBundle, !NSApp.isActive else { return }
 
@@ -47,6 +42,18 @@ enum NotificationService {
 
         let request = UNNotificationRequest(
             identifier: item.id.uuidString, content: content, trigger: nil)
-        UNUserNotificationCenter.current().add(request)
+        let center = UNUserNotificationCenter.current()
+        center.getNotificationSettings { settings in
+            switch settings.authorizationStatus {
+            case .notDetermined:
+                center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
+                    if granted { center.add(request) }
+                }
+            case .authorized, .provisional:
+                center.add(request)
+            default:
+                break  // denied — the user said no, respect it silently
+            }
+        }
     }
 }

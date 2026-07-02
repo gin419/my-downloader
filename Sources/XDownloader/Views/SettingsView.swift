@@ -130,13 +130,6 @@ struct SettingsView: View {
                 }
             }
 
-            Section("Behavior") {
-                Toggle("Auto-download on clipboard paste", isOn: $manager.autoDownloadOnPaste)
-                Text("When enabled, clicking \"Paste from Clipboard\" starts the download immediately without filling the URL field first.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-
             Section("History") {
                 Toggle("Save download history to database", isOn: $manager.saveHistoryEnabled)
                 Text(
@@ -231,7 +224,6 @@ struct SettingsView: View {
         .onChange(of: manager.embedSubtitles) { manager.saveSettings() }
         .onChange(of: manager.showDownloadDate) { manager.saveSettings() }
         .onChange(of: manager.openPreference) { manager.saveSettings() }
-        .onChange(of: manager.autoDownloadOnPaste) { manager.saveSettings() }
         .onChange(of: manager.saveHistoryEnabled) {
             manager.saveSettings()
             manager.refreshHistoryStats()

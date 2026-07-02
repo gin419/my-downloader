@@ -15,8 +15,10 @@ struct XDownloaderApp: App {
         .defaultSize(width: 680, height: 560)
         .commands {
             CommandGroup(after: .newItem) {
+                // Targets the manager directly (not a window) so the shortcut
+                // works identically for every future entry point too.
                 Button("Paste and Download") {
-                    NotificationCenter.default.post(name: .pasteAndDownload, object: nil)
+                    manager.captureFromClipboard()
                 }
                 .keyboardShortcut("d", modifiers: .command)
             }
@@ -27,8 +29,4 @@ struct XDownloaderApp: App {
                 .environmentObject(manager)
         }
     }
-}
-
-extension Notification.Name {
-    static let pasteAndDownload = Notification.Name("pasteAndDownload")
 }

@@ -13,35 +13,14 @@ struct DownloadRowView: View {
 
     @State private var titleHovered = false
 
-    private static let dateFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.dateStyle = .medium
-        f.timeStyle = .short
-        return f
-    }()
-
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 10) {
                 statusIcon
                     .font(.system(size: 15, weight: .semibold))
                     .frame(width: 20)
 
-                VStack(alignment: .leading, spacing: 2) {
-                    titleView
-
-                    Text(item.url)
-                        .font(.system(size: 11))
-                        .foregroundColor(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-
-                    if manager.showDownloadDate {
-                        Text(DownloadRowView.dateFormatter.string(from: item.addedAt))
-                            .font(.system(size: 10))
-                            .foregroundColor(.secondary.opacity(0.7))
-                    }
-                }
+                titleView
 
                 Spacer()
 
@@ -49,6 +28,21 @@ struct DownloadRowView: View {
                     mediaCategoryChip
                 }
                 statusBadge
+
+                // Queued/fetching rows have no action row, so their cancel —
+                // the undo for a bad batch paste — lives inline.
+                if isWaiting {
+                    removeButton()
+                }
+            }
+
+            if let meta = metaLine {
+                Text(meta)
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .padding(.leading, 30)
             }
 
             if case .downloading = item.status {
@@ -61,14 +55,36 @@ struct DownloadRowView: View {
                 actionRow
             }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 12)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
         .background(rowBackground)
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .overlay(
             RoundedRectangle(cornerRadius: 12)
                 .strokeBorder(borderColor, lineWidth: 0.5)
         )
+    }
+
+    /// One meta line, one URL per row: with a real title the URL folds in
+    /// here ("Jun 1, 02:27 · https://…"); when the title IS the URL, nothing
+    /// prints it a second time.
+    private var metaLine: String? {
+        var parts: [String] = []
+        if manager.showDownloadDate {
+            parts.append(
+                item.addedAt.formatted(.dateTime.month(.abbreviated).day().hour().minute()))
+        }
+        if hasTitle { parts.append(item.url) }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    private var hasTitle: Bool { !(item.title ?? "").isEmpty }
+
+    private var isWaiting: Bool {
+        switch item.status {
+        case .queued, .fetching: return true
+        default: return false
+        }
     }
 
     // MARK: - Sub-views
@@ -89,6 +105,15 @@ struct DownloadRowView: View {
                 .onHover { hovering in
                     titleHovered = hovering
                     if hovering { NSCursor.pointingHand.push() } else { NSCursor.pop() }
+                }
+                .onDisappear {
+                    // A row removed mid-hover never gets the exit event —
+                    // without this the pushed cursor leaks and the arrow
+                    // stays a pointing hand.
+                    if titleHovered {
+                        NSCursor.pop()
+                        titleHovered = false
+                    }
                 }
             } else {
                 Text(item.displayTitle)
@@ -130,6 +155,16 @@ struct DownloadRowView: View {
         .background(cat.color.opacity(0.12))
         .clipShape(Capsule())
         .overlay(Capsule().strokeBorder(cat.color.opacity(0.25), lineWidth: 0.5))
+        .help(mediaCountTooltip)
+    }
+
+    /// Full media counts live in the chip's tooltip so the row itself stays
+    /// one line shorter.
+    private var mediaCountTooltip: String {
+        var parts: [String] = []
+        if let v = item.videoCount, v > 0 { parts.append("\(v) video\(v == 1 ? "" : "s")") }
+        if let i = item.imageCount, i > 0 { parts.append("\(i) image\(i == 1 ? "" : "s")") }
+        return parts.isEmpty ? item.mediaCategory.label : parts.joined(separator: " · ")
     }
 
     private var mediaCategoryLabel: String {
@@ -176,6 +211,9 @@ struct DownloadRowView: View {
                 }
             }
             .frame(height: 6)
+            .accessibilityElement()
+            .accessibilityLabel("Download progress")
+            .accessibilityValue("\(Int((item.progress * 100).rounded())) percent")
 
             HStack {
                 if let size = item.totalSize {
@@ -192,7 +230,7 @@ struct DownloadRowView: View {
                     Button(action: onPause) {
                         HStack(spacing: 4) {
                             Image(systemName: "pause.fill").font(.system(size: 9, weight: .bold))
-                            Text("Stop").font(.system(size: 11, weight: .semibold))
+                            Text("Pause").font(.system(size: 11, weight: .semibold))
                         }
                         .foregroundColor(.yellow)
                         .padding(.horizontal, 10)
@@ -201,7 +239,10 @@ struct DownloadRowView: View {
                         .overlay(Capsule().strokeBorder(Color.yellow.opacity(0.35), lineWidth: 0.5))
                     }
                     .buttonStyle(.plain)
-                    .help("Stop download — you can resume later")
+                    .help("Pause download — resume anytime")
+                }
+                if item.status == .downloading {
+                    removeButton(help: "Cancel download")
                 }
             }
         }
@@ -216,17 +257,6 @@ struct DownloadRowView: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundColor(.blue)
-
-                if let count = item.videoCount, count > 1 {
-                    Text("\(count) videos")
-                        .font(.system(size: 11))
-                        .foregroundColor(.secondary)
-                }
-                if let count = item.imageCount, count > 0 {
-                    Text("\(count) image\(count > 1 ? "s" : "")")
-                        .font(.system(size: 11))
-                        .foregroundColor(.secondary)
-                }
             }
 
             if item.status == .paused {
@@ -270,14 +300,18 @@ struct DownloadRowView: View {
 
             Spacer()
 
-            Button(action: onRemove) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundColor(.secondary)
-            }
-            .buttonStyle(.plain)
-            .help("Remove")
+            removeButton()
         }
+    }
+
+    private func removeButton(help: String = "Remove") -> some View {
+        Button(action: onRemove) {
+            Image(systemName: "xmark")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(.secondary)
+        }
+        .buttonStyle(.plain)
+        .help(help)
     }
 
     // MARK: - Helpers

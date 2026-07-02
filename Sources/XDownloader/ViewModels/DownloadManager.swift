@@ -20,13 +20,14 @@ class DownloadManager: ObservableObject {
     @Published var subtitleLanguage: SubtitleLanguage = .none
     @Published var embedSubtitles: Bool = true
     @Published var openPreference: OpenPreference = .video
-    @Published var autoDownloadOnPaste: Bool = false
     @Published var saveHistoryEnabled: Bool = true
     @Published var historyCount: Int = 0
     @Published var historySizeBytes: Int64 = 0
-    @Published var pendingDuplicate: DuplicateConfirmation? = nil
+    @Published var pendingDuplicates: DuplicateBatch? = nil
     @Published var missingTools: [ToolRequirement] = []
-    @Published var notice: String? = nil
+    /// Result of the most recent capture, shown in the window's fixed status
+    /// line. Non-persistent feedback clears itself after a few seconds.
+    @Published var captureFeedback: CaptureFeedback? = nil
 
     // MARK: - Private state
 
@@ -35,11 +36,11 @@ class DownloadManager: ObservableObject {
     /// Task.cancel() rather than Process.terminate() when the user hits Stop.
     private var activeFxTasks: [UUID: Task<Bool, Never>] = [:]
     private var downloadQueue: [DownloadItem] = []
-    /// Overflow behind `pendingDuplicate`: a batch paste can hit several
-    /// already-in-history URLs at once, and the alert shows one at a time.
-    private var duplicateQueue: [DuplicateConfirmation] = []
+    /// Overflow behind `pendingDuplicates`: each capture's duplicates present
+    /// as ONE alert; a second capture while it's up waits its turn here.
+    private var duplicateBatchQueue: [DuplicateBatch] = []
     private var activeCount: Int = 0
-    private var noticeTask: Task<Void, Never>?
+    private var feedbackTask: Task<Void, Never>?
     /// IDs of items the user explicitly paused — distinguishes a user-initiated
     /// `terminate()` from a real download failure when the process exits.
     private var pausedItemIDs: Set<UUID> = []
@@ -75,108 +76,280 @@ class DownloadManager: ObservableObject {
         missingTools = RequirementsService.missingTools()
     }
 
-    // MARK: - Queue management
+    // MARK: - Capture funnel
 
-    func addDownload(urlString: String) {
-        addDownload(urlString: urlString, skipHistoryCheck: false)
+    /// Every way links enter the app — the URL field, the Paste & Download
+    /// button, ⌘D, a drop — lands here, so feedback and duplicate handling
+    /// behave identically everywhere. Non-URL text never reaches yt-dlp; it
+    /// surfaces as status-line feedback instead of a doomed download item.
+    @discardableResult
+    func capture(text: String, source: CaptureSource) -> CaptureResult {
+        var urls: [String] = []
+        for url in Self.extractURLs(from: text).map(Self.stripTrackingParams)
+        where !urls.contains(url) {
+            urls.append(url)
+        }
+        guard !urls.isEmpty else {
+            showFeedback(CaptureFeedback(kind: .warning, message: source.noLinkMessage))
+            return CaptureResult(queued: 0, alreadyPresent: 0, toConfirm: 0, foundLinks: false)
+        }
+
+        var queued = 0
+        var alreadyPresent: [UUID] = []
+        var confirmations: [DuplicateConfirmation] = []
+        withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
+            for url in urls {
+                switch add(urlString: url, skipHistoryCheck: false) {
+                case .queued?:
+                    queued += 1
+                case .alreadyInList(let id)?:
+                    alreadyPresent.append(id)
+                case .needsConfirmation(let confirmation)?:
+                    confirmations.append(confirmation)
+                case nil:
+                    break
+                }
+            }
+        }
+
+        if !confirmations.isEmpty {
+            presentDuplicates(DuplicateBatch(confirmations: confirmations))
+        }
+        if let feedback = composeFeedback(
+            queued: queued, alreadyPresent: alreadyPresent, toConfirm: confirmations.count)
+        {
+            showFeedback(feedback)
+        }
+        return CaptureResult(
+            queued: queued, alreadyPresent: alreadyPresent.count,
+            toConfirm: confirmations.count, foundLinks: true)
     }
 
-    /// Batch entry point: splits pasted/dropped text into URLs and enqueues
-    /// each one. Text without at least two URLs takes the single-item path
-    /// unchanged, so non-URL input keeps its existing error surface.
-    func addDownloads(from text: String) {
-        let urls = Self.extractURLs(from: text)
-        guard urls.count > 1 else {
-            addDownload(urlString: text)
+    /// Reads the clipboard and funnels it through `capture`. The read happens
+    /// only inside this explicit user action (Paste & Download button, ⌘D) —
+    /// never on a timer or focus change — so macOS 15.4+ pasteboard-privacy
+    /// prompts stay tied to a gesture the user just made.
+    func captureFromClipboard() {
+        if #available(macOS 15.4, *), NSPasteboard.general.accessBehavior == .alwaysDeny {
+            showFeedback(
+                CaptureFeedback(
+                    kind: .warning,
+                    message: "Clipboard access is off — ⌘V into the field still works",
+                    isPersistent: true,
+                    offersPrivacySettings: true))
             return
         }
-        for url in urls {
-            addDownload(urlString: url)
+        guard
+            let text = NSPasteboard.general.string(forType: .string)?
+                .trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty
+        else {
+            // Never silent: an empty read gets named, whether the clipboard
+            // is empty or holds something with no text representation.
+            let hasContent = !(NSPasteboard.general.pasteboardItems?.isEmpty ?? true)
+            showFeedback(
+                CaptureFeedback(
+                    kind: .warning,
+                    message: hasContent ? "No link found in the clipboard" : "The clipboard is empty"))
+            return
         }
+        capture(text: text, source: .clipboard)
+    }
+
+    /// macOS 15.4+ pasteboard privacy lives under Privacy & Security; there is
+    /// no stable deep link to the Pasteboard row itself, so open the pane root.
+    func openPasteboardPrivacySettings() {
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension")
+        else { return }
+        NSWorkspace.shared.open(url)
     }
 
     /// Every whitespace-separated token that parses as an http(s) URL with a
-    /// host, in input order.
+    /// host, in input order. Punctuation that prose wraps around links —
+    /// "(see https://x.com/a)", "https://x.com/b," — is trimmed first. As a
+    /// convenience for hand-typed input, a single host-shaped bare token like
+    /// "x.com/a/status/1" is accepted with https:// assumed.
     nonisolated static func extractURLs(from text: String) -> [String] {
-        text.split(whereSeparator: \.isWhitespace)
-            .map(String.init)
-            .filter { token in
-                guard let url = URL(string: token), url.host != nil,
-                    let scheme = url.scheme?.lowercased()
-                else { return false }
-                return scheme == "http" || scheme == "https"
-            }
+        let tokens = text.split(whereSeparator: \.isWhitespace)
+            .map { trimWrappingPunctuation(String($0)) }
+        let urls = tokens.filter { token in
+            guard let url = URL(string: token), url.host != nil,
+                let scheme = url.scheme?.lowercased()
+            else { return false }
+            return scheme == "http" || scheme == "https"
+        }
+        if urls.isEmpty, tokens.count == 1, let bare = tokens.first, looksLikeBareURL(bare) {
+            return ["https://" + bare]
+        }
+        return urls
     }
 
-    /// `skipHistoryCheck` is set by `confirmDuplicateDownload` so the user's
+    /// Scheme-less but host-shaped WITH a path: "x.com/a/status/1" yes;
+    /// "hello", emails, "1.2", and filename-shaped tokens like "node.js" no —
+    /// requiring the "/" keeps file names from becoming doomed downloads, and
+    /// a bare domain with no path has nothing to download anyway. Only
+    /// consulted when the token is the entire input, so prose never sprouts
+    /// accidental URLs.
+    nonisolated private static func looksLikeBareURL(_ token: String) -> Bool {
+        guard token.contains("/"), !token.contains("://"), !token.contains("@"),
+            let url = URL(string: "https://" + token),
+            let host = url.host, host.contains(".")
+        else { return false }
+        let tld = host.split(separator: ".").last ?? ""
+        return tld.count >= 2 && tld.allSatisfy(\.isLetter)
+    }
+
+    /// Strips the punctuation prose wraps around a link — leading brackets and
+    /// quotes, trailing stops (ASCII and CJK fullwidth). A trailing paren is
+    /// only stripped while unbalanced, so Wikipedia-style "…_(film)" URLs
+    /// keep theirs.
+    nonisolated static func trimWrappingPunctuation(_ token: String) -> String {
+        let leading: Set<Character> = ["(", "（", "「", "『", "【", "〈", "《", "<", "'", "\"", "‘", "“"]
+        let trailing: Set<Character> = [
+            ",", ".", ";", ":", "!", "?", "…", "'", "\"", "’", "”", ">",
+            "，", "。", "、", "；", "：", "！", "？", "」", "』", "】", "〉", "》",
+        ]
+        var s = Substring(token)
+        while let first = s.first, leading.contains(first) { s = s.dropFirst() }
+        while let last = s.last {
+            if trailing.contains(last) {
+                s = s.dropLast()
+            } else if last == ")" || last == "）" {
+                let open: Character = last == ")" ? "(" : "（"
+                if s.filter({ $0 == last }).count > s.filter({ $0 == open }).count {
+                    s = s.dropLast()
+                } else {
+                    break
+                }
+            } else {
+                break
+            }
+        }
+        return String(s)
+    }
+
+    // MARK: - Queue management
+
+    private enum AddOutcome {
+        case queued
+        case alreadyInList(UUID)
+        case needsConfirmation(DuplicateConfirmation)
+    }
+
+    /// `skipHistoryCheck` is set by `confirmDuplicateDownloads` so the user's
     /// "Download again" choice doesn't re-trigger the same warning.
-    private func addDownload(urlString: String, skipHistoryCheck: Bool) {
+    private func add(urlString: String, skipHistoryCheck: Bool) -> AddOutcome? {
         let trimmed = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
+        guard !trimmed.isEmpty else { return nil }
         let stripped = Self.stripTrackingParams(trimmed)
 
         if let existing = items.first(where: { $0.url == stripped }) {
-            switch existing.status {
-            case .completed:
-                showNotice("Already downloaded — clear the completed item to re-download.")
-            default:
-                showNotice("Already in the download queue.")
-            }
-            return
+            return .alreadyInList(existing.id)
         }
 
         if saveHistoryEnabled, !skipHistoryCheck, let prior = history.mostRecentCompleted(for: stripped) {
             let fileExists = prior.outputPath.map { FileManager.default.fileExists(atPath: $0) } ?? false
-            let confirmation = DuplicateConfirmation(
-                url: stripped,
-                priorEntry: prior,
-                priorFileExists: fileExists
-            )
-            if pendingDuplicate == nil {
-                pendingDuplicate = confirmation
-            } else {
-                duplicateQueue.append(confirmation)
-            }
-            return
+            return .needsConfirmation(
+                DuplicateConfirmation(url: stripped, priorEntry: prior, priorFileExists: fileExists))
         }
 
         let item = DownloadItem(url: stripped)
         items.insert(item, at: 0)
         downloadQueue.append(item)
         saveQueue()
-        NotificationService.requestAuthorizationIfNeeded()
         drainQueue()
+        return .queued
     }
 
-    func confirmDuplicateDownload(_ dup: DuplicateConfirmation) {
-        advanceDuplicateQueue()
-        addDownload(urlString: dup.url, skipHistoryCheck: true)
+    func confirmDuplicateDownloads(_ batch: DuplicateBatch) {
+        advanceDuplicateBatchQueue()
+        var queued = 0
+        withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
+            for confirmation in batch.confirmations {
+                if case .queued? = add(urlString: confirmation.url, skipHistoryCheck: true) {
+                    queued += 1
+                }
+            }
+        }
+        if queued > 0, let feedback = composeFeedback(queued: queued, alreadyPresent: [], toConfirm: 0) {
+            showFeedback(feedback)
+        }
     }
 
-    func dismissDuplicate() {
+    func dismissDuplicates() {
         // The alert's isPresented binding fires a trailing `false` after every
         // button action; by then the slot is already empty, so this no-ops
-        // instead of eating the next queued confirmation.
-        guard pendingDuplicate != nil else { return }
-        advanceDuplicateQueue()
+        // instead of eating the next queued batch.
+        guard pendingDuplicates != nil else { return }
+        advanceDuplicateBatchQueue()
     }
 
     func revealDuplicatePriorFile(_ dup: DuplicateConfirmation) {
-        advanceDuplicateQueue()
+        advanceDuplicateBatchQueue()
         guard let path = dup.priorEntry.outputPath else { return }
         NSWorkspace.shared.selectFile(path, inFileViewerRootedAtPath: "")
     }
 
-    /// Closes the current confirmation and re-presents the next queued one on
-    /// the following runloop tick — the alert must finish its dismissal pass
-    /// before `pendingDuplicate` becomes non-nil again, or SwiftUI won't
+    private func presentDuplicates(_ batch: DuplicateBatch) {
+        if pendingDuplicates == nil {
+            pendingDuplicates = batch
+        } else {
+            duplicateBatchQueue.append(batch)
+        }
+    }
+
+    /// Closes the current batch and re-presents the next queued one on the
+    /// following runloop tick — the alert must finish its dismissal pass
+    /// before `pendingDuplicates` becomes non-nil again, or SwiftUI won't
     /// re-present it.
-    private func advanceDuplicateQueue() {
-        pendingDuplicate = nil
-        guard !duplicateQueue.isEmpty else { return }
+    private func advanceDuplicateBatchQueue() {
+        pendingDuplicates = nil
+        guard !duplicateBatchQueue.isEmpty else { return }
         Task { @MainActor in
-            if self.pendingDuplicate == nil, !self.duplicateQueue.isEmpty {
-                self.pendingDuplicate = self.duplicateQueue.removeFirst()
+            if self.pendingDuplicates == nil, !self.duplicateBatchQueue.isEmpty {
+                self.pendingDuplicates = self.duplicateBatchQueue.removeFirst()
+            }
+        }
+    }
+
+    /// One status line per capture: the single-outcome cases get the friendly
+    /// copy; a mixed batch composes one truthful line ("Queued 2 · 1 already
+    /// in list · 1 to confirm"). A capture that ONLY raised the duplicate
+    /// dialog returns nil — the dialog is the feedback.
+    private func composeFeedback(
+        queued: Int, alreadyPresent: [UUID], toConfirm: Int
+    ) -> CaptureFeedback? {
+        switch (queued, alreadyPresent.count, toConfirm) {
+        case (0, 0, _):
+            return nil
+        case (let q, 0, 0) where q > 0:
+            return CaptureFeedback(kind: .success, message: "Queued \(q) link\(q == 1 ? "" : "s")")
+        case (0, 1, 0):
+            return CaptureFeedback(
+                kind: .info,
+                message: "Already in your list — highlighted below",
+                highlightItemID: alreadyPresent.first)
+        case (0, let a, 0):
+            return CaptureFeedback(kind: .info, message: "All \(a) already in your list")
+        default:
+            var parts: [String] = []
+            if queued > 0 { parts.append("Queued \(queued)") }
+            if !alreadyPresent.isEmpty { parts.append("\(alreadyPresent.count) already in list") }
+            if toConfirm > 0 { parts.append("\(toConfirm) to confirm") }
+            return CaptureFeedback(
+                kind: queued > 0 ? .success : .info,
+                message: parts.joined(separator: " · "),
+                highlightItemID: queued == 0 && alreadyPresent.count == 1 ? alreadyPresent.first : nil)
+        }
+    }
+
+    private func showFeedback(_ feedback: CaptureFeedback) {
+        withAnimation(.easeInOut(duration: 0.2)) { captureFeedback = feedback }
+        feedbackTask?.cancel()
+        guard !feedback.isPersistent else { return }
+        feedbackTask = Task {
+            try? await Task.sleep(nanoseconds: 6_000_000_000)
+            if !Task.isCancelled {
+                withAnimation(.easeInOut(duration: 0.25)) { captureFeedback = nil }
             }
         }
     }
@@ -295,7 +468,6 @@ class DownloadManager: ObservableObject {
             embedSubtitles: embedSubtitles,
             maxConcurrent: maxConcurrent,
             openPreference: openPreference,
-            autoDownloadOnPaste: autoDownloadOnPaste,
             saveHistoryEnabled: saveHistoryEnabled
         )
     }
@@ -316,7 +488,6 @@ class DownloadManager: ObservableObject {
         embedSubtitles = s.embedSubtitles
         maxConcurrent = s.maxConcurrent
         openPreference = s.openPreference
-        autoDownloadOnPaste = s.autoDownloadOnPaste
         saveHistoryEnabled = s.saveHistoryEnabled
     }
 
@@ -332,7 +503,15 @@ class DownloadManager: ObservableObject {
         }
     }
 
+    /// True while the item is still in the visible list. `removeItem` is the
+    /// only way an in-flight item leaves it, so false means the user hit the
+    /// row's ✕ — nothing downstream (fallbacks, retries, history) should run.
+    private func stillInList(_ item: DownloadItem) -> Bool {
+        items.contains { $0.id == item.id }
+    }
+
     private func runDownload(_ item: DownloadItem) async {
+        guard stillInList(item) else { return }
         item.status = .fetching
         if youtubeFormat == .audioOnly { item.mediaCategory = .audio }
 
@@ -368,6 +547,10 @@ class DownloadManager: ObservableObject {
                 }
             )
         }
+
+        // The row's ✕ terminated this process mid-run: the user cancelled.
+        // Don't complete, pause-freeze, retry, or fall back on their behalf.
+        guard stillInList(item) else { return }
 
         // "Empty success": yt-dlp can exit 0 without writing any file. Seen on
         // Twitter for text-only tweets, quote-RTs whose referenced media yt-dlp
@@ -424,6 +607,7 @@ class DownloadManager: ObservableObject {
         let profile = SiteRegistry.profile(for: item.url)
         var ranFallback = false
         for fallback in profile.fallbacks {
+            guard stillInList(item) else { return }  // ✕ during a fallback run
             if case .completed = item.status { break }  // a prior fallback already won
             switch fallback {
             case .galleryDl:
@@ -518,12 +702,11 @@ class DownloadManager: ObservableObject {
 
     private func finalize(_ item: DownloadItem) {
         saveQueue()
-        recordHistory(for: item)
         // Skip items the user removed mid-download — their terminal state is
-        // just the terminated process winding down, not news.
-        if items.contains(where: { $0.id == item.id }) {
-            NotificationService.downloadFinished(item)
-        }
+        // just the terminated process winding down, not news and not history.
+        guard stillInList(item) else { return }
+        recordHistory(for: item)
+        NotificationService.downloadFinished(item)
     }
 
     /// Only terminal states (completed/failed) are persisted. Crash recovery for
@@ -622,17 +805,6 @@ class DownloadManager: ObservableObject {
         NSWorkspace.shared.selectFile(history.fileURL.path, inFileViewerRootedAtPath: "")
     }
 
-    private func showNotice(_ message: String) {
-        withAnimation(.easeInOut(duration: 0.2)) { notice = message }
-        noticeTask?.cancel()
-        noticeTask = Task {
-            try? await Task.sleep(nanoseconds: 3_000_000_000)
-            if !Task.isCancelled {
-                withAnimation(.easeInOut(duration: 0.2)) { notice = nil }
-            }
-        }
-    }
-
     // MARK: - Queue persistence
 
     private func saveQueue() {
@@ -665,7 +837,9 @@ class DownloadManager: ObservableObject {
         }
     }
 
-    private static let trackingParamsExact = Set(["si", "s", "ref", "ref_src", "ref_url", "fbclid", "gclid", "msclkid"])
+    // "t" covers x.com share links (?s=46&t=…) so they dedup against the bare
+    // status URL; YouTube's t= is only a seek position, irrelevant to a download.
+    private static let trackingParamsExact = Set(["si", "s", "t", "ref", "ref_src", "ref_url", "fbclid", "gclid", "msclkid"])
 
     static func stripTrackingParams(_ urlString: String) -> String {
         guard var c = URLComponents(string: urlString) else { return urlString }
@@ -683,4 +857,57 @@ struct DuplicateConfirmation: Identifiable {
     let url: String
     let priorEntry: HistoryEntry
     let priorFileExists: Bool
+}
+
+/// One capture's worth of already-in-history links, presented as a single
+/// alert — "Download all again / Skip all" — instead of N sequential ones.
+struct DuplicateBatch: Identifiable {
+    let id = UUID()
+    let confirmations: [DuplicateConfirmation]
+
+    /// Non-nil when the batch is one link, which gets the detailed alert
+    /// (prior date, saved path, Show in Finder).
+    var single: DuplicateConfirmation? {
+        confirmations.count == 1 ? confirmations.first : nil
+    }
+}
+
+/// Where a capture came from — only used to word the "no link" feedback.
+enum CaptureSource {
+    case clipboard, field, drop
+
+    var noLinkMessage: String {
+        switch self {
+        case .clipboard: return "No link found in the clipboard"
+        case .field: return "That doesn't look like a link"
+        case .drop: return "No link found in the dropped text"
+        }
+    }
+}
+
+/// What one capture did, for callers that react to it (e.g. the URL field
+/// clears itself only when its text was accepted).
+struct CaptureResult {
+    let queued: Int
+    let alreadyPresent: Int
+    let toConfirm: Int
+    let foundLinks: Bool
+}
+
+/// A status-line message describing the outcome of a capture.
+struct CaptureFeedback: Equatable {
+    enum Kind { case success, info, warning }
+
+    /// Every capture gets a fresh identity, even when the visible outcome is
+    /// word-for-word the same — onChange-driven side effects (filter reset,
+    /// scroll, pulse, VoiceOver announcement) must fire for repeats too.
+    let id = UUID()
+    let kind: Kind
+    let message: String
+    /// Existing item to scroll to and pulse ("already in your list").
+    var highlightItemID: UUID? = nil
+    /// Stays until replaced (pasteboard access denied) instead of auto-clearing.
+    var isPersistent: Bool = false
+    /// Show an "Open System Settings" button next to the message.
+    var offersPrivacySettings: Bool = false
 }

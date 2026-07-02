@@ -34,4 +34,44 @@ final class URLExtractionTests: XCTestCase {
             ["https://a.com/1", "https://b.com/2", "https://c.com/3"]
         )
     }
+
+    func testTrailingPunctuationIsStripped() {
+        XCTAssertEqual(
+            DownloadManager.extractURLs(from: "see https://x.com/a/status/1, then https://x.com/b/status/2。"),
+            ["https://x.com/a/status/1", "https://x.com/b/status/2"]
+        )
+    }
+
+    func testWrappingBracketsAndQuotesAreStripped() {
+        XCTAssertEqual(
+            DownloadManager.extractURLs(from: "(https://x.com/a) 「https://x.com/b」 \"https://x.com/c\""),
+            ["https://x.com/a", "https://x.com/b", "https://x.com/c"]
+        )
+    }
+
+    func testBalancedParenInURLIsKept() {
+        XCTAssertEqual(
+            DownloadManager.extractURLs(from: "https://en.wikipedia.org/wiki/Alien_(film)"),
+            ["https://en.wikipedia.org/wiki/Alien_(film)"]
+        )
+    }
+
+    func testSingleBareTokenGetsHTTPSAssumed() {
+        XCTAssertEqual(
+            DownloadManager.extractURLs(from: "x.com/a/status/1"),
+            ["https://x.com/a/status/1"]
+        )
+        // …but only when it's the entire input — prose never sprouts URLs.
+        XCTAssertEqual(DownloadManager.extractURLs(from: "see x.com/a/status/1 today"), [])
+    }
+
+    func testEmailAndPlainWordsAreNotBareURLs() {
+        XCTAssertEqual(DownloadManager.extractURLs(from: "user@example.com"), [])
+        XCTAssertEqual(DownloadManager.extractURLs(from: "hello"), [])
+        XCTAssertEqual(DownloadManager.extractURLs(from: "1.2"), [])
+        // Filename-shaped tokens must not become downloads — a bare host
+        // only counts with a path.
+        XCTAssertEqual(DownloadManager.extractURLs(from: "node.js"), [])
+        XCTAssertEqual(DownloadManager.extractURLs(from: "notes.txt"), [])
+    }
 }
