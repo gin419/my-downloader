@@ -180,8 +180,9 @@ class DownloadManager: ObservableObject {
     @discardableResult
     func capture(text: String, source: CaptureSource) -> CaptureResult {
         var urls: [String] = []
+        var seen: Set<String> = []
         for url in Self.extractURLs(from: text).map(Self.stripTrackingParams)
-        where !urls.contains(url) {
+        where seen.insert(url).inserted {
             urls.append(url)
         }
         guard !urls.isEmpty else {
@@ -251,6 +252,77 @@ class DownloadManager: ObservableObject {
             return nil
         }
         return capture(text: text, source: .clipboard)
+    }
+
+    /// What an `xdownloader://` URL asks for.
+    enum SchemeCommand: Equatable {
+        case download(String)  // decoded text holding one or more links
+    }
+
+    /// Grammar (for Shortcuts, Raycast, scripts):
+    ///   xdownloader://download?url=<link>[&url=<link>…]  — queue links
+    /// `urls=` is accepted as an alias, and the host-less form
+    /// `xdownloader:download?…` works too. There is deliberately NO verb that
+    /// reads the clipboard: any webpage can fire a scheme URL, and clipboard
+    /// reads must stay tied to an in-app user gesture.
+    nonisolated static func schemeCommand(from url: URL) -> SchemeCommand? {
+        guard url.scheme?.lowercased() == "xdownloader" else { return nil }
+        let verb = (url.host ?? url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")))
+            .lowercased()
+        switch verb {
+        case "download":
+            // URLComponents hands values back percent-decoded. An empty text
+            // still counts as a download command — capture() then answers
+            // with the truthful "carried no link" feedback.
+            let queryItems = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+            let text =
+                queryItems
+                .filter { ["url", "urls"].contains($0.name.lowercased()) }
+                .compactMap(\.value)
+                .joined(separator: "\n")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return .download(text)
+        default:
+            return nil
+        }
+    }
+
+    /// Entry point for xdownloader:// URLs (delivered via the app delegate).
+    @discardableResult
+    func handleSchemeURL(_ url: URL) -> CaptureResult? {
+        switch Self.schemeCommand(from: url) {
+        case .download(let text):
+            return capture(text: text, source: .urlScheme)
+        case nil:
+            showFeedback(
+                CaptureFeedback(kind: .warning, message: "Unrecognized xdownloader:// command"))
+            return nil
+        }
+    }
+
+    /// File menu "Import Links…": read a plain-text file and run its contents
+    /// through the capture funnel. Reads off the main actor — a link list is
+    /// small, but nothing stops a user from picking a huge log file.
+    func importLinks(from fileURL: URL) async -> CaptureResult? {
+        let size = (try? fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+        guard size <= 10_000_000 else {
+            showFeedback(
+                CaptureFeedback(
+                    kind: .warning,
+                    message: "\(fileURL.lastPathComponent) is too large to import (over 10 MB)"))
+            return nil
+        }
+        let text = await Task.detached {
+            var encoding = String.Encoding.utf8
+            return try? String(contentsOf: fileURL, usedEncoding: &encoding)
+        }.value
+        guard let text else {
+            showFeedback(
+                CaptureFeedback(
+                    kind: .warning, message: "Couldn't read \(fileURL.lastPathComponent)"))
+            return nil
+        }
+        return capture(text: text, source: .file)
     }
 
     /// macOS 15.4+ pasteboard privacy lives under Privacy & Security; there is
@@ -992,13 +1064,15 @@ struct DuplicateBatch: Identifiable {
 
 /// Where a capture came from — only used to word the "no link" feedback.
 enum CaptureSource {
-    case clipboard, field, drop
+    case clipboard, field, drop, urlScheme, file
 
     var noLinkMessage: String {
         switch self {
         case .clipboard: return "No link found in the clipboard"
         case .field: return "That doesn't look like a link"
         case .drop: return "No link found in the dropped text"
+        case .urlScheme: return "The xdownloader:// URL carried no link"
+        case .file: return "No links found in the file"
         }
     }
 }

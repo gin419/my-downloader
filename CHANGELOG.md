@@ -9,6 +9,8 @@ Entries before _Unreleased_ were back-filled from git history.
 ## [Unreleased]
 
 ### Added
+- **`xdownloader://` URL scheme** — `xdownloader://download?url=…` (repeatable, `urls=` alias) queues links for Shortcuts, Raycast, and scripts; success is quiet and background, and the window is raised only for outcomes that need attention. No clipboard verb by design — webpages can fire scheme URLs (#40).
+- **Import from file** — File → Import Links… (⌘O) reads a plain-text file and queues every link in it through the capture flow (#40).
 - **Menu bar extra** — a status item with a live count of unfinished downloads ("9+" capped) and a warning triangle for failures that happened while the app was in the background; its menu offers Paste and Download, an activity summary with aggregate speed, up to five live progress rows, "Retry All Failed", and quick access to the window and Settings. Hide it in Settings or by ⌘-dragging the icon out (#39).
 - **Quiet Funnel main window** — hero "Paste & Download" button reads the clipboard and downloads in one click; with text in the URL field the same slot morphs to "Download" (#36).
 - **Status-line feedback** — a fixed line under the capture row answers every capture ("Queued 3 links", "No link found in the clipboard", "Already in your list" with scroll-and-pulse) without shifting the layout; a macOS 15.4+ clipboard-permission denial is called out with a System Settings shortcut (#36).
