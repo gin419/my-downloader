@@ -55,6 +55,9 @@ and [CHANGELOG.md](../CHANGELOG.md) for release history.
 ## v2.0 — A library, not a log
 
 - **Thumbnails & in-app preview** for completed downloads
+- **List density / view switcher** — compact vs. comfortable rows (and a gallery
+  view) as a view control next to the filter bar, Finder-style — a view mode,
+  not another Settings toggle
 - **Per-download format override** — pick format/quality per URL, not globally
 - **Search & re-download** across the full download history
 - **Share Sheet / browser extension** — send URLs straight from Safari or
