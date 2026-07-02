@@ -97,7 +97,8 @@ tags = ["pii", "path", "comment"]
 [allowlist]
 description = "Files that are known-safe to skip"
 paths = [
-  '''\.github/gitleaks/layer2-rules\.toml''',
+  '''(?:^|/)\.github/gitleaks/layer[12]-(?:rules|config)\.toml$''',
+  '''(?:^|/)security/layer[12]-rules\.toml$''',
   '''\.github/workflows/update-security-rules\.yml''',
 ]
 # Historical commits that contain /Users/gin/ in code comments (removed in later commits)

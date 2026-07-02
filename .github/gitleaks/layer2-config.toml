@@ -1,0 +1,17 @@
+title = "XDownloader — Layer 2: community rules + project allowlist"
+
+# layer2-rules.toml is overwritten weekly by update-security-rules.yml, so any
+# project-side allowlisting must live here, in a file the updater never touches.
+[extend]
+path = ".github/gitleaks/layer2-rules.toml"
+
+# The gitleaks configs themselves contain secret-shaped literal regexes (e.g.
+# the amazon-bedrock rule's pattern), which self-match when a full-history scan
+# reaches the commits that added them. Allowlist every path the configs have
+# ever lived at so a new upstream rule can never break the scan again.
+[[allowlists]]
+description = "gitleaks configs self-match their own rule literals"
+paths = [
+    '''(?:^|/)\.github/gitleaks/layer[12]-rules\.toml$''',
+    '''(?:^|/)security/layer[12]-rules\.toml$''',
+]
