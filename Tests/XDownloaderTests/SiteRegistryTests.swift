@@ -16,6 +16,13 @@ final class SiteRegistryTests: XCTestCase {
         XCTAssertEqual(SiteRegistry.profile(for: "https://example.com/p").id, "other")
     }
 
+    func testInstagramProfileMatching() {
+        XCTAssertEqual(SiteRegistry.profile(for: "https://www.instagram.com/p/Daoe_4TTVY0/").id, "instagram")
+        XCTAssertEqual(SiteRegistry.profile(for: "https://www.instagram.com/reel/Cxyz12345Ab/").id, "instagram")
+        XCTAssertEqual(SiteRegistry.profile(for: "https://www.instagram.com/stories/user/123/").id, "instagram")
+        XCTAssertEqual(SiteRegistry.profile(for: "https://instagr.am/p/Daoe_4TTVY0/").id, "instagram")
+    }
+
     func testCapabilityFlags() {
         let yt = SiteRegistry.profile(for: "https://www.youtube.com/watch?v=x")
         XCTAssertTrue(yt.supportsSubtitles)
@@ -24,6 +31,32 @@ final class SiteRegistryTests: XCTestCase {
         let tw = SiteRegistry.profile(for: "https://x.com/a")
         XCTAssertFalse(tw.supportsSubtitles)
         XCTAssertFalse(tw.usesYouTubeFormatSelector)
+    }
+
+    /// Instagram: yt-dlp first (videos/Reels), gallery-dl only fallback (image
+    /// and mixed carousel posts); no YouTube-style capabilities. The playlist
+    /// suffix keeps carousel video entries (which share one post-level title)
+    /// from colliding on a single filename and being skipped as "already
+    /// downloaded"; it must use the `{0}` replacement syntax — nested %(...)fmt
+    /// corrupts to null bytes and fails the whole download.
+    func testInstagramProfileDeclaration() {
+        let ig = SiteRegistry.instagram
+        XCTAssertEqual(ig.fallbacks, [.galleryDl])
+        XCTAssertFalse(ig.supportsSubtitles)
+        XCTAssertFalse(ig.usesYouTubeFormatSelector)
+        XCTAssertFalse(ig.detectsExternalRedirect)
+        XCTAssertEqual(ig.outputTemplateSuffix, "%(playlist_index& [{0:02d}]|)s")
+    }
+
+    /// `GalleryDlService.run` appends the matched profile's `galleryDlArgs`
+    /// verbatim, so the declaration is the command line. `{description|''}`
+    /// substitutes an empty string for stories/highlights, which never carry a
+    /// description — without it the filename gets a literal "None".
+    func testInstagramGalleryDlArgs() {
+        let args = SiteRegistry.profile(for: "https://www.instagram.com/p/Daoe_4TTVY0/").galleryDlArgs
+        XCTAssertEqual(
+            args,
+            ["-f", "{username} - {description|''!s:.100} [{post_shortcode}] #{num}.{extension}"])
     }
 
     /// `isTwitterContent` is broader than `twitter.matches` — it also covers the

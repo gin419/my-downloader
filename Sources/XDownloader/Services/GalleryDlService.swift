@@ -73,6 +73,9 @@ enum GalleryDlService {
         guard item.outputPath != nil else {
             if let warning = item.lastToolWarning {
                 item.status = .failed("No media found — \(warning)")
+            } else if SiteRegistry.profile(for: item.url).id == "instagram" {
+                item.status = .failed(
+                    "No media found — the post may be deleted, or sign in to Instagram in the browser selected in Settings → Cookies, then Retry.")
             } else {
                 item.status = .failed(
                     "No media found — the tweet may be deleted, or export cookies.txt in Settings (recommended for X sensitive/NSFW content).")
@@ -171,23 +174,45 @@ enum GalleryDlService {
             return
         }
 
+        // Instagram answers logged-out requests with "[instagram][error] HTTP
+        // redirect to login page (…)" — the raw line doesn't say what to do,
+        // so replace it with the fix.
+        if line.contains("[instagram][error]"), line.lowercased().contains("login") {
+            if case .failed = item.status { return }
+            item.status = .failed(
+                "Instagram requires login — sign in to Instagram in the browser selected in Settings → Cookies, then Retry.")
+            return
+        }
+
         if line.lowercased().contains("error") {
             if case .failed = item.status { return }
             item.status = .failed(line)
         }
     }
 
-    // MARK: - Private helpers
+    // MARK: - Helpers
 
     /// Filename stem → display title: strips the trailing " #N" file index,
-    /// the " [tweet_id]" uniqueness suffix, and the legacy "_N" index.
-    /// "Nick - text [2063695500809826393] #1" → "Nick - text"
-    private static func displayTitle(forPath path: String) -> String {
+    /// the " [tweet_id]" / " [shortcode]" uniqueness suffix, and the legacy
+    /// "_N" index. "Nick - text [2063695500809826393] #1" → "Nick - text"
+    static func displayTitle(forPath path: String) -> String {
         var stem = URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
-        for pattern in [#" #\d+$"#, #" \[\d{10,}\]$"#, #"_\d+$"#] {
+        if let r = stem.range(of: #" #\d+$"#, options: .regularExpression) {
+            stem = String(stem[..<r.lowerBound])
+        }
+        // A filename carries exactly one uniqueness suffix: a numeric tweet id
+        // or an 11-base64url-char Instagram shortcode. Stop after the first
+        // match — a Twitter filename's id is followed by the tweet's own text
+        // once stripped, and that text may itself end with an 11-char bracketed
+        // token ("… [OFFICIAL_MV]") that must survive as part of the title.
+        for pattern in [#" \[\d{10,}\]$"#, #" \[[A-Za-z0-9_-]{11}\]$"#] {
             if let r = stem.range(of: pattern, options: .regularExpression) {
                 stem = String(stem[..<r.lowerBound])
+                break
             }
+        }
+        if let r = stem.range(of: #"_\d+$"#, options: .regularExpression) {
+            stem = String(stem[..<r.lowerBound])
         }
         return stem
     }

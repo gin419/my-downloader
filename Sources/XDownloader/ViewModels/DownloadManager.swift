@@ -1035,7 +1035,11 @@ class DownloadManager: ObservableObject {
 
     // "t" covers x.com share links (?s=46&t=…) so they dedup against the bare
     // status URL; YouTube's t= is only a seek position, irrelevant to a download.
-    private static let trackingParamsExact = Set(["si", "s", "t", "ref", "ref_src", "ref_url", "fbclid", "gclid", "msclkid"])
+    // "igsh" is Instagram's share-link tracking param (?igsh=…), and "igshid"
+    // its older spelling still present in countless shared links — same dedup story.
+    private static let trackingParamsExact = Set([
+        "si", "s", "t", "ref", "ref_src", "ref_url", "fbclid", "gclid", "msclkid", "igsh", "igshid",
+    ])
 
     static func stripTrackingParams(_ urlString: String) -> String {
         guard var c = URLComponents(string: urlString) else { return urlString }

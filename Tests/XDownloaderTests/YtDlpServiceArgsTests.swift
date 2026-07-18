@@ -55,4 +55,23 @@ final class YtDlpServiceArgsTests: XCTestCase {
         let tw = args(DownloadItem(url: "https://x.com/u/status/1"), subtitle: .english)
         XCTAssertFalse(tw.contains("--write-sub"))
     }
+
+    /// Instagram is not a YouTube-selector site: `.singleFile` (the only format
+    /// whose selector is site-gated) must use the generic combined-stream
+    /// selector, and a selected subtitle language must be ignored. The output
+    /// template must carry the playlist-index suffix — it is what distinguishes
+    /// the instagram profile from the `other` catch-all at the args level, and
+    /// without it every video of a carousel resolves to the same filename.
+    func testInstagramUsesGenericSelectorAndNoSubtitles() {
+        let ig = args(
+            DownloadItem(url: "https://www.instagram.com/reel/Cxyz12345Ab/"),
+            format: .singleFile, subtitle: .english)
+        let selector = ig[ig.firstIndex(of: "--format")! + 1]
+        XCTAssertTrue(selector.hasPrefix("bestvideo*[acodec!=none]"))
+        XCTAssertFalse(ig.contains("--write-sub"))
+        XCTAssertFalse(ig.contains("--sub-lang"))
+
+        let output = ig[ig.firstIndex(of: "--output")! + 1]
+        XCTAssertTrue(output.contains("%(playlist_index&"), "carousel de-collision suffix missing: \(output)")
+    }
 }

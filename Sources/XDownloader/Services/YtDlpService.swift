@@ -15,11 +15,12 @@ enum YtDlpService {
         cookieBrowser: CookieBrowser,
         cookiesFile: String? = nil
     ) -> [String] {
-        // %(playlist_index& [%(playlist_index)02d]|)s expands to " [01]" etc. only when
-        // a tweet contains multiple videos (yt-dlp treats them as a playlist). For
-        // single-video tweets playlist_index is not set, so the suffix is empty.
-        // Non-Twitter extractors (e.g. Pornhub) trigger a yt-dlp bug where nested
-        // %(...)fmt patterns inside conditionals corrupt to null bytes — skip it there.
+        // The profile's outputTemplateSuffix expands to " [01]" etc. only when a
+        // post contains multiple videos (yt-dlp treats them as a playlist). For
+        // single videos playlist_index is not set, so the suffix is empty.
+        // Nested %(...)fmt patterns inside the &conditional corrupt to null
+        // bytes (a yt-dlp template-parser limitation) — new suffixes must use
+        // the `{0}` replacement syntax instead (see the instagram profile).
         let profile = SiteRegistry.profile(for: item.url)
         let outputTemplate = outputDirectory.path + "/%(uploader)s - %(title)s\(profile.outputTemplateSuffix).%(ext)s"
         var args: [String] = []
