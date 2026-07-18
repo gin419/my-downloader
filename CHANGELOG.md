@@ -28,7 +28,7 @@ Entries before _Unreleased_ were back-filled from git history.
 ### Fixed
 - Progress bars expose their value to VoiceOver, and the mouse cursor no longer sticks as a pointing hand when a hovered row is removed (#36).
 - Re-adding a link whose file already exists on disk completes again instead of failing with "yt-dlp reported success but found no media to download" — yt-dlp's "has already been downloaded" skip line now counts as the download's output (#43).
-- Twitter downloads flow through yt-dlp again (with live progress): the filename template's nested playlist-index form has never been valid on yt-dlp's template engine — every tweet crashed filename preparation and was silently served by the gallery-dl fallback instead. Filenames no longer double the author name, and the photos of mixed video+photo posts (Twitter and Instagram) are still collected by a follow-up gallery-dl pass (#XX).
+- Twitter downloads flow through yt-dlp again (with live progress): the filename template's nested playlist-index form has never been valid on yt-dlp's template engine — every tweet crashed filename preparation and was silently served by the gallery-dl fallback instead. Filenames no longer double the author name, and the photos of mixed video+photo posts (Twitter and Instagram) are still collected by a follow-up gallery-dl pass (#45).
 
 ## [1.5.0] — 2026-07-02
 
