@@ -75,7 +75,7 @@ enum GalleryDlService {
                 item.status = .failed("No media found — \(warning)")
             } else if SiteRegistry.profile(for: item.url).id == "instagram" {
                 item.status = .failed(
-                    "No media found — the post may be deleted or expired, or sign in to Instagram in the browser selected in Settings → Cookies, then Retry.")
+                    "No media found — the post may be deleted, or sign in to Instagram in the browser selected in Settings → Cookies, then Retry.")
             } else {
                 item.status = .failed(
                     "No media found — the tweet may be deleted, or export cookies.txt in Settings (recommended for X sensitive/NSFW content).")
