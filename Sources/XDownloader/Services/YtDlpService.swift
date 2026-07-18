@@ -109,6 +109,26 @@ enum YtDlpService {
     static func parseLine(_ line: String, item: DownloadItem, terminate: () -> Void) {
         guard !line.isEmpty else { return }
 
+        // Skip notice: the file already exists on disk from a prior download.
+        // yt-dlp then exits 0 printing only this line — no Destination:/[Merger]
+        // follows — so it must count as the captured output or the run reads as
+        // an "empty success" and the item fails. Checked BEFORE the progress
+        // branch: the output template preserves literal '%' from titles, and a
+        // '%' in the filename would otherwise make this line parse as progress.
+        // Older yt-dlp versions append " and merged" — match the line's tail
+        // (so a Destination: line can't land here) and cut at the LAST marker
+        // occurrence, keeping filenames that contain the marker text intact.
+        if line.hasPrefix("[download] "),
+            line.hasSuffix(" has already been downloaded")
+                || line.hasSuffix(" has already been downloaded and merged")
+        {
+            let body = line.dropFirst("[download] ".count)
+            if let marker = body.range(of: " has already been downloaded", options: .backwards) {
+                Self.recordMediaPath(String(body[..<marker.lowerBound]), on: item)
+            }
+            return
+        }
+
         // Progress: [download]  45.3% of  15.42MiB at  2.34MiB/s ETA 00:05
         if line.hasPrefix("[download]") && line.contains("%") {
             item.status = .downloading
@@ -128,33 +148,7 @@ enum YtDlpService {
         if line.hasPrefix("[download]") && line.contains("Destination:"),
             let range = line.range(of: "Destination: ")
         {
-            let path = String(line[range.upperBound...])
-            let ext = (path as NSString).pathExtension.lowercased()
-            let isImage = MediaExtensions.image.contains(ext)
-            let isAudio = MediaExtensions.audio.contains(ext)
-
-            if !isImage {
-                if isAudio {
-                    item.audioPath = path
-                    item.mediaCategory = .audio  // a direct .mp3/.m4a download (not via [ExtractAudio])
-                } else {
-                    item.videoPath = path
-                    item.videoCount = (item.videoCount ?? 0) + 1
-                }
-                item.outputPath = path
-            } else if item.outputPath == nil {
-                item.outputPath = path
-            }
-
-            if item.title == nil {
-                // Keep the full "Uploader - Title" stem (gallery-dl titles already do this).
-                let stem = URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
-                item.title = Self.cleanTitleStem(stem, isImage: isImage)
-            }
-            if isImage { item.imageCount = (item.imageCount ?? 0) + 1 }
-
-            item.recomputeMediaCategory()  // update category progressively as files land
-
+            Self.recordMediaPath(String(line[range.upperBound...]), on: item)
             return
         }
 
@@ -217,5 +211,38 @@ enum YtDlpService {
                 item.status = .failed(line)
             }
         }
+    }
+
+    /// Record a media file yt-dlp reports as on disk — a fresh "Destination:"
+    /// line or a "has already been downloaded" skip notice: classify by
+    /// extension, set the audio/video/image paths and counts, and infer a
+    /// title from the filename stem when none is known yet.
+    @MainActor
+    private static func recordMediaPath(_ path: String, on item: DownloadItem) {
+        let ext = (path as NSString).pathExtension.lowercased()
+        let isImage = MediaExtensions.image.contains(ext)
+        let isAudio = MediaExtensions.audio.contains(ext)
+
+        if !isImage {
+            if isAudio {
+                item.audioPath = path
+                item.mediaCategory = .audio  // a direct .mp3/.m4a download (not via [ExtractAudio])
+            } else {
+                item.videoPath = path
+                item.videoCount = (item.videoCount ?? 0) + 1
+            }
+            item.outputPath = path
+        } else if item.outputPath == nil {
+            item.outputPath = path
+        }
+
+        if item.title == nil {
+            // Keep the full "Uploader - Title" stem (gallery-dl titles already do this).
+            let stem = URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
+            item.title = Self.cleanTitleStem(stem, isImage: isImage)
+        }
+        if isImage { item.imageCount = (item.imageCount ?? 0) + 1 }
+
+        item.recomputeMediaCategory()  // update category progressively as files land
     }
 }

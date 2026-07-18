@@ -26,6 +26,7 @@ Entries before _Unreleased_ were back-filled from git history.
 
 ### Fixed
 - Progress bars expose their value to VoiceOver, and the mouse cursor no longer sticks as a pointing hand when a hovered row is removed (#36).
+- Re-adding a link whose file already exists on disk completes again instead of failing with "yt-dlp reported success but found no media to download" — yt-dlp's "has already been downloaded" skip line now counts as the download's output (#43).
 
 ## [1.5.0] — 2026-07-02
 
