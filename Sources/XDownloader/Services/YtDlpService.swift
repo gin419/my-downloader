@@ -128,33 +128,20 @@ enum YtDlpService {
         if line.hasPrefix("[download]") && line.contains("Destination:"),
             let range = line.range(of: "Destination: ")
         {
-            let path = String(line[range.upperBound...])
-            let ext = (path as NSString).pathExtension.lowercased()
-            let isImage = MediaExtensions.image.contains(ext)
-            let isAudio = MediaExtensions.audio.contains(ext)
+            Self.recordMediaPath(String(line[range.upperBound...]), on: item)
+            return
+        }
 
-            if !isImage {
-                if isAudio {
-                    item.audioPath = path
-                    item.mediaCategory = .audio  // a direct .mp3/.m4a download (not via [ExtractAudio])
-                } else {
-                    item.videoPath = path
-                    item.videoCount = (item.videoCount ?? 0) + 1
-                }
-                item.outputPath = path
-            } else if item.outputPath == nil {
-                item.outputPath = path
+        // Skip notice: the file already exists on disk from a prior download.
+        // yt-dlp then exits 0 printing only this line — no Destination:/[Merger]
+        // follows — so it must count as the captured output or the run reads as
+        // an "empty success" and the item fails. Older yt-dlp versions append
+        // " and merged"; take the path before the first marker occurrence.
+        if line.hasPrefix("[download] "), line.contains(" has already been downloaded") {
+            let body = line.dropFirst("[download] ".count)
+            if let marker = body.range(of: " has already been downloaded") {
+                Self.recordMediaPath(String(body[..<marker.lowerBound]), on: item)
             }
-
-            if item.title == nil {
-                // Keep the full "Uploader - Title" stem (gallery-dl titles already do this).
-                let stem = URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
-                item.title = Self.cleanTitleStem(stem, isImage: isImage)
-            }
-            if isImage { item.imageCount = (item.imageCount ?? 0) + 1 }
-
-            item.recomputeMediaCategory()  // update category progressively as files land
-
             return
         }
 
@@ -217,5 +204,38 @@ enum YtDlpService {
                 item.status = .failed(line)
             }
         }
+    }
+
+    /// Record a media file yt-dlp reports as on disk — a fresh "Destination:"
+    /// line or a "has already been downloaded" skip notice: classify by
+    /// extension, set the audio/video/image paths and counts, and infer a
+    /// title from the filename stem when none is known yet.
+    @MainActor
+    private static func recordMediaPath(_ path: String, on item: DownloadItem) {
+        let ext = (path as NSString).pathExtension.lowercased()
+        let isImage = MediaExtensions.image.contains(ext)
+        let isAudio = MediaExtensions.audio.contains(ext)
+
+        if !isImage {
+            if isAudio {
+                item.audioPath = path
+                item.mediaCategory = .audio  // a direct .mp3/.m4a download (not via [ExtractAudio])
+            } else {
+                item.videoPath = path
+                item.videoCount = (item.videoCount ?? 0) + 1
+            }
+            item.outputPath = path
+        } else if item.outputPath == nil {
+            item.outputPath = path
+        }
+
+        if item.title == nil {
+            // Keep the full "Uploader - Title" stem (gallery-dl titles already do this).
+            let stem = URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
+            item.title = Self.cleanTitleStem(stem, isImage: isImage)
+        }
+        if isImage { item.imageCount = (item.imageCount ?? 0) + 1 }
+
+        item.recomputeMediaCategory()  // update category progressively as files land
     }
 }
