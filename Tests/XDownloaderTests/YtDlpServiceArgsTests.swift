@@ -74,4 +74,19 @@ final class YtDlpServiceArgsTests: XCTestCase {
         let output = ig[ig.firstIndex(of: "--output")! + 1]
         XCTAssertTrue(output.contains("%(playlist_index&"), "carousel de-collision suffix missing: \(output)")
     }
+
+    /// yt-dlp's twitter extractor already builds %(title)s as "<user> - <text>",
+    /// so the template must drop its own %(uploader)s prefix there — otherwise
+    /// every filename and row title doubles the author ("NASA - NASA - …").
+    /// Sites whose extractor keeps title and uploader separate keep the prefix.
+    func testOutputTemplateStemPerSite() {
+        let tw = args(DownloadItem(url: "https://x.com/u/status/1"))
+        let twOutput = tw[tw.firstIndex(of: "--output")! + 1]
+        XCTAssertTrue(twOutput.hasPrefix("/out/%(title)s"), twOutput)
+        XCTAssertFalse(twOutput.contains("%(uploader)s"), twOutput)
+
+        let yt = args(DownloadItem(url: "https://www.youtube.com/watch?v=x"))
+        let ytOutput = yt[yt.firstIndex(of: "--output")! + 1]
+        XCTAssertTrue(ytOutput.hasPrefix("/out/%(uploader)s - %(title)s"), ytOutput)
+    }
 }

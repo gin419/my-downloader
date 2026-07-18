@@ -16,24 +16,11 @@ enum GalleryDlService {
     ) async {
         let beforeFiles = Set((try? FileManager.default.contentsOfDirectory(atPath: outputDirectory.path)) ?? [])
 
-        var args = CookieArgs.make(browser: cookieBrowser, file: cookiesFile)
-        args += [
-            "--dest", outputDirectory.path,
-            "-D", ".",
-            // Large X/Reddit videos (multi-GB) drop the connection or read-time out
-            // on a flaky link; the default ~4 retries / 30s aren't enough. Be generous.
-            "--retries", "10",
-            "-o", "downloader.http.timeout=60",
-        ]
-        args += SiteRegistry.profile(for: item.url).galleryDlArgs
-        args += [
-            "--no-mtime",
-            item.url,
-        ]
-
         let exitCode = await ProcessRunner.run(
             executablePath: executablePath,
-            arguments: args,
+            arguments: arguments(
+                for: item.url, outputDirectory: outputDirectory,
+                cookieBrowser: cookieBrowser, cookiesFile: cookiesFile),
             item: item,
             register: register,
             unregister: unregister,
@@ -116,6 +103,79 @@ enum GalleryDlService {
         }
 
         item.markCompleted()
+    }
+
+    // MARK: - Argument building
+
+    /// One command line for both the full fallback run and the image sweep —
+    /// `extraArgs` (e.g. the sweep's `-o videos=false`) slot in after the
+    /// profile's own args so they can override per-site option defaults.
+    static func arguments(
+        for url: String,
+        outputDirectory: URL,
+        cookieBrowser: CookieBrowser,
+        cookiesFile: String?,
+        extraArgs: [String] = []
+    ) -> [String] {
+        var args = CookieArgs.make(browser: cookieBrowser, file: cookiesFile)
+        args += [
+            "--dest", outputDirectory.path,
+            "-D", ".",
+            // Large X/Reddit videos (multi-GB) drop the connection or read-time out
+            // on a flaky link; the default ~4 retries / 30s aren't enough. Be generous.
+            "--retries", "10",
+            "-o", "downloader.http.timeout=60",
+        ]
+        args += SiteRegistry.profile(for: url).galleryDlArgs
+        args += extraArgs
+        args += [
+            "--no-mtime",
+            url,
+        ]
+        return args
+    }
+
+    // MARK: - Image sweep
+
+    /// Post-success photo pass for profiles that declare `imageSweepArgs`:
+    /// collects the photos of a mixed video+photo post without touching the
+    /// already-captured video result — the item's status, title, and
+    /// outputPath stay the video's. Failures are deliberately silent: the
+    /// video is the download's outcome, and a sweep that finds nothing is the
+    /// normal case (video-only posts).
+    @MainActor
+    static func runImageSweep(
+        item: DownloadItem,
+        executablePath: String,
+        outputDirectory: URL,
+        cookieBrowser: CookieBrowser,
+        cookiesFile: String? = nil,
+        register: @escaping (Process) -> Void,
+        unregister: @escaping () -> Void
+    ) async {
+        guard let sweepArgs = SiteRegistry.profile(for: item.url).imageSweepArgs else { return }
+        let beforeFiles = Set((try? FileManager.default.contentsOfDirectory(atPath: outputDirectory.path)) ?? [])
+
+        _ = await ProcessRunner.run(
+            executablePath: executablePath,
+            arguments: arguments(
+                for: item.url, outputDirectory: outputDirectory,
+                cookieBrowser: cookieBrowser, cookiesFile: cookiesFile, extraArgs: sweepArgs),
+            item: item,
+            register: register,
+            unregister: unregister,
+            lineParser: { _, _ in }  // the video owns status/title/outputPath
+        )
+
+        let afterFiles = (try? FileManager.default.contentsOfDirectory(atPath: outputDirectory.path)) ?? []
+        let newImages = afterFiles.filter {
+            !beforeFiles.contains($0)
+                && MediaExtensions.image.contains(URL(fileURLWithPath: $0).pathExtension.lowercased())
+        }
+        if !newImages.isEmpty {
+            item.imageCount = (item.imageCount ?? 0) + newImages.count
+            item.recomputeMediaCategory()
+        }
     }
 
     // MARK: - Output parsing

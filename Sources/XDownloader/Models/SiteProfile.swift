@@ -33,12 +33,22 @@ struct SiteProfile {
     /// Twitter and Instagram use it for the multi-video playlist index so
     /// entries of one post don't collide on the same filename; empty elsewhere.
     let outputTemplateSuffix: String
+    /// The extractor's own %(title)s already begins with "<uploader> - ", so
+    /// the template must not prepend %(uploader)s again or every filename and
+    /// row title doubles the author ("NASA - NASA - …"). Twitter only.
+    let extractorTitleIncludesUploader: Bool
     /// Kill yt-dlp if it follows a redirect *out* of the original page, so a
     /// fallback can handle it. Twitter only.
     let detectsExternalRedirect: Bool
     /// Extra gallery-dl args for this site (filename template, etc.); empty when
     /// gallery-dl's per-extractor defaults are fine.
     let galleryDlArgs: [String]
+    /// Non-nil: after a SUCCESSFUL yt-dlp run, gallery-dl runs once more with
+    /// these extra args to collect the post's photos. yt-dlp deliberately skips
+    /// photos in mixed video+photo posts and exits 0, and success bypasses the
+    /// failure-driven `fallbacks` chain — without the sweep the photos would
+    /// silently vanish.
+    let imageSweepArgs: [String]?
 
 }
 
@@ -52,7 +62,15 @@ enum SiteRegistry {
         fallbacks: [.galleryDl, .fxTwitter],
         supportsSubtitles: false,
         usesYouTubeFormatSelector: false,
-        outputTemplateSuffix: "%(playlist_index& [%(playlist_index)02d]|)s",
+        // `{0}` replacement syntax, NOT the nested %(...)fmt form: the nested
+        // form has never been valid on yt-dlp's current template engine
+        // (verified to corrupt to null bytes and raise KeyError in
+        // prepare_filename on 2023.07 through 2026.07) — for EVERY tweet,
+        // single videos too — so yt-dlp never downloaded and gallery-dl
+        // silently absorbed all Twitter traffic.
+        outputTemplateSuffix: "%(playlist_index& [{0:02d}]|)s",
+        // yt-dlp's twitter extractor builds title as "<user name> - <text>".
+        extractorTitleIncludesUploader: true,
         detectsExternalRedirect: true,
         // gallery-dl Twitter args (hard-won against silent empty-success bugs):
         // quoted/retweets=true fetch media owned by quoted/retweeted tweets;
@@ -63,7 +81,8 @@ enum SiteRegistry {
             "-o", "quoted=true",
             "-o", "retweets=true",
             "-f", "{author[nick]} - {content!s:.100} [{tweet_id}] #{num}.{extension}",
-        ]
+        ],
+        imageSweepArgs: ["-o", "videos=false"]
     )
 
     static let youtube = SiteProfile(
@@ -73,8 +92,10 @@ enum SiteRegistry {
         supportsSubtitles: true,
         usesYouTubeFormatSelector: true,
         outputTemplateSuffix: "",
+        extractorTitleIncludesUploader: false,
         detectsExternalRedirect: false,
-        galleryDlArgs: []
+        galleryDlArgs: [],
+        imageSweepArgs: nil
     )
 
     static let reddit = SiteProfile(
@@ -84,8 +105,10 @@ enum SiteRegistry {
         supportsSubtitles: false,
         usesYouTubeFormatSelector: false,
         outputTemplateSuffix: "",
+        extractorTitleIncludesUploader: false,
         detectsExternalRedirect: false,
-        galleryDlArgs: []
+        galleryDlArgs: [],
+        imageSweepArgs: nil
     )
 
     static let instagram = SiteProfile(
@@ -103,6 +126,7 @@ enum SiteRegistry {
         // (verified against yt-dlp 2026.7.4): nesting %(...)fmt inside the
         // conditional corrupts to null bytes and fails the whole download.
         outputTemplateSuffix: "%(playlist_index& [{0:02d}]|)s",
+        extractorTitleIncludesUploader: false,
         detectsExternalRedirect: false,
         // gallery-dl Instagram args (keywords verified against gallery-dl
         // 1.32.6's instagram extractor): {description|''} substitutes an empty
@@ -114,7 +138,8 @@ enum SiteRegistry {
         // suffix is stripped after download like Twitter's.
         galleryDlArgs: [
             "-f", "{username} - {description|''!s:.100} [{post_shortcode}] #{num}.{extension}",
-        ]
+        ],
+        imageSweepArgs: ["-o", "videos=false"]
     )
 
     /// Catch-all: the generic yt-dlp extractor with no fallbacks.
@@ -125,8 +150,10 @@ enum SiteRegistry {
         supportsSubtitles: false,
         usesYouTubeFormatSelector: false,
         outputTemplateSuffix: "",
+        extractorTitleIncludesUploader: false,
         detectsExternalRedirect: false,
-        galleryDlArgs: []
+        galleryDlArgs: [],
+        imageSweepArgs: nil
     )
 
     static let all: [SiteProfile] = [twitter, youtube, reddit, instagram, other]

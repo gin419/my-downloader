@@ -22,7 +22,10 @@ enum YtDlpService {
         // bytes (a yt-dlp template-parser limitation) — new suffixes must use
         // the `{0}` replacement syntax instead (see the instagram profile).
         let profile = SiteRegistry.profile(for: item.url)
-        let outputTemplate = outputDirectory.path + "/%(uploader)s - %(title)s\(profile.outputTemplateSuffix).%(ext)s"
+        let stem =
+            profile.extractorTitleIncludesUploader
+            ? "%(title)s" : "%(uploader)s - %(title)s"
+        let outputTemplate = outputDirectory.path + "/\(stem)\(profile.outputTemplateSuffix).%(ext)s"
         var args: [String] = []
         args += CookieArgs.make(browser: cookieBrowser, file: cookiesFile)
 
