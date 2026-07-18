@@ -33,6 +33,20 @@ final class SiteRegistryTests: XCTestCase {
         XCTAssertFalse(tw.usesYouTubeFormatSelector)
     }
 
+    /// Twitter's suffix must use the same `{0}` replacement syntax as
+    /// Instagram's: the nested %(playlist_index)02d form has never been valid
+    /// on yt-dlp's template engine — it corrupts to null bytes and failed
+    /// EVERY tweet at filename preparation, silently routing all Twitter
+    /// traffic to the gallery-dl fallback. The extractor bakes the author into
+    /// %(title)s, and the sweep keeps mixed-post photos from vanishing now
+    /// that yt-dlp successes are real.
+    func testTwitterProfileDeclaration() {
+        let tw = SiteRegistry.twitter
+        XCTAssertEqual(tw.outputTemplateSuffix, "%(playlist_index& [{0:02d}]|)s")
+        XCTAssertTrue(tw.extractorTitleIncludesUploader)
+        XCTAssertEqual(tw.imageSweepArgs, ["-o", "videos=false"])
+    }
+
     /// Instagram: yt-dlp first (videos/Reels), gallery-dl only fallback (image
     /// and mixed carousel posts); no YouTube-style capabilities. The playlist
     /// suffix keeps carousel video entries (which share one post-level title)
@@ -46,6 +60,23 @@ final class SiteRegistryTests: XCTestCase {
         XCTAssertFalse(ig.usesYouTubeFormatSelector)
         XCTAssertFalse(ig.detectsExternalRedirect)
         XCTAssertEqual(ig.outputTemplateSuffix, "%(playlist_index& [{0:02d}]|)s")
+        XCTAssertFalse(ig.extractorTitleIncludesUploader)
+        XCTAssertEqual(ig.imageSweepArgs, ["-o", "videos=false"])
+    }
+
+    /// The sweep's extra args slot in AFTER the profile's own gallery-dl args
+    /// (so `-o videos=false` overrides any per-site option default) and before
+    /// the trailing URL.
+    func testImageSweepArgumentOrder() {
+        let args = GalleryDlService.arguments(
+            for: "https://x.com/u/status/1",
+            outputDirectory: URL(fileURLWithPath: "/out"),
+            cookieBrowser: .none, cookiesFile: nil,
+            extraArgs: ["-o", "videos=false"])
+        XCTAssertEqual(args.last, "https://x.com/u/status/1")
+        let sweep = args.lastIndex(of: "videos=false")!
+        let filename = args.firstIndex(of: "{author[nick]} - {content!s:.100} [{tweet_id}] #{num}.{extension}")!
+        XCTAssertTrue(filename < sweep)
     }
 
     /// `GalleryDlService.run` appends the matched profile's `galleryDlArgs`

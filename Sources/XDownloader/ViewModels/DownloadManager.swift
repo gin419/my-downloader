@@ -756,6 +756,7 @@ class DownloadManager: ObservableObject {
         // that partially downloaded) still fall through to the fallback below.
         let subtitleOnlyFailure = item.subtitleDownloadFailed && !hasFatalError
         if mediaCaptured && (ytExitCode == 0 || subtitleOnlyFailure) {
+            await runImageSweepIfNeeded(item)
             item.markCompleted()
             finalize(item)
             return
@@ -843,6 +844,36 @@ class DownloadManager: ObservableObject {
         }
 
         finalize(item)
+    }
+
+    /// Mixed video+photo posts: yt-dlp captures the video(s) and exits 0 —
+    /// deliberately skipping the photos — and success bypasses the
+    /// failure-driven fallback chain, so without this pass the photos would
+    /// silently vanish. Runs only for profiles declaring `imageSweepArgs`.
+    /// A Pause pressed during the sweep only stops the sweep — the video
+    /// already landed, so the row completes; the stale pause request must be
+    /// consumed here or the item's NEXT run would misread it as a pause.
+    private func runImageSweepIfNeeded(_ item: DownloadItem) async {
+        // Audio-only is an explicit opt-out of visual media: sweeping would
+        // download photos the user didn't ask for and recomputeMediaCategory
+        // would overwrite the explicitly-set .audio category.
+        guard youtubeFormat != .audioOnly,
+            SiteRegistry.profile(for: item.url).imageSweepArgs != nil,
+            let gdlPath = galleryDlPath
+        else { return }
+        let cookies = resolveCookiesForDownload()
+        await cookieAccess.withScope(for: item.id, file: cookies.path, grantedURL: cookies.granted) {
+            await GalleryDlService.runImageSweep(
+                item: item,
+                executablePath: gdlPath,
+                outputDirectory: outputDirectory,
+                cookieBrowser: cookieBrowser,
+                cookiesFile: cookies.path,
+                register: { [weak self] p in self?.activeProcesses[item.id] = p },
+                unregister: { [weak self] in self?.activeProcesses.removeValue(forKey: item.id) }
+            )
+        }
+        pausedItemIDs.remove(item.id)
     }
 
     /// Resets yt-dlp's partial state, then runs the gallery-dl fallback (a
