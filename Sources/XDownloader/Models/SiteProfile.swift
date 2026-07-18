@@ -88,6 +88,25 @@ enum SiteRegistry {
         galleryDlArgs: []
     )
 
+    static let instagram = SiteProfile(
+        id: "instagram",
+        matches: { $0.contains("instagram.com/") || $0.contains("instagr.am/") },
+        fallbacks: [.galleryDl],
+        supportsSubtitles: false,
+        usesYouTubeFormatSelector: false,
+        outputTemplateSuffix: "",
+        detectsExternalRedirect: false,
+        // gallery-dl Instagram args (keywords verified against gallery-dl
+        // 1.32.6's instagram extractor): {description!s:.100} forces str(None)
+        // so caption-less posts don't raise on the .100 precision spec (same
+        // trap as Twitter's {content}); [{post_shortcode}] keeps filenames from
+        // different posts unique; #{num} indexes carousel children, and the
+        // single-file " #1" suffix is stripped after download like Twitter's.
+        galleryDlArgs: [
+            "-f", "{username} - {description!s:.100} [{post_shortcode}] #{num}.{extension}",
+        ]
+    )
+
     /// Catch-all: the generic yt-dlp extractor with no fallbacks.
     static let other = SiteProfile(
         id: "other",
@@ -100,7 +119,7 @@ enum SiteRegistry {
         galleryDlArgs: []
     )
 
-    static let all: [SiteProfile] = [twitter, youtube, reddit, other]
+    static let all: [SiteProfile] = [twitter, youtube, reddit, instagram, other]
 
     static func profile(for url: String) -> SiteProfile {
         all.first { $0.matches(url) } ?? other

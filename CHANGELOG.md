@@ -9,6 +9,7 @@ Entries before _Unreleased_ were back-filled from git history.
 ## [Unreleased]
 
 ### Added
+- **Instagram support** — Reels and video posts download via yt-dlp with your browser cookies; image and carousel posts fall back to gallery-dl automatically (the image-tweet flow). Instagram's igsh share-link tracking param is stripped so shared links dedup (#XX).
 - **`xdownloader://` URL scheme** — `xdownloader://download?url=…` (repeatable, `urls=` alias) queues links for Shortcuts, Raycast, and scripts; success is quiet and background, and the window is raised only for outcomes that need attention. No clipboard verb by design — webpages can fire scheme URLs (#40).
 - **Import from file** — File → Import Links… (⌘O) reads a plain-text file and queues every link in it through the capture flow (#40).
 - **Menu bar extra** — a status item with a live count of unfinished downloads ("9+" capped) and a warning triangle for failures that happened while the app was in the background; its menu offers Paste and Download, an activity summary with aggregate speed, up to five live progress rows, "Retry All Failed", and quick access to the window and Settings. Hide it in Settings or by ⌘-dragging the icon out (#39).

@@ -171,6 +171,16 @@ enum GalleryDlService {
             return
         }
 
+        // Instagram answers logged-out requests with "[instagram][error] HTTP
+        // redirect to login page (…)" — the raw line doesn't say what to do,
+        // so replace it with the fix.
+        if line.contains("[instagram][error]"), line.lowercased().contains("login") {
+            if case .failed = item.status { return }
+            item.status = .failed(
+                "Instagram requires login — sign in to Instagram in the browser selected in Settings → Cookies, then Retry.")
+            return
+        }
+
         if line.lowercased().contains("error") {
             if case .failed = item.status { return }
             item.status = .failed(line)
@@ -180,11 +190,13 @@ enum GalleryDlService {
     // MARK: - Private helpers
 
     /// Filename stem → display title: strips the trailing " #N" file index,
-    /// the " [tweet_id]" uniqueness suffix, and the legacy "_N" index.
-    /// "Nick - text [2063695500809826393] #1" → "Nick - text"
-    private static func displayTitle(forPath path: String) -> String {
+    /// the " [tweet_id]" / " [shortcode]" uniqueness suffix, and the legacy
+    /// "_N" index. "Nick - text [2063695500809826393] #1" → "Nick - text"
+    static func displayTitle(forPath path: String) -> String {
         var stem = URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
-        for pattern in [#" #\d+$"#, #" \[\d{10,}\]$"#, #"_\d+$"#] {
+        // Instagram shortcodes are exactly 11 base64url chars; numeric tweet
+        // ids are already covered by the \d{10,} pattern.
+        for pattern in [#" #\d+$"#, #" \[\d{10,}\]$"#, #" \[[A-Za-z0-9_-]{11}\]$"#, #"_\d+$"#] {
             if let r = stem.range(of: pattern, options: .regularExpression) {
                 stem = String(stem[..<r.lowerBound])
             }
