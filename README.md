@@ -132,7 +132,7 @@ After `./build.sh`, drag the resulting `XDownloader.app` to `/Applications/`.
 ### Download engine
 - **X / Twitter videos** via `yt-dlp` + your browser cookies
 - **X / Twitter images** via `gallery-dl` fallback (multi-image aware)
-- **Instagram** — Reels/videos via `yt-dlp`, image & carousel posts via the `gallery-dl` fallback (sign in to Instagram in your cookie-source browser)
+- **Instagram** — Reels, videos & video carousels via `yt-dlp`, image & mixed carousels via the `gallery-dl` fallback (sign in to Instagram in your cookie-source browser)
 - **YouTube** and any other `yt-dlp`-supported site
 - **Smart fallback** when `yt-dlp` follows an external link out of a tweet
 - **Tracking parameter stripping** before download

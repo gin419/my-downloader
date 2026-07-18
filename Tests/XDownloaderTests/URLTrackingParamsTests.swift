@@ -44,6 +44,14 @@ final class URLTrackingParamsTests: XCTestCase {
             "https://www.instagram.com/p/Daoe_4TTVY0/?img_index=2")
     }
 
+    func testStripsLegacyInstagramShareLinkParam() {
+        // Older Instagram app versions emit ?igshid=… — those links are still
+        // everywhere and must dedup against the bare URL and the ?igsh= form.
+        XCTAssertEqual(
+            DownloadManager.stripTrackingParams("https://www.instagram.com/p/Daoe_4TTVY0/?igshid=MzRlODBiNWFlZA%3D%3D"),
+            "https://www.instagram.com/p/Daoe_4TTVY0/")
+    }
+
     func testLeavesNonTrackingParamsUntouched() {
         XCTAssertEqual(
             DownloadManager.stripTrackingParams("https://example.com/p?keep=1"),

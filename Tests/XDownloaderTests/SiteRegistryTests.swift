@@ -34,23 +34,29 @@ final class SiteRegistryTests: XCTestCase {
     }
 
     /// Instagram: yt-dlp first (videos/Reels), gallery-dl only fallback (image
-    /// and carousel posts); no YouTube-style capabilities.
+    /// and mixed carousel posts); no YouTube-style capabilities. The playlist
+    /// suffix keeps carousel video entries (which share one post-level title)
+    /// from colliding on a single filename and being skipped as "already
+    /// downloaded"; it must use the `{0}` replacement syntax — nested %(...)fmt
+    /// corrupts to null bytes and fails the whole download.
     func testInstagramProfileDeclaration() {
         let ig = SiteRegistry.instagram
         XCTAssertEqual(ig.fallbacks, [.galleryDl])
         XCTAssertFalse(ig.supportsSubtitles)
         XCTAssertFalse(ig.usesYouTubeFormatSelector)
         XCTAssertFalse(ig.detectsExternalRedirect)
-        XCTAssertEqual(ig.outputTemplateSuffix, "")
+        XCTAssertEqual(ig.outputTemplateSuffix, "%(playlist_index& [{0:02d}]|)s")
     }
 
     /// `GalleryDlService.run` appends the matched profile's `galleryDlArgs`
-    /// verbatim, so the declaration is the command line.
+    /// verbatim, so the declaration is the command line. `{description|''}`
+    /// substitutes an empty string for stories/highlights, which never carry a
+    /// description — without it the filename gets a literal "None".
     func testInstagramGalleryDlArgs() {
         let args = SiteRegistry.profile(for: "https://www.instagram.com/p/Daoe_4TTVY0/").galleryDlArgs
         XCTAssertEqual(
             args,
-            ["-f", "{username} - {description!s:.100} [{post_shortcode}] #{num}.{extension}"])
+            ["-f", "{username} - {description|''!s:.100} [{post_shortcode}] #{num}.{extension}"])
     }
 
     /// `isTwitterContent` is broader than `twitter.matches` — it also covers the

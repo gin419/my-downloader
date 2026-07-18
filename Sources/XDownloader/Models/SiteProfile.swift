@@ -30,8 +30,8 @@ struct SiteProfile {
     /// Use yt-dlp's DASH/avc YouTube format selector instead of the generic one.
     let usesYouTubeFormatSelector: Bool
     /// Suffix appended to the yt-dlp output template (before the extension).
-    /// Twitter uses it for the multi-video playlist index; empty elsewhere
-    /// (other extractors hit a yt-dlp template bug — see YtDlpService).
+    /// Twitter and Instagram use it for the multi-video playlist index so
+    /// entries of one post don't collide on the same filename; empty elsewhere.
     let outputTemplateSuffix: String
     /// Kill yt-dlp if it follows a redirect *out* of the original page, so a
     /// fallback can handle it. Twitter only.
@@ -94,16 +94,26 @@ enum SiteRegistry {
         fallbacks: [.galleryDl],
         supportsSubtitles: false,
         usesYouTubeFormatSelector: false,
-        outputTemplateSuffix: "",
+        // Multi-video carousels are a yt-dlp playlist whose entries all share
+        // the post-level title ("Video by <user>") and uploader, so without a
+        // per-entry discriminator every entry resolves to the SAME path —
+        // yt-dlp downloads entry 1, skips the rest as "already downloaded",
+        // and exits 0, silently losing videos 2..N (Twitter's exact trap).
+        // The replacement uses yt-dlp's `{0}`-style string.Formatter syntax
+        // (verified against yt-dlp 2026.7.4): nesting %(...)fmt inside the
+        // conditional corrupts to null bytes and fails the whole download.
+        outputTemplateSuffix: "%(playlist_index& [{0:02d}]|)s",
         detectsExternalRedirect: false,
         // gallery-dl Instagram args (keywords verified against gallery-dl
-        // 1.32.6's instagram extractor): {description!s:.100} forces str(None)
-        // so caption-less posts don't raise on the .100 precision spec (same
-        // trap as Twitter's {content}); [{post_shortcode}] keeps filenames from
-        // different posts unique; #{num} indexes carousel children, and the
-        // single-file " #1" suffix is stripped after download like Twitter's.
+        // 1.32.6's instagram extractor): {description|''} substitutes an empty
+        // string when the caption is missing — stories/highlights never set
+        // `description`, and without the default the formatter prints a literal
+        // "None"; !s:.100 then truncates safely (same trap as Twitter's
+        // {content}); [{post_shortcode}] keeps filenames from different posts
+        // unique; #{num} indexes carousel children, and the single-file " #1"
+        // suffix is stripped after download like Twitter's.
         galleryDlArgs: [
-            "-f", "{username} - {description!s:.100} [{post_shortcode}] #{num}.{extension}",
+            "-f", "{username} - {description|''!s:.100} [{post_shortcode}] #{num}.{extension}",
         ]
     )
 

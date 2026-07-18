@@ -22,7 +22,7 @@
 ## Download Engine
 - **X.com / Twitter videos** — downloaded via yt-dlp using your browser's session cookies
 - **X.com / Twitter images** — automatic fallback to gallery-dl when yt-dlp finds no video; supports multi-image tweets
-- **Instagram** — Reels and video posts via yt-dlp; image and carousel posts via the gallery-dl fallback; requires being logged in to Instagram in the cookie-source browser
+- **Instagram** — Reels, video posts, and multi-video carousels via yt-dlp; image and mixed carousel posts via the gallery-dl fallback; requires being logged in to Instagram in the cookie-source browser
 - **YouTube & general URLs** — any URL supported by yt-dlp works
 - **Smart fallback** — detects when yt-dlp follows an external link out of a tweet and hands off to gallery-dl instead
 - **Tracking parameter stripping** — removes `utm_*`, `?si=`, `?s=`, `&t=`, `&ref=`, `fbclid`, `gclid`, etc. before downloading
