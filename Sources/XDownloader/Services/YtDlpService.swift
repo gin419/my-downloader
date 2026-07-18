@@ -109,6 +109,26 @@ enum YtDlpService {
     static func parseLine(_ line: String, item: DownloadItem, terminate: () -> Void) {
         guard !line.isEmpty else { return }
 
+        // Skip notice: the file already exists on disk from a prior download.
+        // yt-dlp then exits 0 printing only this line — no Destination:/[Merger]
+        // follows — so it must count as the captured output or the run reads as
+        // an "empty success" and the item fails. Checked BEFORE the progress
+        // branch: the output template preserves literal '%' from titles, and a
+        // '%' in the filename would otherwise make this line parse as progress.
+        // Older yt-dlp versions append " and merged" — match the line's tail
+        // (so a Destination: line can't land here) and cut at the LAST marker
+        // occurrence, keeping filenames that contain the marker text intact.
+        if line.hasPrefix("[download] "),
+            line.hasSuffix(" has already been downloaded")
+                || line.hasSuffix(" has already been downloaded and merged")
+        {
+            let body = line.dropFirst("[download] ".count)
+            if let marker = body.range(of: " has already been downloaded", options: .backwards) {
+                Self.recordMediaPath(String(body[..<marker.lowerBound]), on: item)
+            }
+            return
+        }
+
         // Progress: [download]  45.3% of  15.42MiB at  2.34MiB/s ETA 00:05
         if line.hasPrefix("[download]") && line.contains("%") {
             item.status = .downloading
@@ -129,19 +149,6 @@ enum YtDlpService {
             let range = line.range(of: "Destination: ")
         {
             Self.recordMediaPath(String(line[range.upperBound...]), on: item)
-            return
-        }
-
-        // Skip notice: the file already exists on disk from a prior download.
-        // yt-dlp then exits 0 printing only this line — no Destination:/[Merger]
-        // follows — so it must count as the captured output or the run reads as
-        // an "empty success" and the item fails. Older yt-dlp versions append
-        // " and merged"; take the path before the first marker occurrence.
-        if line.hasPrefix("[download] "), line.contains(" has already been downloaded") {
-            let body = line.dropFirst("[download] ".count)
-            if let marker = body.range(of: " has already been downloaded") {
-                Self.recordMediaPath(String(body[..<marker.lowerBound]), on: item)
-            }
             return
         }
 

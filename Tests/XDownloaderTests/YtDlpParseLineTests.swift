@@ -57,6 +57,48 @@ final class YtDlpParseLineTests: XCTestCase {
         XCTAssertEqual(item.title, "nihil - clip")
     }
 
+    func testAlreadyDownloadedFilenameWithPercentIsNotSwallowedByProgressBranch() {
+        // The output template preserves literal '%' from titles; the skip branch
+        // must win over the progress branch or the path is never recorded.
+        let item = DownloadItem(url: "https://youtube.com/watch?v=abc")
+        parse("[download] /tmp/out/nihil - 100% legit.mp4 has already been downloaded", into: item)
+
+        XCTAssertEqual(item.outputPath, "/tmp/out/nihil - 100% legit.mp4")
+        XCTAssertEqual(item.videoPath, "/tmp/out/nihil - 100% legit.mp4")
+        XCTAssertEqual(item.title, "nihil - 100% legit")
+        XCTAssertNotEqual(item.status, .downloading)
+        XCTAssertEqual(item.progress, 0)
+    }
+
+    func testAlreadyDownloadedFilenameContainingMarkerTextKeepsFullPath() {
+        // Cut at the LAST marker occurrence: a title containing the marker text
+        // must not truncate the recorded path.
+        let item = DownloadItem(url: "https://youtube.com/watch?v=abc")
+        parse("[download] /tmp/out/nihil - This has already been downloaded.mp4 has already been downloaded", into: item)
+
+        XCTAssertEqual(item.outputPath, "/tmp/out/nihil - This has already been downloaded.mp4")
+        XCTAssertEqual(item.title, "nihil - This has already been downloaded")
+    }
+
+    func testAlreadyDownloadedMarkerTextInFilenameWithAndMergedSuffix() {
+        let item = DownloadItem(url: "https://youtube.com/watch?v=abc")
+        parse("[download] /tmp/out/nihil - This has already been downloaded.mp4 has already been downloaded and merged", into: item)
+
+        XCTAssertEqual(item.outputPath, "/tmp/out/nihil - This has already been downloaded.mp4")
+    }
+
+    // MARK: - Progress line (regression: skip branch is checked first)
+
+    func testProgressLineStillParsesAsProgress() {
+        let item = DownloadItem(url: "https://youtube.com/watch?v=abc")
+        parse("[download]  45.3% of  15.42MiB at  2.34MiB/s ETA 00:05", into: item)
+
+        XCTAssertEqual(item.status, .downloading)
+        XCTAssertEqual(item.progress, 0.453, accuracy: 0.0001)
+        XCTAssertEqual(item.totalSize, "15.42MiB")
+        XCTAssertNil(item.outputPath)
+    }
+
     // MARK: - Destination line (regression: must behave exactly as before)
 
     func testDestinationLineRecordsVideo() {
@@ -68,6 +110,16 @@ final class YtDlpParseLineTests: XCTestCase {
         XCTAssertEqual(item.videoCount, 1)
         XCTAssertEqual(item.title, "nihil - some title")
         XCTAssertEqual(item.mediaCategory, .video)
+    }
+
+    func testDestinationLineWithMarkerTextInFilenameIsNotMisroutedToSkipBranch() {
+        // A Destination: line never ends with the skip marker, so the tail match
+        // on the skip branch must let it fall through to the Destination branch.
+        let item = DownloadItem(url: "https://youtube.com/watch?v=abc")
+        parse("[download] Destination: /tmp/out/user - This has already been downloaded.mp4", into: item)
+
+        XCTAssertEqual(item.outputPath, "/tmp/out/user - This has already been downloaded.mp4")
+        XCTAssertEqual(item.title, "user - This has already been downloaded")
     }
 
     func testDestinationLineImageDoesNotOverwriteVideoOutputPath() {
