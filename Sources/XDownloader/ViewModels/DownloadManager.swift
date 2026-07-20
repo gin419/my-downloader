@@ -756,6 +756,10 @@ class DownloadManager: ObservableObject {
         // that partially downloaded) still fall through to the fallback below.
         let subtitleOnlyFailure = item.subtitleDownloadFailed && !hasFatalError
         if mediaCaptured && (ytExitCode == 0 || subtitleOnlyFailure) {
+            // Counts must match deliverables on disk: pre-merge stream
+            // Destination lines are ignored, so fill any zero left when only
+            // intermediates were seen (or refresh the title off the final path).
+            YtDlpService.ensureFinalMediaCounts(item)
             await runImageSweepIfNeeded(item)
             item.markCompleted()
             finalize(item)

@@ -132,4 +132,72 @@ final class YtDlpParseLineTests: XCTestCase {
         XCTAssertEqual(item.videoCount, 1)
         XCTAssertEqual(item.mediaCategory, .mixed)
     }
+
+    // MARK: - Deliverable counts (not pre-merge streams)
+
+    func testTwitterHlsVideoPlusAudioStreamsCountAsOneVideo() {
+        // Real Twitter HLS shape: video-only + audio-only (both `.mp4`), then
+        // [Merger]. The user receives one file — videoCount must be 1, not 2.
+        let item = DownloadItem(url: "https://x.com/SadieEasto56792/status/2079099121148014808")
+        parse(
+            "[download] Destination: /tmp/out/Sadie Easton - https：／／t.co／myMDm17pBk.fhls-230.mp4",
+            into: item)
+        parse(
+            "[download] Destination: /tmp/out/Sadie Easton - https：／／t.co／myMDm17pBk.fhls-audio-64000-Audio.mp4",
+            into: item)
+        XCTAssertNil(item.videoCount, "pre-merge streams must not count as deliverables")
+        XCTAssertEqual(item.audioPath, "/tmp/out/Sadie Easton - https：／／t.co／myMDm17pBk.fhls-audio-64000-Audio.mp4")
+
+        parse(
+            #"[Merger] Merging formats into "/tmp/out/Sadie Easton - https：／／t.co／myMDm17pBk.mp4""#,
+            into: item)
+
+        XCTAssertEqual(item.videoCount, 1)
+        XCTAssertEqual(item.outputPath, "/tmp/out/Sadie Easton - https：／／t.co／myMDm17pBk.mp4")
+        XCTAssertEqual(item.videoPath, "/tmp/out/Sadie Easton - https：／／t.co／myMDm17pBk.mp4")
+        XCTAssertEqual(item.title, "Sadie Easton - https：／／t.co／myMDm17pBk")
+        XCTAssertEqual(item.mediaCategory, .video)
+    }
+
+    func testTwoMergedPlaylistVideosCountAsTwo() {
+        let item = DownloadItem(url: "https://x.com/a/status/1")
+        parse("[download] Destination: /tmp/out/user - post.f230.mp4", into: item)
+        parse("[download] Destination: /tmp/out/user - post.f140.m4a", into: item)
+        parse(#"[Merger] Merging formats into "/tmp/out/user - post [01].mp4""#, into: item)
+        parse("[download] Destination: /tmp/out/user - post.f231.mp4", into: item)
+        parse("[download] Destination: /tmp/out/user - post.f141.m4a", into: item)
+        parse(#"[Merger] Merging formats into "/tmp/out/user - post [02].mp4""#, into: item)
+
+        XCTAssertEqual(item.videoCount, 2)
+        XCTAssertEqual(item.outputPath, "/tmp/out/user - post [02].mp4")
+    }
+
+    func testSingleFinalDestinationStillCountsAsOneVideo() {
+        // Combined progressive download — no intermediate format id, no merger.
+        let item = DownloadItem(url: "https://x.com/a/status/1")
+        parse("[download] Destination: /tmp/out/user - clip.mp4", into: item)
+        YtDlpService.ensureFinalMediaCounts(item)
+
+        XCTAssertEqual(item.videoCount, 1)
+    }
+
+    func testEnsureFinalMediaCountsFillsZeroWhenOnlyIntermediateRemains() {
+        // Single-format download that keeps `.f…` in the on-disk name and never
+        // emits a Merger line — still one deliverable for the user.
+        let item = DownloadItem(url: "https://youtube.com/watch?v=abc")
+        parse("[download] Destination: /tmp/out/nihil - clip.f299.mp4", into: item)
+        XCTAssertNil(item.videoCount)
+        YtDlpService.ensureFinalMediaCounts(item)
+
+        XCTAssertEqual(item.videoCount, 1)
+        XCTAssertEqual(item.title, "nihil - clip")
+    }
+
+    func testIntermediateFormatPathDetection() {
+        XCTAssertTrue(YtDlpService.isIntermediateFormatPath("/tmp/a.fhls-230.mp4"))
+        XCTAssertTrue(YtDlpService.isIntermediateFormatPath("/tmp/a.fhls-audio-64000-Audio.mp4"))
+        XCTAssertTrue(YtDlpService.isIntermediateFormatPath("/tmp/a.f136.mp4"))
+        XCTAssertFalse(YtDlpService.isIntermediateFormatPath("/tmp/a.mp4"))
+        XCTAssertFalse(YtDlpService.isIntermediateFormatPath("/tmp/a [01].mp4"))
+    }
 }

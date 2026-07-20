@@ -90,8 +90,8 @@ enum YtDlpService {
 
     /// Cleans a yt-dlp filename stem into a display title by stripping the suffixes
     /// yt-dlp adds: a trailing image index (`_2`), a multi-video playlist index
-    /// (` [01]`), and the intermediate format code (`.f136`) left on the pre-merge
-    /// stream's first Destination line (the final merged file has none).
+    /// (` [01]`), and the intermediate format code (`.f136`, `.fhls-230`, …)
+    /// left on pre-merge stream filenames (the final merged file has none).
     static func cleanTitleStem(_ stem: String, isImage: Bool) -> String {
         var s = stem
         if isImage, let r = s.range(of: #"_\d+$"#, options: .regularExpression) {
@@ -100,10 +100,20 @@ enum YtDlpService {
         if let r = s.range(of: #" \[\d+\]$"#, options: .regularExpression) {
             s = String(s[..<r.lowerBound])
         }
-        if let r = s.range(of: #"\.f\d+$"#, options: .regularExpression) {
+        // Format ids are not always pure digits — Twitter HLS uses
+        // "hls-230", "hls-audio-64000-Audio", "http-832", etc.
+        if let r = s.range(of: #"\.f[\w-]+$"#, options: .regularExpression) {
             s = String(s[..<r.lowerBound])
         }
         return s
+    }
+
+    /// yt-dlp names pre-merge streams by inserting `.f{format_id}` before the
+    /// extension (`clip.f136.mp4`, `clip.fhls-230.mp4`). Those are temporary
+    /// pieces of one final video, not separate deliverables the user receives.
+    static func isIntermediateFormatPath(_ path: String) -> Bool {
+        let stem = URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
+        return stem.range(of: #"\.f[\w-]+$"#, options: .regularExpression) != nil
     }
 
     /// Parse one line of yt-dlp stdout/stderr, updating `item` in place.
@@ -156,7 +166,9 @@ enum YtDlpService {
             return
         }
 
-        // Merger: final merged output file
+        // Merger: one final deliverable video the user actually receives.
+        // Pre-merge Destination lines (video stream + audio stream) are not
+        // counted — only this merged file is.
         if (line.hasPrefix("[Merger]") || line.hasPrefix("[ffmpeg]")) && line.contains("Merging formats into"),
             let q1 = line.firstIndex(of: "\""),
             let q2 = line.lastIndex(of: "\""),
@@ -165,6 +177,10 @@ enum YtDlpService {
             let path = String(line[line.index(after: q1)..<q2])
             item.videoPath = path
             item.outputPath = path
+            item.videoCount = (item.videoCount ?? 0) + 1
+            let stem = URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
+            item.title = Self.cleanTitleStem(stem, isImage: false)
+            item.recomputeMediaCategory()
             return
         }
 
@@ -217,23 +233,73 @@ enum YtDlpService {
         }
     }
 
+    /// After a successful yt-dlp run: if every Destination was a pre-merge
+    /// intermediate (no Merger line, no final name without `.f…`), still count
+    /// the single deliverable the user has on disk. Counts never invent media
+    /// that isn't there — they only fill a zero when a path was captured.
+    @MainActor
+    static func ensureFinalMediaCounts(_ item: DownloadItem) {
+        let path = item.outputPath ?? item.videoPath ?? item.audioPath
+        guard let path else {
+            item.recomputeMediaCategory()
+            return
+        }
+        let ext = (path as NSString).pathExtension.lowercased()
+        if MediaExtensions.video.contains(ext), (item.videoCount ?? 0) == 0 {
+            item.videoCount = 1
+        }
+        if MediaExtensions.image.contains(ext), (item.imageCount ?? 0) == 0 {
+            item.imageCount = 1
+        }
+        // Prefer a title cleaned from the final path over one still carrying
+        // a pre-merge format code (`.fhls-230`, …).
+        let stem = URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
+        let cleaned = Self.cleanTitleStem(stem, isImage: MediaExtensions.image.contains(ext))
+        if item.title == nil || item.title != cleaned {
+            // Only overwrite when the current title still looks like an
+            // intermediate stem, or is missing.
+            if item.title == nil || Self.isIntermediateFormatPath(path)
+                || (item.title?.range(of: #"\.f[\w-]+$"#, options: .regularExpression) != nil)
+            {
+                item.title = cleaned
+            }
+        }
+        item.recomputeMediaCategory()
+    }
+
     /// Record a media file yt-dlp reports as on disk — a fresh "Destination:"
-    /// line or a "has already been downloaded" skip notice: classify by
-    /// extension, set the audio/video/image paths and counts, and infer a
-    /// title from the filename stem when none is known yet.
+    /// line or a "has already been downloaded" skip notice.
+    ///
+    /// Counts reflect **deliverables the user keeps**, not temporary streams:
+    /// pre-merge `.f{format_id}` paths update progress/paths but do not bump
+    /// `videoCount` / `imageCount`. Final names (and `[Merger]` lines) do.
     @MainActor
     private static func recordMediaPath(_ path: String, on item: DownloadItem) {
         let ext = (path as NSString).pathExtension.lowercased()
         let isImage = MediaExtensions.image.contains(ext)
-        let isAudio = MediaExtensions.audio.contains(ext)
+        let isAudioExt = MediaExtensions.audio.contains(ext)
+        // Twitter/YouTube HLS often packages the audio-only stream as `.mp4`
+        // (`….fhls-audio-64000-Audio.mp4`). Treat that as audio, not a 2nd video.
+        let isAudioOnlyIntermediate = isIntermediateFormatPath(path)
+            && URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
+                .range(of: "audio", options: .caseInsensitive) != nil
+        let isAudio = isAudioExt || isAudioOnlyIntermediate
+        let isIntermediate = isIntermediateFormatPath(path)
 
         if !isImage {
             if isAudio {
                 item.audioPath = path
-                item.mediaCategory = .audio  // a direct .mp3/.m4a download (not via [ExtractAudio])
+                // Only lock the row to "Audio" for a real audio-only deliverable
+                // (`.m4a` / `.mp3` / …), not for a pre-merge audio stream that
+                // will be merged into a video.
+                if isAudioExt && !isIntermediate {
+                    item.mediaCategory = .audio
+                }
             } else {
                 item.videoPath = path
-                item.videoCount = (item.videoCount ?? 0) + 1
+                if !isIntermediate {
+                    item.videoCount = (item.videoCount ?? 0) + 1
+                }
             }
             item.outputPath = path
         } else if item.outputPath == nil {
@@ -245,8 +311,14 @@ enum YtDlpService {
             let stem = URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
             item.title = Self.cleanTitleStem(stem, isImage: isImage)
         }
+        // Images are final deliverables (yt-dlp does not split them into streams).
         if isImage { item.imageCount = (item.imageCount ?? 0) + 1 }
 
         item.recomputeMediaCategory()  // update category progressively as files land
+        // Pre-merge streams deliberately leave videoCount nil until [Merger];
+        // still show "Video" on the row while those streams download.
+        if item.mediaCategory == .unknown, item.videoPath != nil {
+            item.mediaCategory = .video
+        }
     }
 }

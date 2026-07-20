@@ -24,6 +24,13 @@ final class TitleStemTests: XCTestCase {
     func testIntermediateFormatCodeStripped() {
         XCTAssertEqual(YtDlpService.cleanTitleStem("Uploader - Title.f136", isImage: false), "Uploader - Title")
         XCTAssertEqual(YtDlpService.cleanTitleStem("Name.f251", isImage: false), "Name")
+        // Twitter HLS format ids are not pure digits.
+        XCTAssertEqual(
+            YtDlpService.cleanTitleStem("Sadie Easton - https：／／t.co／myMDm17pBk.fhls-230", isImage: false),
+            "Sadie Easton - https：／／t.co／myMDm17pBk")
+        XCTAssertEqual(
+            YtDlpService.cleanTitleStem("clip.fhls-audio-64000-Audio", isImage: false),
+            "clip")
     }
 
     func testStripsAreAnchoredToTheEnd() {
