@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Entries before _Unreleased_ were back-filled from git history.
 
-## [Unreleased]
+## [1.6.0] — 2026-07-23
 
 ### Added
 - **Instagram support** — Reels, video posts, and multi-video carousels download via yt-dlp with your browser cookies; image and mixed carousel posts fall back to gallery-dl automatically. Instagram's `igsh` and `igshid` share-link tracking params are stripped so shared links dedup (#44).

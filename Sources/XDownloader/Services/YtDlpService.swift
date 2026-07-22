@@ -280,7 +280,8 @@ enum YtDlpService {
         let isAudioExt = MediaExtensions.audio.contains(ext)
         // Twitter/YouTube HLS often packages the audio-only stream as `.mp4`
         // (`….fhls-audio-64000-Audio.mp4`). Treat that as audio, not a 2nd video.
-        let isAudioOnlyIntermediate = isIntermediateFormatPath(path)
+        let isAudioOnlyIntermediate =
+            isIntermediateFormatPath(path)
             && URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
                 .range(of: "audio", options: .caseInsensitive) != nil
         let isAudio = isAudioExt || isAudioOnlyIntermediate
