@@ -20,37 +20,27 @@ Four pillars, in the order they'll land:
 
 ---
 
-## Shipped (current: v1.4.2)
+## Shipped (current: v1.6.0)
 
-All core features are live. See [FEATURES.md](FEATURES.md) for the full list
-and [CHANGELOG.md](../CHANGELOG.md) for release history.
+All core features are live, pillars 1 and 2 have landed (v1.5 closed the
+loop; v1.6 put the app within reach via the menu bar, `xdownloader://`, and
+file import — plus Instagram support). See [FEATURES.md](FEATURES.md) for the
+full list and [CHANGELOG.md](../CHANGELOG.md) for release history.
 
 ---
 
-## v1.5 — Close the loop
-
-- **Finish notifications** — macOS notification when a download completes or
-  fails while the app is in the background
-- **Batch input** — paste text containing any number of URLs and queue them
-  all at once (multi-line clipboard, whole "read later" lists)
-
-## v1.6 — Always within reach
-
-- **Menu bar presence** — live download count, paste-and-download without
-  opening the main window
-- **Zero-click download with AutoRaise** — when the window gains focus (e.g.
-  via [AutoRaise](https://github.com/sbmpost/AutoRaise) hovering), auto-detect
-  a fresh URL on the clipboard and start the download without any paste/Enter
-  click. Goal: hover → done, no keyboard or mouse input.
-- **URL scheme** — `xdownloader://` for Shortcuts, Raycast, and scripting
-- **Import from file** — load a plain-text list of URLs and download them all
-
 ## v1.7 — Zero setup
 
+- **Primed hero button** *(carried from v1.6; design signed off)* — when the
+  window gains focus (e.g. hovered via a focus-follows-mouse utility such as
+  [AutoRaise](https://github.com/sbmpost/AutoRaise)), the hero button primes
+  itself with a fresh clipboard URL, so a single click — no paste, no Enter —
+  starts the download
 - **Self-managed tools** — install and update `yt-dlp`/`gallery-dl` from
   inside the app; Homebrew becomes optional
 - **Signed & notarized releases** — no more right-click-Open on first launch
-- **Update check** — the app tells you when a new release is available
+- **Auto-update** — the app checks for new releases and downloads and installs
+  them itself (Sparkle-style), replacing the manual trip to the Releases page
 
 ## v2.0 — A library, not a log
 
