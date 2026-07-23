@@ -30,6 +30,7 @@ struct MenuBarLabelView: View {
 /// here by design — the status menu is a glance surface, not a shortcut sheet.
 struct MenuBarMenuView: View {
     @ObservedObject var manager: DownloadManager
+    @ObservedObject var updater: UpdaterViewModel
     @Environment(\.openWindow) private var openWindow
     @Environment(\.openSettings) private var openSettings
 
@@ -72,6 +73,13 @@ struct MenuBarMenuView: View {
         }
 
         Divider()
+        // Present only while an update is actually known — no update, no row.
+        if let version = updater.availableVersion {
+            Button("Update Available (\(version))…") {
+                NSApp.activate(ignoringOtherApps: true)
+                updater.checkForUpdates()
+            }
+        }
         Button("Open XDownloader") { openMainWindow() }
         // Not SettingsLink: it opens the window without activating the app,
         // leaving Settings behind whatever is frontmost.

@@ -45,6 +45,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 struct XDownloaderApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var manager = DownloadManager()
+    @StateObject private var updater = UpdaterViewModel()
 
     var body: some Scene {
         // Window (not WindowGroup): the menu bar's "Open XDownloader" must
@@ -72,7 +73,7 @@ struct XDownloaderApp: App {
         }
 
         MenuBarExtra(isInserted: menuBarInserted) {
-            MenuBarMenuView(manager: manager)
+            MenuBarMenuView(manager: manager, updater: updater)
         } label: {
             MenuBarLabelView(manager: manager)
         }
@@ -81,6 +82,7 @@ struct XDownloaderApp: App {
         Settings {
             SettingsView()
                 .environmentObject(manager)
+                .environmentObject(updater)
         }
     }
 

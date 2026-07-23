@@ -59,13 +59,52 @@ jobs:
           ditto -c -k --keepParent build/XDownloader.app "${{ env.ASSET }}"
           echo "Archive size: $(du -sh ${{ env.ASSET }} | cut -f1)"
 
+      # EdDSA-sign the archive and emit the appcast the app polls. SUFeedURL
+      # rides releases/latest/download/appcast.xml, so the newest release
+      # always serves the current feed — no extra hosting.
+      - name: Generate appcast
+        env:
+          SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
+        run: |
+          if [ -z "$SPARKLE_ED_PRIVATE_KEY" ]; then
+            echo "::error::SPARKLE_ED_PRIVATE_KEY secret is not set — updates cannot be signed."
+            exit 1
+          fi
+          SPARKLE_BIN=$(find .build/artifacts -type d -name bin | head -1)
+          # --ed-key-file - reads the key from stdin: it never touches disk.
+          SIG_ATTRS=$(printf '%s' "$SPARKLE_ED_PRIVATE_KEY" \
+            | "$SPARKLE_BIN/sign_update" --ed-key-file - "${{ env.ASSET }}")
+          IFS=. read -r V_MAJOR V_MINOR V_PATCH <<<"${{ env.VERSION }}"
+          NUMERIC=$((V_MAJOR * 10000 + V_MINOR * 100 + V_PATCH))
+          PUB_DATE=$(date -u +"%a, %d %b %Y %H:%M:%S +0000")
+          cat > appcast.xml <<EOF
+          <?xml version="1.0" encoding="utf-8"?>
+          <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+            <channel>
+              <title>XDownloader</title>
+              <item>
+                <title>${{ env.VERSION }}</title>
+                <pubDate>${PUB_DATE}</pubDate>
+                <sparkle:version>${NUMERIC}</sparkle:version>
+                <sparkle:shortVersionString>${{ env.VERSION }}</sparkle:shortVersionString>
+                <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+                <sparkle:releaseNotesLink>https://github.com/${{ github.repository }}/releases/tag/${{ env.TAG }}</sparkle:releaseNotesLink>
+                <enclosure url="https://github.com/${{ github.repository }}/releases/download/${{ env.TAG }}/${{ env.ASSET }}" ${SIG_ATTRS} type="application/octet-stream"/>
+              </item>
+            </channel>
+          </rss>
+          EOF
+          cat appcast.xml
+
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           name: "XDownloader ${{ env.TAG }}"
           tag_name: ${{ env.TAG }}
           generate_release_notes: true
-          files: ${{ env.ASSET }}
+          files: |
+            ${{ env.ASSET }}
+            appcast.xml
           body: |
             ## Install
 

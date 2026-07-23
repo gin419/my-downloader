@@ -3,6 +3,7 @@ import SwiftUI
 
 struct SettingsView: View {
     @EnvironmentObject var manager: DownloadManager
+    @EnvironmentObject var updater: UpdaterViewModel
     @State private var showClearHistoryConfirm = false
     @State private var lastImportMessage: String?
 
@@ -216,6 +217,8 @@ struct SettingsView: View {
                 .font(.caption)
                 .foregroundColor(.secondary)
             }
+
+            UpdatesSettingsSection(updater: updater)
         }
         .formStyle(.grouped)
         .frame(width: 440)
@@ -240,4 +243,73 @@ struct SettingsView: View {
     private static func formatSize(_ bytes: Int64) -> String {
         ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
     }
+}
+
+/// Its own view (not inline in SettingsView.body) — the grouped Form is at the
+/// edge of what the type checker handles in one expression.
+private struct UpdatesSettingsSection: View {
+    @ObservedObject var updater: UpdaterViewModel
+
+    var body: some View {
+        Section("Updates") {
+            if updater.isEnabled, let version = UpdaterViewModel.installedVersion {
+                versionRow(
+                    title: "XDownloader \(version)",
+                    detail: statusLine,
+                    checkEnabled: updater.canCheckForUpdates
+                )
+                Toggle("Check for updates automatically", isOn: autoUpdateBinding)
+                Text("Checks GitHub once a day. Updates are never installed without your click.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            } else {
+                versionRow(
+                    title: "XDownloader (development build)",
+                    detail: "Version 0.0.0 — not a tagged release",
+                    checkEnabled: false
+                )
+                Text("Update checks work only in tagged release builds installed as an app.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+        }
+    }
+
+    private func versionRow(title: String, detail: String, checkEnabled: Bool) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "arrow.down.app")
+                .font(.system(size: 16))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(size: 13, weight: .medium))
+                Text(detail)
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+            }
+            Spacer(minLength: 12)
+            Button("Check Now") { updater.checkForUpdates() }
+                .disabled(!checkEnabled)
+        }
+    }
+
+    private var statusLine: String {
+        if let available = updater.availableVersion {
+            return "Version \(available) available"
+        }
+        if let last = updater.lastCheckDate {
+            let relative = Self.relativeDateFormatter.localizedString(for: last, relativeTo: Date())
+            return "Last checked \(relative)"
+        }
+        return "Checks daily in the background"
+    }
+
+    /// Sparkle owns this preference, so it can't be a plain @Published binding.
+    private var autoUpdateBinding: Binding<Bool> {
+        Binding(
+            get: { updater.automaticallyChecksForUpdates },
+            set: { updater.automaticallyChecksForUpdates = $0 }
+        )
+    }
+
+    private static let relativeDateFormatter = RelativeDateTimeFormatter()
 }

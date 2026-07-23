@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Entries before _Unreleased_ were back-filled from git history.
 
+## [Unreleased]
+
+### Added
+- **Auto-update (Sparkle 2)** — the app keeps itself up to date: a daily background check against GitHub Releases, Sparkle's standard update window (Install / Remind Me Later / Skip This Version) with the release notes linked in, an "Updates" section in Settings (current version, Check Now, automatic-check toggle), and a quiet "Update Available" menu bar row that exists only while an update is pending. Updates are EdDSA-signed in CI; each release ships its own `appcast.xml` served via the `releases/latest` alias. Development builds (0.0.0 sentinel or bare `swift run`) disable checking entirely (#48).
+
+### Changed
+- `CFBundleVersion` now derives from the release tag (`MAJOR*10000 + MINOR*100 + PATCH`, e.g. 1.7.0 → 10700) instead of the git commit distance, which collapsed to "1" on every exact-tag CI build. Sparkle compares this number to decide whether an update is newer, so it must rise monotonically across releases (#48).
+
 ## [1.6.0] — 2026-07-23
 
 ### Added

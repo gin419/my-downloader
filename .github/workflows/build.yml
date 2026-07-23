@@ -35,5 +35,8 @@ jobs:
         run: |
           ./build.sh release
           test -x build/XDownloader.app/Contents/MacOS/XDownloader
+          # Sparkle must ship inside the bundle with the rpath pointing at it.
+          test -d build/XDownloader.app/Contents/Frameworks/Sparkle.framework
+          otool -l build/XDownloader.app/Contents/MacOS/XDownloader | grep -q "@loader_path/../Frameworks"
           echo "Stamped version: $(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' build/XDownloader.app/Contents/Info.plist)"
           /usr/libexec/PlistBuddy -c "Print :CFBundleVersion" build/XDownloader.app/Contents/Info.plist >/dev/null
