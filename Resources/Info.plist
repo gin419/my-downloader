@@ -28,6 +28,16 @@
     <true/>
     <key>NSHumanReadableCopyright</key>
     <string>Copyright © 2025–2026</string>
+    <!-- Sparkle auto-update. The feed rides the "latest" release alias, so the
+         newest published release always serves the current appcast. -->
+    <key>SUFeedURL</key>
+    <string>https://github.com/gin419/my-downloader/releases/latest/download/appcast.xml</string>
+    <key>SUPublicEDKey</key>
+    <string>ltvFx+VBM6x3wN8DpeiWN4AioCGbOap58RS3JSf/vQA=</string>
+    <!-- Skip Sparkle's second-launch "check automatically?" prompt: checks are
+         on by default and the Settings toggle can turn them off. -->
+    <key>SUEnableAutomaticChecks</key>
+    <true/>
     <key>CFBundleURLTypes</key>
     <array>
         <dict>
