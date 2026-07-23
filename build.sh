@@ -46,7 +46,10 @@ if GIT_DESC=$(git describe --tags --long --dirty=-dirty 2>/dev/null); then
     SHORT_VERSION="${GIT_DESC%%-[0-9]*}"   # v1.3.0
     SHORT_VERSION="${SHORT_VERSION#v}"     # 1.3.0
     IFS=. read -r V_MAJOR V_MINOR V_PATCH <<<"$SHORT_VERSION"
-    BUILD=$((V_MAJOR * 10000 + V_MINOR * 100 + ${V_PATCH:-0}))
+    # 10# forces base 10: a zero-padded segment (e.g. a v1.08.0 tag) would
+    # otherwise be read as octal — and in bash 3.2 that fails silently, leaving
+    # BUILD empty and shipping a bundle with no version.
+    BUILD=$((10#$V_MAJOR * 10000 + 10#$V_MINOR * 100 + 10#${V_PATCH:-0}))
     /usr/libexec/PlistBuddy \
         -c "Set :CFBundleShortVersionString $SHORT_VERSION" \
         -c "Set :CFBundleVersion $BUILD" \
