@@ -19,6 +19,13 @@ jobs:
     runs-on: macos-15
     permissions:
       contents: write        # needed to create the GitHub Release
+    # Serialize releases: the cumulative appcast lives on one gh-pages branch, so
+    # two release runs must not update it at once (a non-fast-forward push would
+    # drop one release from the feed). cancel-in-progress:false = queue, never
+    # cancel a release mid-flight.
+    concurrency:
+      group: release-appcast
+      cancel-in-progress: false
 
     steps:
       - uses: actions/checkout@v4
@@ -59,52 +66,16 @@ jobs:
           ditto -c -k --keepParent build/XDownloader.app "${{ env.ASSET }}"
           echo "Archive size: $(du -sh ${{ env.ASSET }} | cut -f1)"
 
-      # EdDSA-sign the archive and emit the appcast the app polls. SUFeedURL
-      # rides releases/latest/download/appcast.xml, so the newest release
-      # always serves the current feed — no extra hosting.
-      - name: Generate appcast
-        env:
-          SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
-        run: |
-          if [ -z "$SPARKLE_ED_PRIVATE_KEY" ]; then
-            echo "::error::SPARKLE_ED_PRIVATE_KEY secret is not set — updates cannot be signed."
-            exit 1
-          fi
-          SPARKLE_BIN=$(find .build/artifacts -type d -name bin | head -1)
-          # --ed-key-file - reads the key from stdin: it never touches disk.
-          SIG_ATTRS=$(printf '%s' "$SPARKLE_ED_PRIVATE_KEY" \
-            | "$SPARKLE_BIN/sign_update" --ed-key-file - "${{ env.ASSET }}")
-          IFS=. read -r V_MAJOR V_MINOR V_PATCH <<<"${{ env.VERSION }}"
-          NUMERIC=$((V_MAJOR * 10000 + V_MINOR * 100 + V_PATCH))
-          PUB_DATE=$(date -u +"%a, %d %b %Y %H:%M:%S +0000")
-          cat > appcast.xml <<EOF
-          <?xml version="1.0" encoding="utf-8"?>
-          <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
-            <channel>
-              <title>XDownloader</title>
-              <item>
-                <title>${{ env.VERSION }}</title>
-                <pubDate>${PUB_DATE}</pubDate>
-                <sparkle:version>${NUMERIC}</sparkle:version>
-                <sparkle:shortVersionString>${{ env.VERSION }}</sparkle:shortVersionString>
-                <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-                <sparkle:releaseNotesLink>https://github.com/${{ github.repository }}/releases/tag/${{ env.TAG }}</sparkle:releaseNotesLink>
-                <enclosure url="https://github.com/${{ github.repository }}/releases/download/${{ env.TAG }}/${{ env.ASSET }}" ${SIG_ATTRS} type="application/octet-stream"/>
-              </item>
-            </channel>
-          </rss>
-          EOF
-          cat appcast.xml
-
+      # Publish the Release (and upload the .zip) BEFORE advertising it in the
+      # feed — otherwise the appcast's enclosure URL would 404 until this step
+      # runs. The zip stays a Release asset; the feed lives on gh-pages.
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           name: "XDownloader ${{ env.TAG }}"
           tag_name: ${{ env.TAG }}
           generate_release_notes: true
-          files: |
-            ${{ env.ASSET }}
-            appcast.xml
+          files: ${{ env.ASSET }}
           body: |
             ## Install
 
@@ -119,3 +90,77 @@ jobs:
             ```bash
             brew install yt-dlp gallery-dl ffmpeg
             ```
+
+      # EdDSA-sign the archive and fold it into the CUMULATIVE appcast on the
+      # gh-pages branch. A cumulative feed at a stable URL (not a single-item
+      # feed behind the moving "latest" alias) means the newest version is
+      # always advertised, whatever order releases are published in. Runs after
+      # the Release above so the enclosure URL already resolves.
+      - name: Update cumulative appcast on gh-pages
+        env:
+          SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -z "$SPARKLE_ED_PRIVATE_KEY" ]; then
+            echo "::error::SPARKLE_ED_PRIVATE_KEY secret is not set — updates cannot be signed."
+            exit 1
+          fi
+          SPARKLE_BIN=$(find .build/artifacts -type d -name bin | head -1)
+          # --ed-key-file - reads the key from stdin: it never touches disk.
+          SIG_ATTRS=$(printf '%s' "$SPARKLE_ED_PRIVATE_KEY" \
+            | "$SPARKLE_BIN/sign_update" --ed-key-file - "${{ env.ASSET }}")
+          IFS=. read -r V_MAJOR V_MINOR V_PATCH <<<"${{ env.VERSION }}"
+          # 10# forces base 10 so a zero-padded segment (e.g. 08) is not read as octal.
+          NUMERIC=$((10#$V_MAJOR * 10000 + 10#$V_MINOR * 100 + 10#$V_PATCH))
+          PUB_DATE=$(date -u +"%a, %d %b %Y %H:%M:%S +0000")
+          REPO_URL="https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
+          PAGES=pages
+
+          # The concurrency group above already serializes releases; this
+          # clone → rebuild → push loop is defence-in-depth for any concurrent
+          # gh-pages write. build_appcast.py is cumulative AND idempotent, so
+          # rebuilding on the freshly-cloned feed and re-pushing always converges
+          # (each attempt re-reads the latest feed, re-adds only this version).
+          for attempt in 1 2 3 4 5; do
+            rm -rf "$PAGES"
+            if git clone --branch gh-pages --single-branch --depth 1 "$REPO_URL" "$PAGES" 2>/dev/null; then
+              EXISTING="$PAGES/appcast.xml"
+            else
+              echo "gh-pages branch not found — bootstrapping it."
+              mkdir -p "$PAGES"
+              git -C "$PAGES" init -q
+              git -C "$PAGES" checkout -q -b gh-pages
+              git -C "$PAGES" remote add origin "$REPO_URL"
+              EXISTING=""
+            fi
+
+            # EXISTING is "" when bootstrapping; build_appcast.py treats a missing
+            # or empty path as an empty feed.
+            python3 scripts/build_appcast.py \
+              --existing "$EXISTING" \
+              --version "${{ env.VERSION }}" \
+              --numeric "$NUMERIC" \
+              --notes-link "https://github.com/${{ github.repository }}/releases/tag/${{ env.TAG }}" \
+              --enclosure-url "https://github.com/${{ github.repository }}/releases/download/${{ env.TAG }}/${{ env.ASSET }}" \
+              --sig-attrs "$SIG_ATTRS" \
+              --pub-date "$PUB_DATE" \
+              --output "$PAGES/appcast.xml"
+
+            # Fail loudly if the generated feed is malformed rather than publish a
+            # broken appcast that would break every client's update check.
+            xmllint --noout "$PAGES/appcast.xml"
+
+            git -C "$PAGES" add appcast.xml
+            git -C "$PAGES" -c user.name="github-actions[bot]" \
+                -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+                commit -q -m "appcast: ${{ env.TAG }}"
+            if git -C "$PAGES" push -q origin HEAD:gh-pages; then
+              echo "appcast published (attempt $attempt):"
+              cat "$PAGES/appcast.xml"
+              exit 0
+            fi
+            echo "gh-pages push rejected — another release updated it; retrying ($attempt)."
+            sleep $((attempt * 3))
+          done
+          echo "::error::could not publish appcast after 5 attempts."
+          exit 1

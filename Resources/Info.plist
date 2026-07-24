@@ -28,10 +28,13 @@
     <true/>
     <key>NSHumanReadableCopyright</key>
     <string>Copyright © 2025–2026</string>
-    <!-- Sparkle auto-update. The feed rides the "latest" release alias, so the
-         newest published release always serves the current appcast. -->
+    <!-- Sparkle auto-update. The feed is a CUMULATIVE appcast on GitHub Pages
+         (served from the gh-pages branch), maintained by release.yml via
+         scripts/build_appcast.py: every released version stays listed, so Sparkle
+         always finds the true newest one regardless of release order. The update
+         zips remain GitHub Release assets — only the feed lives on Pages. -->
     <key>SUFeedURL</key>
-    <string>https://github.com/gin419/my-downloader/releases/latest/download/appcast.xml</string>
+    <string>https://gin419.github.io/my-downloader/appcast.xml</string>
     <key>SUPublicEDKey</key>
     <string>ltvFx+VBM6x3wN8DpeiWN4AioCGbOap58RS3JSf/vQA=</string>
     <!-- Skip Sparkle's second-launch "check automatically?" prompt: checks are
