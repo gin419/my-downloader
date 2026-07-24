@@ -6,13 +6,35 @@ on:
     tags:
       - 'v[0-9]+.[0-9]+.[0-9]+'
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Required repository Secrets (Settings ▸ Secrets and variables ▸ Actions).
+# NAMES ONLY below — never paste the values anywhere in the repo.
+#
+#   Auto-update signing (already in use):
+#     SPARKLE_ED_PRIVATE_KEY          Sparkle EdDSA private key; signs the update zip.
+#
+#   Developer ID code signing (cert imported into a temporary keychain):
+#     DEVELOPER_ID_CERT_P12_BASE64    base64 of the "Developer ID Application" cert
+#                                     + private key exported as a .p12
+#                                     (base64 -i cert.p12 | pbcopy).
+#     DEVELOPER_ID_CERT_PASSWORD      the password protecting that .p12 export.
+#     KEYCHAIN_PASSWORD               any throwaway password for the ephemeral
+#                                     CI keychain created/destroyed each run.
+#
+#   Notarization (App Store Connect API key — notarytool --key/--key-id/--issuer):
+#     APP_STORE_CONNECT_KEY_BASE64    base64 of the AuthKey_XXXX.p8 file
+#                                     (base64 -i AuthKey_XXXX.p8 | pbcopy).
+#     APP_STORE_CONNECT_KEY_ID        the key's Key ID (e.g. ABC123DEF4).
+#     APP_STORE_CONNECT_ISSUER_ID     the App Store Connect issuer UUID.
+# ─────────────────────────────────────────────────────────────────────────────
+
 jobs:
   # ── Step 1: security must pass before anything is built or published ─────────
   security:
     name: Security scan
     uses: ./.github/workflows/security.yml
 
-  # ── Step 2: build the macOS app and publish a GitHub Release ─────────────────
+  # ── Step 2: build, sign, notarize the macOS app and publish a GitHub Release ─
   build-and-release:
     name: Build & publish
     needs: security          # blocked until both security layers pass
@@ -57,17 +79,89 @@ jobs:
       - name: Build release binary
         run: swift build -c release
 
+      # Assemble the bundle. No Developer ID cert is in the keychain yet, so
+      # build.sh takes its ad-hoc path here; the authoritative Developer ID sign
+      # is the explicit step below (after the cert is imported). build.sh also
+      # re-stamps CFBundleVersion from the tag (MAJOR*10000+MINOR*100+PATCH) so
+      # it matches the appcast's sparkle:version.
       - name: Create app bundle
         run: ./build.sh release
 
-      # ditto preserves macOS metadata better than plain zip
-      - name: Archive app bundle
+      # Import the Developer ID Application cert into a throwaway keychain so
+      # codesign can use its private key non-interactively. The keychain is
+      # created here and destroyed in the always()-cleanup step at the end.
+      - name: Import Developer ID certificate
+        env:
+          DEVELOPER_ID_CERT_P12_BASE64: ${{ secrets.DEVELOPER_ID_CERT_P12_BASE64 }}
+          DEVELOPER_ID_CERT_PASSWORD: ${{ secrets.DEVELOPER_ID_CERT_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          if [ -z "$DEVELOPER_ID_CERT_P12_BASE64" ]; then
+            echo "::error::DEVELOPER_ID_CERT_P12_BASE64 secret is not set — cannot sign."
+            exit 1
+          fi
+          KEYCHAIN_PATH="$RUNNER_TEMP/xdownloader-signing.keychain-db"
+          CERT_PATH="$RUNNER_TEMP/developer_id.p12"
+          printf '%s' "$DEVELOPER_ID_CERT_P12_BASE64" | base64 --decode > "$CERT_PATH"
+
+          # Fresh keychain, unlocked, with a long enough lock timeout to outlast
+          # notarization; add it to the search list so codesign finds the identity.
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -P "$DEVELOPER_ID_CERT_PASSWORD" \
+            -t cert -f pkcs12 -k "$KEYCHAIN_PATH" -T /usr/bin/codesign
+          # Let codesign use the key without an interactive prompt.
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH" >/dev/null
+          # Prepend the temp keychain to the search list (keeping the defaults).
+          EXISTING=$(security list-keychains -d user | sed -e 's/[" ]//g')
+          security list-keychains -d user -s "$KEYCHAIN_PATH" $EXISTING
+
+          IDENTITY=$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" \
+            | grep -o '"Developer ID Application: [^"]*"' | head -1 | tr -d '"')
+          if [ -z "$IDENTITY" ]; then
+            echo "::error::no 'Developer ID Application' identity found after import."
+            exit 1
+          fi
+          echo "CODESIGN_IDENTITY=$IDENTITY"     >> "$GITHUB_ENV"
+          echo "SIGNING_KEYCHAIN=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
+          rm -f "$CERT_PATH"
+          echo "Imported: $IDENTITY"
+
+      # Developer ID sign, inside-out: Sparkle's nested code (XPC services,
+      # Autoupdate, Updater.app, framework) then the main app — hardened runtime,
+      # secure timestamp, entitlements. CODESIGN_IDENTITY comes from the step above.
+      - name: Sign (Developer ID + hardened runtime)
+        run: scripts/sign-notarize.sh sign build/XDownloader.app
+
+      # Notarize the SIGNED app and staple the ticket. notarytool authenticates
+      # with the App Store Connect API key; the .app is zipped for submission and
+      # the ticket is stapled back onto the bundle. After this the bundle is
+      # notarized on disk — Gatekeeper accepts it offline.
+      - name: Notarize + staple
+        env:
+          APP_STORE_CONNECT_KEY_BASE64: ${{ secrets.APP_STORE_CONNECT_KEY_BASE64 }}
+          APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+        run: scripts/sign-notarize.sh notarize build/XDownloader.app
+
+      # Verify the final bundle: valid signature + accepted by Gatekeeper (spctl
+      # now passes because the ticket is stapled).
+      - name: Verify signed + notarized bundle
+        run: scripts/sign-notarize.sh verify build/XDownloader.app
+
+      # Archive the STAPLED app. This runs AFTER notarize+staple so the zip — the
+      # single artifact used for BOTH the GitHub Release asset and the Sparkle
+      # EdDSA signature below — contains the notarized, stapled bundle. ditto
+      # preserves macOS metadata better than plain zip.
+      - name: Archive stapled app bundle
         run: |
           ditto -c -k --keepParent build/XDownloader.app "${{ env.ASSET }}"
           echo "Archive size: $(du -sh ${{ env.ASSET }} | cut -f1)"
 
-      # Publish the Release (and upload the .zip) BEFORE advertising it in the
-      # feed — otherwise the appcast's enclosure URL would 404 until this step
+      # Publish the Release (and upload the stapled .zip) BEFORE advertising it in
+      # the feed — otherwise the appcast's enclosure URL would 404 until this step
       # runs. The zip stays a Release asset; the feed lives on gh-pages.
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
@@ -81,7 +175,7 @@ jobs:
 
             1. Download **`${{ env.ASSET }}`** below
             2. Unzip and drag **XDownloader.app** to `/Applications`
-            3. First launch: right-click → **Open** *(app is unsigned — Gatekeeper will prompt once)*
+            3. Double-click to open — the app is **signed with a Developer ID and notarized by Apple**, so it launches normally with no Gatekeeper warning
 
             ## Requirements
 
@@ -91,11 +185,13 @@ jobs:
             brew install yt-dlp gallery-dl ffmpeg
             ```
 
-      # EdDSA-sign the archive and fold it into the CUMULATIVE appcast on the
-      # gh-pages branch. A cumulative feed at a stable URL (not a single-item
-      # feed behind the moving "latest" alias) means the newest version is
-      # always advertised, whatever order releases are published in. Runs after
-      # the Release above so the enclosure URL already resolves.
+      # EdDSA-sign the STAPLED archive and fold it into the CUMULATIVE appcast on
+      # the gh-pages branch. A cumulative feed at a stable URL (not a single-item
+      # feed behind the moving "latest" alias) means the newest version is always
+      # advertised, whatever order releases are published in. Runs after the
+      # Release above so the enclosure URL already resolves. Because ${{ env.ASSET }}
+      # is the notarized+stapled zip, the EdDSA signature covers the exact bytes
+      # users download and auto-update installs.
       - name: Update cumulative appcast on gh-pages
         env:
           SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
@@ -157,10 +253,22 @@ jobs:
             if git -C "$PAGES" push -q origin HEAD:gh-pages; then
               echo "appcast published (attempt $attempt):"
               cat "$PAGES/appcast.xml"
-              exit 0
+              break
+            fi
+            if [ "$attempt" = 5 ]; then
+              echo "::error::could not publish appcast after 5 attempts."
+              exit 1
             fi
             echo "gh-pages push rejected — another release updated it; retrying ($attempt)."
             sleep $((attempt * 3))
           done
-          echo "::error::could not publish appcast after 5 attempts."
-          exit 1
+
+      # Destroy the ephemeral signing keychain whatever happened above, so the
+      # imported private key never lingers on the runner.
+      - name: Clean up signing keychain
+        if: always()
+        run: |
+          if [ -n "${SIGNING_KEYCHAIN:-}" ] && [ -f "${SIGNING_KEYCHAIN:-}" ]; then
+            security delete-keychain "$SIGNING_KEYCHAIN" || true
+            echo "Deleted signing keychain."
+          fi

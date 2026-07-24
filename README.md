@@ -85,9 +85,9 @@ brew install yt-dlp gallery-dl ffmpeg
 # 3. Launch, paste a URL, press Enter.
 ```
 
-> **First run:** macOS Gatekeeper may ask you to confirm the app since it's
-> unsigned. Right-click `XDownloader.app` → **Open** → **Open** once, and you're
-> set for good.
+> **First run:** XDownloader is signed with an Apple Developer ID and notarized
+> by Apple, so it just opens — double-click `XDownloader.app` and you're set. No
+> right-click → **Open** dance, no Gatekeeper warning.
 
 ### Requirements
 
