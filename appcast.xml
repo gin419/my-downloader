@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+  <channel>
+    <title>XDownloader</title>
+    <item>
+      <title>1.7.0</title>
+      <pubDate>Fri, 24 Jul 2026 01:32:43 +0000</pubDate>
+      <sparkle:version>10700</sparkle:version>
+      <sparkle:shortVersionString>1.7.0</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <sparkle:releaseNotesLink>https://github.com/gin419/my-downloader/releases/tag/v1.7.0</sparkle:releaseNotesLink>
+      <enclosure url="https://github.com/gin419/my-downloader/releases/download/v1.7.0/XDownloader-v1.7.0.zip" sparkle:edSignature="YQeSJG8E/S8me98PP+B5pLYVnsM3pqR3anAAKGgGM/ShCNIQHzyXU9K8KVkOUkGQZLNF/Vyc0aUxmVS/naw+Dw==" length="3041650" type="application/octet-stream"/>
+    </item>
+  </channel>
+</rss>
