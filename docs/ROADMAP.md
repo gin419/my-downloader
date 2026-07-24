@@ -20,17 +20,25 @@ Four pillars, in the order they'll land:
 
 ---
 
-## Shipped (current: v1.6.0)
+## Shipped (current: v1.7.0)
 
-All core features are live, pillars 1 and 2 have landed (v1.5 closed the
-loop; v1.6 put the app within reach via the menu bar, `xdownloader://`, and
-file import — plus Instagram support). See [FEATURES.md](FEATURES.md) for the
-full list and [CHANGELOG.md](../CHANGELOG.md) for release history.
+All core features are live. Pillars 1 and 2 have landed (v1.5 closed the loop;
+v1.6 put the app within reach via the menu bar, `xdownloader://`, and file
+import — plus Instagram support), and pillar 3 is underway: **v1.7 shipped
+auto-update** (Sparkle 2 — the app now checks, verifies, and installs new
+releases itself). See [FEATURES.md](FEATURES.md) for the full list and
+[CHANGELOG.md](../CHANGELOG.md) for release history.
 
 ---
 
 ## v1.7 — Zero setup
 
+- **Auto-update** *(shipped v1.7.0)* — the app checks for, verifies (EdDSA), and
+  installs new releases itself via Sparkle 2, replacing the manual trip to the
+  Releases page. Feed is a cumulative appcast on GitHub Pages.
+- **Signed & notarized releases** — no more right-click-Open on first launch;
+  also gives updates a second trust anchor (Apple Developer ID alongside the
+  Sparkle EdDSA signature) and unlocks Sparkle signing-key rotation
 - **Primed hero button** *(carried from v1.6; design signed off)* — when the
   window gains focus (e.g. hovered via a focus-follows-mouse utility such as
   [AutoRaise](https://github.com/sbmpost/AutoRaise)), the hero button primes
@@ -38,9 +46,6 @@ full list and [CHANGELOG.md](../CHANGELOG.md) for release history.
   starts the download
 - **Self-managed tools** — install and update `yt-dlp`/`gallery-dl` from
   inside the app; Homebrew becomes optional
-- **Signed & notarized releases** — no more right-click-Open on first launch
-- **Auto-update** — the app checks for new releases and downloads and installs
-  them itself (Sparkle-style), replacing the manual trip to the Releases page
 
 ## v2.0 — A library, not a log
 
