@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+      Hardened-runtime entitlements for the notarized Developer ID build.
+
+      DELIBERATELY EMPTY. XDownloader is a NON-sandboxed Developer ID app
+      (distributed outside the Mac App Store), and under the hardened runtime it
+      needs no entitlement for what it actually does:
+
+        • Spawning yt-dlp / gallery-dl / ffmpeg via Process() — each runs as a
+          SEPARATE child process (posix_spawn/exec), which the hardened runtime
+          does not restrict. Library validation only governs code loaded INTO
+          our own process, not children we launch.
+        • Outbound network — not sandboxed, so com.apple.security.network.client
+          is a sandbox entitlement we do not need.
+
+      We intentionally DO NOT add com.apple.security.cs.disable-library-validation:
+      the only embedded third-party code is Sparkle.framework, and scripts/
+      sign-notarize.sh re-signs Sparkle (and its nested XPC services, Autoupdate,
+      and Updater.app) with OUR Developer ID (team 5KGJ4RW2K5). Because every
+      dylib we load is then signed by our team, default library validation passes
+      untouched — disabling it would only weaken the app for no benefit.
+
+      Nor do we add allow-jit / allow-unsigned-executable-memory / DYLD-env
+      exceptions: the app runs no JIT and loads no unsigned code.
+
+      If a future feature genuinely requires an entitlement, add ONLY that one
+      here with a comment justifying it — do not blanket-add exceptions.
+    -->
+</dict>
+</plist>

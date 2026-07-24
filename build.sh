@@ -69,9 +69,30 @@ if [ -f "Resources/AppIcon.icns" ]; then
     cp "Resources/AppIcon.icns" "$BUNDLE_NAME/Contents/Resources/"
 fi
 
-# Ad-hoc re-sign, last: install_name_tool broke the linker's signature above,
-# and codesign binds Info.plist — so the bundle must be final before signing.
-codesign --force -s - "$BUNDLE_NAME/Contents/MacOS/$APP_NAME"
+# Sign LAST: install_name_tool broke the linker's signature above, and codesign
+# binds Info.plist — so the bundle must be final (version-stamped, icon copied)
+# before signing.
+#
+# If a Developer ID Application identity is available — env CODESIGN_IDENTITY, or
+# one auto-detected in the keychain — do the full inside-out Developer ID sign
+# (Sparkle nested code + hardened runtime + secure timestamp + entitlements) via
+# scripts/sign-notarize.sh, so a local `./build.sh` produces a distributable,
+# notarizable bundle. Otherwise fall back to the historical ad-hoc signature so
+# dev builds and the secret-less CI build check (build.yml) still work.
+# Escape hatch: CODESIGN_IDENTITY=- forces the ad-hoc path.
+SIGN_SCRIPT="$(dirname "$0")/scripts/sign-notarize.sh"
+DETECTED_ID="${CODESIGN_IDENTITY:-}"
+if [ -z "$DETECTED_ID" ]; then
+    DETECTED_ID=$({ security find-identity -v -p codesigning 2>/dev/null \
+        | grep -o '"Developer ID Application: [^"]*"' | head -1 | tr -d '"'; } || true)
+fi
+if [ -n "$DETECTED_ID" ] && [ "$DETECTED_ID" != "-" ] && [ -x "$SIGN_SCRIPT" ]; then
+    echo "🔏 Developer ID signing: $DETECTED_ID"
+    CODESIGN_IDENTITY="$DETECTED_ID" "$SIGN_SCRIPT" sign "$BUNDLE_NAME"
+else
+    echo "🔏 Ad-hoc signing (no Developer ID identity found)"
+    codesign --force -s - "$BUNDLE_NAME/Contents/MacOS/$APP_NAME"
+fi
 
 echo ""
 echo "✅ Build complete!  →  $BUNDLE_NAME"

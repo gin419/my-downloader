@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Entries before _Unreleased_ were back-filled from git history.
 
+## [Unreleased]
+
+### Added
+- **Developer ID signing + notarization** — release builds are now code-signed with an Apple Developer ID and notarized (and stapled) by Apple, so the app opens with a normal double-click instead of the old right-click → **Open** Gatekeeper workaround. The build runs under the hardened runtime; Sparkle's nested helpers (XPC services, Autoupdate, Updater.app, the framework) are re-signed under the same team, so library validation stays on (no `disable-library-validation`). Signing and notarization run in CI on tag push via `scripts/sign-notarize.sh`; the notarized, stapled zip is the exact artifact published to the GitHub Release and EdDSA-signed into the appcast, so auto-update delivers the notarized build. A local `./build.sh` does a full Developer ID sign when a cert is present and falls back to an ad-hoc signature otherwise.
+
 ## [1.7.0] — 2026-07-24
 
 ### Added
