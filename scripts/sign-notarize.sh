@@ -148,17 +148,21 @@ sign_app() {
 # Prefers the App Store Connect API key; falls back to a stored keychain profile.
 # A .p8 supplied as base64 is decoded to a temp file removed on script exit.
 NOTARY_ARGS=()
-_TMP_P8=""
-cleanup_tmp_key() { [ -n "$_TMP_P8" ] && rm -f "$_TMP_P8" || true; }
+_TMP_KEY_DIR=""
+cleanup_tmp_key() { [ -n "$_TMP_KEY_DIR" ] && rm -rf "$_TMP_KEY_DIR" || true; }
 trap cleanup_tmp_key EXIT
 
 resolve_notary_creds() {
   local key_path="${APP_STORE_CONNECT_KEY_PATH:-}"
   if [ -z "$key_path" ] && [ -n "${APP_STORE_CONNECT_KEY_BASE64:-}" ]; then
-    _TMP_P8="$(mktemp -t ascp8).p8"
-    chmod 600 "$_TMP_P8"
-    printf '%s' "$APP_STORE_CONNECT_KEY_BASE64" | base64 --decode > "$_TMP_P8"
-    key_path="$_TMP_P8"
+    # `mktemp -d` gives a private 0700 dir; the key lives inside it with a real
+    # ".p8" name (notarytool wants that extension). Write the file BEFORE chmod —
+    # chmod on a not-yet-created path fails under `set -e`, which was the bug
+    # that failed the first v1.8.0 release. The whole dir is removed on exit.
+    _TMP_KEY_DIR="$(mktemp -d -t ascp8)"
+    key_path="$_TMP_KEY_DIR/AuthKey.p8"
+    printf '%s' "$APP_STORE_CONNECT_KEY_BASE64" | base64 --decode > "$key_path"
+    chmod 600 "$key_path"
   fi
 
   if [ -n "$key_path" ] \
