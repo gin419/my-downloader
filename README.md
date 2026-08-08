@@ -44,6 +44,7 @@ Other things you'll notice the first day:
 - **Menu bar counter** — a status item counts active downloads and flags failures you haven't seen; its menu pastes, retries, and jumps back to the window.
 - **Automation-ready** — `xdownloader://download?url=…` for Shortcuts/Raycast (queues quietly in the background), plus File → Import Links… (⌘O) for a text file full of URLs.
 - **Cross-session memory** — your queue and download history survive an app restart (SQLite-backed, deduped across sessions).
+- **Sync your X Likes** — enter one `@handle` and save every accessible liked image, video, and GIF. Later scans use a per-account archive to skip media already on disk, and failed links stay available for retry.
 
 ---
 
@@ -130,6 +131,7 @@ After `./build.sh`, drag the resulting `XDownloader.app` to `/Applications/`.
 - Status-line feedback for every capture (queued / no link / already in your list)
 
 ### Download engine
+- **X / Twitter Likes sync** — manually scan one account's Likes with your browser session or `cookies.txt`; results stay in one aggregate task instead of flooding the normal queue
 - **X / Twitter videos** via `yt-dlp` + your browser cookies
 - **X / Twitter images** via `gallery-dl` fallback (multi-image aware)
 - **Instagram** — Reels, videos & video carousels via `yt-dlp`, image & mixed carousels via the `gallery-dl` fallback (sign in to Instagram in your cookie-source browser)
@@ -160,6 +162,7 @@ After `./build.sh`, drag the resulting `XDownloader.app` to `/Applications/`.
 ### Settings
 - Download folder picker (defaults to `~/Downloads/X-Videos`)
 - Cookie browser: Safari / Chrome / Firefox / Edge / None
+- X account handle and browser-cookie verification for Likes sync
 - Format, subtitle language, embed toggle
 - Max concurrent downloads (1–5)
 - Show download date & time per row

@@ -44,12 +44,15 @@ struct MenuBarState: Equatable {
     }
 
     static let empty = MenuBarState()
+    private static let likesRowID = UUID(uuidString: "4C494B45-532D-5359-4E43-000000000001")!
 
     /// Pure recompute. `wasOverflowing` carries the hysteresis memory from the
     /// previous state so the "N more…" row doesn't flap at the boundary.
     @MainActor
     static func compute(
         items: [DownloadItem],
+        likesStatus: LikesSyncRunStatus = .idle,
+        likesHandle: String? = nil,
         showsAttention: Bool,
         wasOverflowing: Bool
     ) -> MenuBarState {
@@ -87,6 +90,20 @@ struct MenuBarState: Equatable {
                 }
             case .completed:
                 break
+            }
+        }
+
+        if likesStatus.isActive {
+            state.downloadingCount += 1
+            active.append(
+                Row(
+                    id: likesRowID,
+                    title: "X Likes Sync\(likesHandle.map { " · \($0)" } ?? "")",
+                    detail: .fetching))
+        } else if likesStatus.needsAttention {
+            state.failedCount += 1
+            if state.firstFailureMessage == nil {
+                state.firstFailureMessage = "X Likes sync needs attention"
             }
         }
 

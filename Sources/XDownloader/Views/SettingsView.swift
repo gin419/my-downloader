@@ -53,7 +53,7 @@ struct SettingsView: View {
                 .pickerStyle(.segmented)
 
                 Text(
-                    "yt-dlp will use cookies from the selected browser to access your X.com session. Make sure you're logged in to X.com in that browser."
+                    "yt-dlp and gallery-dl use cookies from the selected browser to access your X.com session. Make sure you're logged in to X.com in that browser."
                 )
                 .font(.caption)
                 .foregroundColor(.secondary)
@@ -82,6 +82,44 @@ struct SettingsView: View {
 
                 Text(
                     "For X sensitive/NSFW (adult) videos that --cookies-from-browser cannot unlock, export a Netscape-format cookies.txt from your browser (use an extension like 'Get cookies.txt LOCALLY' while logged into x.com) and select the file here. The file path takes precedence over browser cookies."
+                )
+                .font(.caption)
+                .foregroundColor(.secondary)
+            }
+
+            Section("X Likes Sync") {
+                HStack {
+                    TextField("@handle", text: $manager.twitterHandle)
+                        .textFieldStyle(.roundedBorder)
+                        .disabled(manager.likesSyncSnapshot.status.isActive)
+                    Button("Verify") { manager.verifyLikesAccess() }
+                        .disabled(
+                            manager.twitterHandle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                || manager.likesSyncSnapshot.status.isActive
+                                || manager.likesAccessVerification == .verifying)
+                }
+
+                HStack(spacing: 6) {
+                    switch manager.likesAccessVerification {
+                    case .idle:
+                        Image(systemName: "person.crop.circle")
+                        Text("Enter the account whose Likes you want to sync.")
+                    case .verifying:
+                        ProgressView().controlSize(.small)
+                        Text("Checking the selected X session…")
+                    case .verified(let handle):
+                        Image(systemName: "checkmark.circle.fill").foregroundColor(.green)
+                        Text("Verified access for \(handle.displayName)")
+                    case .failed(let message):
+                        Image(systemName: "exclamationmark.triangle.fill").foregroundColor(.orange)
+                        Text(message)
+                    }
+                }
+                .font(.caption)
+                .foregroundColor(.secondary)
+
+                Text(
+                    "XDownloader never stores your X password or cookie contents. Sync is manual and downloads X-hosted images, videos, and GIFs; unliking a post never deletes local files."
                 )
                 .font(.caption)
                 .foregroundColor(.secondary)
@@ -224,6 +262,10 @@ struct SettingsView: View {
         .frame(width: 440)
         .onChange(of: manager.cookieBrowser) { manager.saveSettings() }
         .onChange(of: manager.cookiesFilePath) { manager.saveSettings() }
+        .onChange(of: manager.twitterHandle) {
+            manager.likesHandleChanged()
+            manager.saveSettings()
+        }
         .onChange(of: manager.maxConcurrent) { manager.saveSettings() }
         .onChange(of: manager.youtubeFormat) { manager.saveSettings() }
         .onChange(of: manager.videoQuality) { manager.saveSettings() }

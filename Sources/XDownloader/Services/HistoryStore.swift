@@ -25,8 +25,9 @@ final class HistoryStore {
     let fileURL: URL
     private var db: OpaquePointer?
 
-    init() {
-        let dir = FileManager.default.xdownloaderAppSupportDir()
+    init(directory: URL? = nil) {
+        let dir = directory ?? FileManager.default.xdownloaderAppSupportDir()
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         self.fileURL = dir.appendingPathComponent("history.sqlite")
         open()
     }

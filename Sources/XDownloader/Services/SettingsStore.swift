@@ -8,6 +8,7 @@ struct AppSettings {
     var cookieBrowser: CookieBrowser
     var cookiesFilePath: String?
     var cookiesFileBookmarkData: Data?
+    var twitterHandle: String
     var showDownloadDate: Bool
     var youtubeFormat: YouTubeFormat
     var videoQuality: VideoQuality
@@ -32,6 +33,7 @@ struct SettingsStore {
         d.set(s.outputDirectory.absoluteString, forKey: "outputDirectory")
         d.set(s.cookieBrowser.rawValue, forKey: "cookieBrowser")
         d.set(s.cookiesFilePath, forKey: "cookiesFilePath")
+        d.set(s.twitterHandle, forKey: "twitterHandle")
         if let bm = s.cookiesFileBookmarkData {
             d.set(bm, forKey: "cookiesFileBookmarkData")
         } else {
@@ -59,6 +61,7 @@ struct SettingsStore {
         if let v = d.string(forKey: "outputDirectory"), let u = URL(string: v) { s.outputDirectory = u }
         if let r = d.string(forKey: "cookieBrowser"), let v = CookieBrowser(rawValue: r) { s.cookieBrowser = v }
         if let p = d.string(forKey: "cookiesFilePath"), !p.isEmpty { s.cookiesFilePath = p } else { s.cookiesFilePath = nil }
+        s.twitterHandle = d.string(forKey: "twitterHandle") ?? fallback.twitterHandle
         s.cookiesFileBookmarkData = d.data(forKey: "cookiesFileBookmarkData")
         if let r = d.string(forKey: "youtubeFormat"), let v = YouTubeFormat(rawValue: r) { s.youtubeFormat = v }
         if let r = d.string(forKey: "videoQuality"), let v = VideoQuality(rawValue: r) { s.videoQuality = v }

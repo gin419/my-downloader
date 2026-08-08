@@ -17,6 +17,11 @@ class DownloadManager: ObservableObject {
     @Published var outputDirectory: URL
     @Published var cookieBrowser: CookieBrowser = .safari
     @Published var cookiesFilePath: String? = nil  // display / last resolved path
+    @Published var twitterHandle: String = ""
+    @Published private(set) var likesAccessVerification: LikesAccessVerification = .idle
+    @Published private(set) var likesSyncSnapshot: LikesSyncSnapshot = .idle {
+        didSet { recomputeMenuBarState() }
+    }
     private let cookieAccess = CookieAccessManager()  // security-scoped bookmark + per-download scope for cookies.txt
     @Published var maxConcurrent: Int = 2
     @Published var showDownloadDate: Bool = false
@@ -44,6 +49,15 @@ class DownloadManager: ObservableObject {
     // MARK: - Private state
 
     private var activeProcesses: [UUID: Process] = [:]
+    private var likesSyncProcess: Process?
+    private var likesVerificationProcess: Process?
+    private var likesSyncTask: Task<Void, Never>?
+    private var likesRunID: String?
+    private var likesLastRunID: String?
+    private var likesAccountID: Int64?
+    private var likesAccumulator = LikesSyncRunAccumulator()
+    private var likesDiagnostics: [String] = []
+    private var likesCancelRequested = false
     /// In-flight FxTwitterService fallbacks — URLSession Tasks, so they need
     /// Task.cancel() rather than Process.terminate() when the user hits Stop.
     private var activeFxTasks: [UUID: Task<Bool, Never>] = [:]
@@ -69,17 +83,35 @@ class DownloadManager: ObservableObject {
     /// a transient `.failed` mid-chain must not be retryable into a second
     /// concurrent download of the same item.
     private var inFlightItemIDs: Set<UUID> = []
-    private let history = HistoryStore()
-    private let queueStore = QueueStore()
-    private let settingsStore = SettingsStore()
+    private let history: HistoryStore
+    private let queueStore: QueueStore
+    private let settingsStore: SettingsStore
+    private let likesSyncStore: LikesSyncStore
+    private let likesProcessRunner: any LikesSyncProcessRunning
+    private let galleryDlPathProvider: () -> String?
 
     // Resolved at runtime via RequirementsService so paths stay in one place.
     private var ytdlpPath: String { RequirementsService.ytdlp.installedPath ?? "yt-dlp" }
-    private var galleryDlPath: String? { RequirementsService.galleryDl.installedPath }
+    private var galleryDlPath: String? { galleryDlPathProvider() }
 
     // MARK: - Init
 
-    init() {
+    init(
+        history: HistoryStore? = nil,
+        queueStore: QueueStore = QueueStore(),
+        settingsStore: SettingsStore = SettingsStore(),
+        likesSyncStore: LikesSyncStore? = nil,
+        likesProcessRunner: (any LikesSyncProcessRunning)? = nil,
+        galleryDlPathProvider: @escaping () -> String? = {
+            RequirementsService.galleryDl.installedPath
+        }
+    ) {
+        self.history = history ?? HistoryStore()
+        self.queueStore = queueStore
+        self.settingsStore = settingsStore
+        self.likesSyncStore = likesSyncStore ?? LikesSyncStore()
+        self.likesProcessRunner = likesProcessRunner ?? LiveLikesSyncProcessRunner()
+        self.galleryDlPathProvider = galleryDlPathProvider
         let downloads =
             FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
             ?? FileManager.default.homeDirectoryForCurrentUser
@@ -88,6 +120,7 @@ class DownloadManager: ObservableObject {
         self.outputDirectory = defaultDir
 
         loadSettings()
+        restoreLikesSyncSnapshot()
         loadQueue()
         checkRequirements()
         refreshHistoryStats()
@@ -135,6 +168,8 @@ class DownloadManager: ObservableObject {
     private func recomputeMenuBarState() {
         let state = MenuBarState.compute(
             items: items,
+            likesStatus: likesSyncSnapshot.status,
+            likesHandle: likesSyncSnapshot.handle?.displayName,
             showsAttention: hasUnseenFailures,
             wasOverflowing: menuBarState.isOverflowing)
         if state != menuBarState { menuBarState = state }
@@ -150,6 +185,13 @@ class DownloadManager: ObservableObject {
         for item in items {
             if case .failed = item.status { retryItem(item) }
         }
+        if likesSyncSnapshot.status.needsAttention {
+            if likesSyncSnapshot.failures.isEmpty {
+                startLikesSync()
+            } else {
+                retryAllLikesFailures()
+            }
+        }
     }
 
     /// SwiftUI's `Window(id: "main")` stamps its NSWindow identifier with the
@@ -162,8 +204,8 @@ class DownloadManager: ObservableObject {
     /// App-active alone isn't enough: the window can be closed, miniaturized,
     /// or on another Space while the app stays frontmost.
     private var isMainWindowShowing: Bool {
-        guard NSApp.isActive else { return false }
-        return NSApp.windows.contains { window in
+        guard let app = NSApp, app.isActive else { return false }
+        return app.windows.contains { window in
             Self.isMainWindow(window)
                 && window.isVisible
                 && window.isOnActiveSpace
@@ -632,6 +674,421 @@ class DownloadManager: ObservableObject {
         saveSettings()
     }
 
+    // MARK: - X Likes sync
+
+    func likesHandleChanged() {
+        likesAccessVerification = .idle
+    }
+
+    func verifyLikesAccess() {
+        guard likesVerificationProcess == nil, !likesSyncSnapshot.status.isActive else { return }
+        guard let executable = galleryDlPath else {
+            likesAccessVerification = .failed("gallery-dl is required. Install or update it, then try again.")
+            return
+        }
+        let handle: LikesSyncHandle
+        do {
+            handle = try LikesSyncHandle(twitterHandle)
+        } catch {
+            likesAccessVerification = .failed("Enter a valid X handle, such as @example.")
+            return
+        }
+
+        twitterHandle = handle.displayName
+        saveSettings()
+        likesAccessVerification = .verifying
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let cookies = self.resolveCookiesForDownload()
+            var diagnostics: [String] = []
+            var sawExtractorOutput = false
+            let scopeID = UUID()
+            var exitCode: Int32 = -1
+            await self.cookieAccess.withScope(
+                for: scopeID, file: cookies.path, grantedURL: cookies.granted
+            ) {
+                exitCode = await self.likesProcessRunner.run(
+                    executablePath: executable,
+                    arguments: LikesSyncArgumentBuilder.makeVerification(
+                        handle: handle,
+                        cookieBrowser: self.cookieBrowser,
+                        cookiesFile: cookies.path
+                    ).args,
+                    register: { [weak self] in self?.likesVerificationProcess = $0 },
+                    unregister: { [weak self] in self?.likesVerificationProcess = nil },
+                    onLine: { line in
+                        if line.hasPrefix("likes-verify\t") { sawExtractorOutput = true }
+                        if Self.isUsefulLikesDiagnostic(line) { diagnostics.append(line) }
+                    })
+            }
+            guard case .verifying = self.likesAccessVerification else { return }
+            if exitCode == 0, diagnostics.isEmpty || sawExtractorOutput {
+                self.likesAccessVerification = .verified(handle)
+            } else {
+                self.likesAccessVerification = .failed(
+                    Self.likesFailureMessage(from: diagnostics.last, exitCode: exitCode))
+            }
+        }
+    }
+
+    func startLikesSync() {
+        startLikesSync(inputURLs: nil)
+    }
+
+    private func startLikesSync(inputURLs: [String]?) {
+        guard !likesSyncSnapshot.status.isActive, likesVerificationProcess == nil else { return }
+        guard let executable = galleryDlPath else {
+            failLikesBeforeStart("gallery-dl is required. Install or update it, then try again.")
+            return
+        }
+
+        let handle: LikesSyncHandle
+        do {
+            handle = try LikesSyncHandle(twitterHandle)
+        } catch {
+            failLikesBeforeStart("Enter a valid X handle in Settings before syncing Likes.")
+            return
+        }
+
+        let plan = LikesSyncPlanner.plan(for: handle, rootDirectory: outputDirectory)
+        do {
+            try FileManager.default.createDirectory(at: plan.outputDirectory, withIntermediateDirectories: true)
+        } catch {
+            failLikesBeforeStart("Could not create the Likes folder: \(error.localizedDescription)")
+            return
+        }
+
+        let account: LikesSyncAccount
+        do {
+            account = try likesSyncStore.upsertAccount(input: handle.displayName, rootDirectory: outputDirectory)
+        } catch {
+            failLikesBeforeStart("Could not open the Likes sync database.")
+            return
+        }
+        guard let accountID = account.id else {
+            failLikesBeforeStart("Could not create the Likes sync account record.")
+            return
+        }
+
+        twitterHandle = handle.displayName
+        saveSettings()
+        let run = likesSyncStore.startRun(accountID: accountID)
+        likesRunID = run.id
+        likesLastRunID = run.id
+        likesAccountID = accountID
+        likesAccumulator = LikesSyncRunAccumulator()
+        likesDiagnostics = []
+        likesCancelRequested = false
+        likesSyncSnapshot = LikesSyncSnapshot(
+            handle: handle,
+            status: .running,
+            counts: LikesSyncCounts(ignored: likesSyncStore.ignoredFailures(accountID: accountID).count),
+            failures: likesSyncStore.pendingFailures(accountID: accountID),
+            message: inputURLs == nil ? "Scanning all accessible Likes…" : "Retrying failed Likes…",
+            outputDirectory: plan.outputDirectory,
+            startedAt: run.startedAt,
+            finishedAt: nil)
+
+        let cookies = resolveCookiesForDownload()
+        let args = LikesSyncArgumentBuilder.make(
+            plan: plan,
+            cookieBrowser: cookieBrowser,
+            cookiesFile: cookies.path,
+            inputURLs: inputURLs
+        ).args
+        let scopeID = UUID()
+        likesSyncTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            var exitCode: Int32 = -1
+            await withTaskCancellationHandler {
+                await self.cookieAccess.withScope(
+                    for: scopeID, file: cookies.path, grantedURL: cookies.granted
+                ) {
+                    exitCode = await self.likesProcessRunner.run(
+                        executablePath: executable,
+                        arguments: args,
+                        register: { [weak self] in self?.likesSyncProcess = $0 },
+                        unregister: { [weak self] in self?.likesSyncProcess = nil },
+                        onLine: { [weak self] line in self?.consumeLikesLine(line) })
+                }
+            } onCancel: { [weak self] in
+                Task { @MainActor in self?.likesSyncProcess?.terminate() }
+            }
+            self.finishLikesSync(exitCode: exitCode)
+        }
+    }
+
+    func cancelLikesSync() {
+        guard likesSyncSnapshot.status == .running, let runID = likesRunID else { return }
+        likesCancelRequested = true
+        likesSyncSnapshot.status = .cancelling
+        likesSyncSnapshot.message = "Cancelling after the current file…"
+        likesSyncStore.updateRunStatus(id: runID, status: .cancelling)
+        likesSyncTask?.cancel()
+        likesSyncProcess?.terminate()
+    }
+
+    func retryLikesFailure(_ failure: LikesSyncFailure) {
+        guard !likesSyncSnapshot.status.isActive else { return }
+        likesSyncStore.restoreFailure(id: failure.id)
+        likesSyncStore.markFailureRetried(id: failure.id)
+        startLikesSync(inputURLs: failure.url.map { [$0] })
+    }
+
+    func retryAllLikesFailures() {
+        guard !likesSyncSnapshot.status.isActive else { return }
+        let failures =
+            likesAccountID.map { likesSyncStore.failuresForRetry(accountID: $0) }
+            ?? likesSyncSnapshot.failures.filter { $0.ignoredAt == nil }
+        let urls = Array(Set(failures.compactMap(\.url))).sorted()
+        for failure in failures { likesSyncStore.markFailureRetried(id: failure.id) }
+        let needsFullRescan = failures.contains { $0.url == nil }
+        startLikesSync(inputURLs: needsFullRescan || urls.isEmpty ? nil : urls)
+    }
+
+    func ignoreLikesFailure(_ failure: LikesSyncFailure) {
+        likesSyncStore.ignoreFailure(id: failure.id)
+        refreshLikesFailureLists()
+    }
+
+    func restoreIgnoredLikesFailures() {
+        guard let accountID = likesAccountID else { return }
+        for failure in likesSyncStore.ignoredFailures(accountID: accountID) {
+            likesSyncStore.restoreFailure(id: failure.id)
+        }
+        refreshLikesFailureLists()
+    }
+
+    func openLikesFolder() {
+        if let directory = likesSyncSnapshot.outputDirectory {
+            NSWorkspace.shared.open(directory)
+        } else if let handle = try? LikesSyncHandle(twitterHandle) {
+            NSWorkspace.shared.open(LikesSyncPlanner.plan(for: handle, rootDirectory: outputDirectory).outputDirectory)
+        }
+    }
+
+    private func consumeLikesLine(_ line: String) {
+        guard let accountID = likesAccountID, let runID = likesRunID else { return }
+        guard let event = LikesSyncEventParser.parse(line) else {
+            if Self.isUsefulLikesDiagnostic(line) {
+                likesDiagnostics.append(line)
+                if likesDiagnostics.count > 20 { likesDiagnostics.removeFirst() }
+            }
+            return
+        }
+
+        likesAccumulator.apply(event)
+        if let tweetID = event.tweetID {
+            let author = event.authorHandle
+            let url =
+                event.tweetURL
+                ?? author.map { "https://x.com/\($0)/status/\(tweetID)" }
+                ?? "https://x.com/i/status/\(tweetID)"
+            likesSyncStore.recordTweet(
+                LikesSyncTweet(
+                    tweetID: tweetID, accountID: accountID, runID: runID,
+                    url: url, text: event.text, authorHandle: author))
+
+            if let mediaID = event.mediaID, event.name == .after || event.name == .skip {
+                likesSyncStore.recordMedia(
+                    LikesSyncMedia(
+                        id: mediaID, accountID: accountID, tweetID: tweetID, runID: runID,
+                        kind: event.mediaKind, url: event.mediaURL, filePath: event.mediaPath))
+            }
+            if event.name == .after || event.name == .skip {
+                likesSyncStore.resolveFailures(accountID: accountID, tweetID: tweetID)
+            }
+        }
+
+        if event.name == .error {
+            recordLikesFailure(
+                message: event.message ?? "gallery-dl could not process this item.",
+                category: event.failureCategory,
+                tweetID: event.tweetID,
+                url: event.tweetURL)
+        }
+        updateLikesSnapshotCounts()
+    }
+
+    private func recordLikesFailure(
+        message: String,
+        category: LikesSyncFailureCategory? = nil,
+        tweetID: String? = nil,
+        url: String? = nil
+    ) {
+        guard let accountID = likesAccountID else { return }
+        let classified = category ?? LikesSyncFailureCategory.classify(message)
+        let identity = tweetID ?? url ?? classified.rawValue
+        let failure = LikesSyncFailure(
+            id: "\(accountID):\(identity)",
+            accountID: accountID,
+            runID: likesRunID,
+            tweetID: tweetID,
+            url: url ?? tweetID.map { "https://x.com/i/status/\($0)" },
+            category: classified,
+            message: message,
+            ignoredAt: nil,
+            resolvedAt: nil,
+            retryCount: 0)
+        likesSyncStore.recordFailure(failure)
+    }
+
+    private func finishLikesSync(exitCode: Int32) {
+        guard let runID = likesRunID, let accountID = likesAccountID else { return }
+        let diagnosticCategory = likesDiagnostics.last.map(LikesSyncFailureCategory.classify)
+        let diagnosticIsFatalAtZero =
+            diagnosticCategory == .authentication
+            || diagnosticCategory == .rateLimited || diagnosticCategory == .disk
+        if (exitCode != 0 || diagnosticIsFatalAtZero), likesAccumulator.failureCount == 0,
+            !likesCancelRequested
+        {
+            let message = Self.likesFailureMessage(from: likesDiagnostics.last, exitCode: exitCode)
+            recordLikesFailure(message: message)
+        }
+
+        let pending = likesSyncStore.pendingFailures(accountID: accountID)
+        let status: LikesSyncRunStatus
+        if likesCancelRequested {
+            status = .cancelled
+        } else if exitCode == 0, pending.isEmpty {
+            status = .completed
+        } else if likesAccumulator.downloadedCount > 0 || likesAccumulator.skippedCount > 0 {
+            status = .partial
+        } else {
+            status = .failed
+        }
+
+        let ignoredCount = likesSyncStore.ignoredFailures(accountID: accountID).count
+        likesSyncStore.finishRun(
+            id: runID, status: status, summary: likesAccumulator, ignoredCount: ignoredCount)
+        let finishedAt = Date()
+        updateLikesSnapshotCounts()
+        likesSyncSnapshot.status = status
+        likesSyncSnapshot.failures = pending
+        likesSyncSnapshot.counts.failed = pending.count
+        likesSyncSnapshot.counts.ignored = likesSyncStore.ignoredFailures(accountID: accountID).count
+        likesSyncSnapshot.finishedAt = finishedAt
+        switch status {
+        case .completed:
+            likesSyncSnapshot.message =
+                likesAccumulator.downloadedCount == 0
+                ? "Up to date — no new media." : "Likes sync completed."
+        case .partial:
+            likesSyncSnapshot.message = "Sync completed with items that need attention."
+        case .cancelled:
+            likesSyncSnapshot.message = "Sync cancelled. Saved files are kept; the next sync resumes safely."
+        case .failed:
+            likesSyncSnapshot.message = pending.first?.message ?? "Likes sync failed."
+        default:
+            break
+        }
+        if status.needsAttention, !isMainWindowShowing { hasUnseenFailures = true }
+        likesSyncProcess = nil
+        likesSyncTask = nil
+        likesRunID = nil
+        likesCancelRequested = false
+        recomputeMenuBarState()
+    }
+
+    private func updateLikesSnapshotCounts() {
+        likesSyncSnapshot.counts.discovered = likesAccumulator.tweetCount
+        likesSyncSnapshot.counts.downloaded = likesAccumulator.downloadedCount
+        likesSyncSnapshot.counts.skipped = likesAccumulator.skippedCount
+        likesSyncSnapshot.counts.noMedia = likesAccumulator.noMediaCount
+        if let accountID = likesAccountID {
+            likesSyncSnapshot.counts.failed = likesSyncStore.pendingFailures(accountID: accountID).count
+            likesSyncSnapshot.counts.ignored = likesSyncStore.ignoredFailures(accountID: accountID).count
+        }
+    }
+
+    private func refreshLikesFailureLists() {
+        guard let accountID = likesAccountID else { return }
+        likesSyncSnapshot.failures = likesSyncStore.pendingFailures(accountID: accountID)
+        likesSyncSnapshot.counts.failed = likesSyncSnapshot.failures.count
+        likesSyncSnapshot.counts.ignored = likesSyncStore.ignoredFailures(accountID: accountID).count
+        if likesSyncSnapshot.failures.isEmpty,
+            likesSyncSnapshot.status == .partial || likesSyncSnapshot.status == .failed
+        {
+            likesSyncSnapshot.status = .completed
+            likesSyncSnapshot.message =
+                likesSyncSnapshot.counts.ignored > 0
+                ? "Completed with ignored items." : "Likes sync completed."
+            if let runID = likesLastRunID {
+                likesSyncStore.updateRunStatus(id: runID, status: .completed)
+            }
+            markFailuresSeen()
+        }
+        recomputeMenuBarState()
+    }
+
+    private func failLikesBeforeStart(_ message: String) {
+        likesSyncSnapshot.status = .failed
+        likesSyncSnapshot.message = message
+        likesSyncSnapshot.finishedAt = Date()
+        if !isMainWindowShowing { hasUnseenFailures = true }
+        recomputeMenuBarState()
+    }
+
+    private func restoreLikesSyncSnapshot() {
+        guard let handle = try? LikesSyncHandle(twitterHandle),
+            let account = likesSyncStore.account(for: handle), let accountID = account.id
+        else { return }
+        likesAccountID = accountID
+        let pending = likesSyncStore.pendingFailures(accountID: accountID)
+        let ignored = likesSyncStore.ignoredFailures(accountID: accountID)
+        guard let run = likesSyncStore.latestRun(accountID: accountID) else {
+            likesSyncSnapshot.handle = handle
+            likesSyncSnapshot.outputDirectory = account.outputDirectory
+            return
+        }
+        likesLastRunID = run.id
+        likesSyncSnapshot = LikesSyncSnapshot(
+            handle: handle,
+            status: run.status,
+            counts: LikesSyncCounts(
+                discovered: run.tweetCount, downloaded: run.mediaCount,
+                skipped: run.skippedCount, noMedia: run.noMediaCount,
+                failed: pending.count, ignored: ignored.count),
+            failures: pending,
+            message: run.status == .interrupted
+                ? "The previous sync was interrupted. Start again to resume safely." : nil,
+            outputDirectory: account.outputDirectory,
+            startedAt: run.startedAt,
+            finishedAt: run.finishedAt)
+    }
+
+    nonisolated private static func isUsefulLikesDiagnostic(_ line: String) -> Bool {
+        let lower = line.lowercased()
+        if lower.contains("[warning]") && lower.contains("api errors (") { return false }
+        return lower.contains("[error]") || lower.contains("429") || lower.contains("rate limit")
+            || lower.contains("login") || lower.contains("unauthorized") || lower.contains("cookie")
+            || lower.contains("no space") || lower.contains("permission denied")
+            || lower.contains("connection") || lower.contains("timeout")
+    }
+
+    nonisolated private static func likesFailureMessage(from diagnostic: String?, exitCode: Int32) -> String {
+        guard let diagnostic, !diagnostic.isEmpty else {
+            return "gallery-dl exited with code \(exitCode). Verify the selected X login and try again."
+        }
+        let category = LikesSyncFailureCategory.classify(diagnostic)
+        switch category {
+        case .authentication:
+            return "X login could not be verified. Sign in using the browser selected in Settings, or choose a fresh cookies.txt file."
+        case .rateLimited:
+            return "X rate-limited this sync. Wait a while, then retry."
+        case .disk:
+            return "The Likes folder is not writable or the disk is full."
+        case .network:
+            return "The network connection failed during Likes sync. Retry when the connection is stable."
+        case .unavailable:
+            return "X did not return this item; it may be deleted, protected, or unavailable."
+        case .tool:
+            return "This gallery-dl version cannot sync X Likes. Update gallery-dl, then try again."
+        default:
+            return diagnostic
+        }
+    }
+
     // MARK: - Settings
 
     func saveSettings() {
@@ -639,11 +1096,14 @@ class DownloadManager: ObservableObject {
     }
 
     private func currentSettings() -> AppSettings {
-        AppSettings(
+        let persistedTwitterHandle =
+            (try? LikesSyncHandle(twitterHandle).displayName) ?? twitterHandle
+        return AppSettings(
             outputDirectory: outputDirectory,
             cookieBrowser: cookieBrowser,
             cookiesFilePath: cookiesFilePath,
             cookiesFileBookmarkData: cookieAccess.bookmarkForSaving,
+            twitterHandle: persistedTwitterHandle,
             showDownloadDate: showDownloadDate,
             youtubeFormat: youtubeFormat,
             videoQuality: videoQuality,
@@ -664,6 +1124,7 @@ class DownloadManager: ObservableObject {
         outputDirectory = s.outputDirectory
         cookieBrowser = s.cookieBrowser
         cookiesFilePath = s.cookiesFilePath
+        twitterHandle = s.twitterHandle
         if let bm = s.cookiesFileBookmarkData { cookieAccess.loadBookmark(bm) }
         showDownloadDate = s.showDownloadDate
         youtubeFormat = s.youtubeFormat

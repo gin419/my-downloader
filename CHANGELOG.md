@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Entries before _Unreleased_ were back-filled from git history.
 
+## [Unreleased]
+
+### Added
+- **X/Twitter Likes media sync** — configure one `@handle`, reuse the selected browser session or `cookies.txt`, and manually sync every accessible image, video, and GIF from the account's Likes. Each sync is one aggregate task with durable counts and an expandable failure list; a per-account gallery-dl archive skips media already saved on earlier runs while failed and newly liked posts remain retryable.
+
+### Changed
+- Likes sync keeps its own SQLite state and download archive, separate from the ordinary URL queue and download history. Cancelling or restarting never rolls back completed files, and unliking or losing access to a post never deletes local media.
+
 ## [1.8.0] — 2026-07-25
 
 ### Added

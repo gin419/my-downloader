@@ -118,4 +118,21 @@ final class MenuBarStateTests: XCTestCase {
         let state = MenuBarState.compute(items: [], showsAttention: true, wasOverflowing: false)
         XCTAssertTrue(state.showsAttention)
     }
+
+    func testLikesSyncCountsAsOneActiveTaskAndFailureSummary() {
+        let running = MenuBarState.compute(
+            items: [], likesStatus: .running, likesHandle: "@gin",
+            showsAttention: false, wasOverflowing: false)
+        XCTAssertEqual(running.downloadingCount, 1)
+        XCTAssertEqual(running.unfinishedCount, 1)
+        XCTAssertEqual(running.rows.first?.title, "X Likes Sync · @gin")
+        XCTAssertEqual(running.rows.first?.detail, .fetching)
+
+        let partial = MenuBarState.compute(
+            items: [], likesStatus: .partial, likesHandle: "@gin",
+            showsAttention: true, wasOverflowing: false)
+        XCTAssertEqual(partial.failedCount, 1)
+        XCTAssertEqual(partial.firstFailureMessage, "X Likes sync needs attention")
+        XCTAssertTrue(partial.showsAttention)
+    }
 }

@@ -66,6 +66,10 @@ struct ContentView: View {
             urlInputSection
                 .padding(.horizontal, 20)
                 .padding(.top, 20)
+                .padding(.bottom, 10)
+
+            LikesSyncCardView()
+                .padding(.horizontal, 20)
                 .padding(.bottom, 16)
 
             Divider()

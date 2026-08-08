@@ -28,6 +28,99 @@ private final class LineBuffer: @unchecked Sendable {
 
 enum ProcessRunner {
 
+    /// Generic cancellable streaming process used by long-running work that
+    /// is not represented by a DownloadItem (for example, an account-level
+    /// Likes sync). The caller owns the Process reference via register /
+    /// unregister and can terminate it at any time.
+    @MainActor
+    @discardableResult
+    static func runStreaming(
+        executablePath: String,
+        arguments: [String],
+        environment: [String: String]? = nil,
+        register: @escaping (Process) -> Void,
+        unregister: @escaping () -> Void,
+        onLine: @escaping @MainActor @Sendable (String) -> Void
+    ) async -> Int32 {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executablePath)
+        process.arguments = arguments
+
+        if let environment {
+            process.environment = environment
+        } else {
+            var env = ProcessInfo.processInfo.environment
+            let existingPath = env["PATH"] ?? ""
+            env["PATH"] =
+                existingPath.isEmpty
+                ? Homebrew.fullPATH
+                : "\(Homebrew.binPaths):\(existingPath)"
+            process.environment = env
+        }
+
+        let stdout = Pipe()
+        let stderr = Pipe()
+        process.standardOutput = stdout
+        process.standardError = stderr
+
+        guard !Task.isCancelled else { return 15 }
+        register(process)
+        guard !Task.isCancelled else {
+            unregister()
+            return 15
+        }
+        do {
+            try process.run()
+        } catch {
+            unregister()
+            onLine("[process][error] \(error.localizedDescription)")
+            return -1
+        }
+
+        let stdoutTask = makeStreamingReader(
+            handle: stdout.fileHandleForReading,
+            buffer: LineBuffer(),
+            onLine: onLine)
+        let stderrTask = makeStreamingReader(
+            handle: stderr.fileHandleForReading,
+            buffer: LineBuffer(),
+            onLine: onLine)
+
+        await withCheckedContinuation { continuation in
+            process.terminationHandler = { _ in continuation.resume() }
+        }
+
+        // The process can terminate before its pipe callbacks have delivered the
+        // final bytes. Await both readers so the caller can safely finalize
+        // durable state immediately after this method returns.
+        await stdoutTask.value
+        await stderrTask.value
+        unregister()
+        return process.terminationStatus
+    }
+
+    private static func makeStreamingReader(
+        handle: FileHandle,
+        buffer: LineBuffer,
+        onLine: @escaping @MainActor @Sendable (String) -> Void
+    ) -> Task<Void, Never> {
+        Task.detached {
+            while true {
+                let chunk = handle.availableData
+                guard !chunk.isEmpty else { break }
+                for line in buffer.take(chunk) {
+                    let trimmed = line.trimmingCharacters(in: .whitespaces)
+                    if !trimmed.isEmpty { await onLine(trimmed) }
+                }
+            }
+            if let trimmed = buffer.flush()?.trimmingCharacters(in: .whitespaces),
+                !trimmed.isEmpty
+            {
+                await onLine(trimmed)
+            }
+        }
+    }
+
     /// Runs an external process and streams its stdout/stderr through `lineParser`.
     /// `register` is called with the live Process before launch (for cancellation support).
     /// `unregister` is called after the process exits.

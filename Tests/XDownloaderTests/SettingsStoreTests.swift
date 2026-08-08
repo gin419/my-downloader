@@ -13,6 +13,7 @@ final class SettingsStoreTests: XCTestCase {
         AppSettings(
             outputDirectory: URL(fileURLWithPath: "/fallback"),
             cookieBrowser: .safari, cookiesFilePath: nil, cookiesFileBookmarkData: nil,
+            twitterHandle: "",
             showDownloadDate: false, youtubeFormat: .videoAndAudio, videoQuality: .best,
             audioQuality: .best, subtitleLanguage: .none, embedSubtitles: true,
             maxConcurrent: 2, openPreference: .video,
@@ -30,6 +31,7 @@ final class SettingsStoreTests: XCTestCase {
         saved.showMenuBarExtra = false
         saved.cookiesFilePath = "/c.txt"
         saved.cookiesFileBookmarkData = Data([9])
+        saved.twitterHandle = "example_user"
         store.save(saved)
 
         let loaded = store.load(fallback: sampleFallback())
@@ -41,6 +43,7 @@ final class SettingsStoreTests: XCTestCase {
         XCTAssertFalse(loaded.showMenuBarExtra)
         XCTAssertEqual(loaded.cookiesFilePath, "/c.txt")
         XCTAssertEqual(loaded.cookiesFileBookmarkData, Data([9]))
+        XCTAssertEqual(loaded.twitterHandle, "example_user")
     }
 
     func testEmptyDefaultsUseFallback() {
