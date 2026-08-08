@@ -3,6 +3,15 @@
   <channel>
     <title>XDownloader</title>
     <item>
+      <title>1.9.1</title>
+      <pubDate>Sat, 08 Aug 2026 22:06:15 +0000</pubDate>
+      <sparkle:version>10901</sparkle:version>
+      <sparkle:shortVersionString>1.9.1</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <sparkle:releaseNotesLink>https://github.com/gin419/my-downloader/releases/tag/v1.9.1</sparkle:releaseNotesLink>
+      <enclosure url="https://github.com/gin419/my-downloader/releases/download/v1.9.1/XDownloader-v1.9.1.zip" sparkle:edSignature="Jf8a3Osme1YGRGGaBGAVzb4+bgE/I2vccNNG9KKBgOpmwRdswrkY2DwopXlbmHlcAQMkqVljcwwEGJmBUh+FBQ==" length="3248702" type="application/octet-stream"/>
+    </item>
+<item>
       <title>1.9.0</title>
       <pubDate>Sat, 08 Aug 2026 21:26:53 +0000</pubDate>
       <sparkle:version>10900</sparkle:version>
