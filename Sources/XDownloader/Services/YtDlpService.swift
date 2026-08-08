@@ -13,6 +13,7 @@ enum YtDlpService {
         subtitleLanguage: SubtitleLanguage,
         embedSubtitles: Bool,
         cookieBrowser: CookieBrowser,
+        cookieBrowserProfile: String? = nil,
         cookiesFile: String? = nil
     ) -> [String] {
         // The profile's outputTemplateSuffix expands to " [01]" etc. only when a
@@ -27,7 +28,8 @@ enum YtDlpService {
             ? "%(title)s" : "%(uploader)s - %(title)s"
         let outputTemplate = outputDirectory.path + "/\(stem)\(profile.outputTemplateSuffix).%(ext)s"
         var args: [String] = []
-        args += CookieArgs.make(browser: cookieBrowser, file: cookiesFile)
+        args += CookieArgs.make(
+            browser: cookieBrowser, profile: cookieBrowserProfile, file: cookiesFile)
 
         let hf = videoQuality.heightFilter ?? ""  // e.g. "[height<=1080]" or ""
 

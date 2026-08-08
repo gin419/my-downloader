@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Entries before _Unreleased_ were back-filled from git history.
 
+## [Unreleased]
+
+### Fixed
+- **Authenticated browser-profile selection** — Chrome and Edge users can now choose the exact browser profile containing their X session. Likes verification, Likes sync, and ordinary downloads pass that profile directly to gallery-dl or yt-dlp, avoiding the unsafe plaintext `cookies.txt` workaround when automatic profile selection chooses an unauthenticated profile.
+
 ## [1.9.0] — 2026-08-09
 
 ### Added

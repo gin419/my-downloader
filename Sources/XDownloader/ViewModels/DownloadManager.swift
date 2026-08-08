@@ -16,6 +16,7 @@ class DownloadManager: ObservableObject {
     }
     @Published var outputDirectory: URL
     @Published var cookieBrowser: CookieBrowser = .safari
+    @Published var cookieBrowserProfile: String = ""
     @Published var cookiesFilePath: String? = nil  // display / last resolved path
     @Published var twitterHandle: String = ""
     @Published private(set) var likesAccessVerification: LikesAccessVerification = .idle
@@ -93,6 +94,10 @@ class DownloadManager: ObservableObject {
     // Resolved at runtime via RequirementsService so paths stay in one place.
     private var ytdlpPath: String { RequirementsService.ytdlp.installedPath ?? "yt-dlp" }
     private var galleryDlPath: String? { galleryDlPathProvider() }
+
+    var availableCookieBrowserProfiles: [BrowserCookieProfile] {
+        BrowserCookieProfileDiscovery.profiles(for: cookieBrowser)
+    }
 
     // MARK: - Init
 
@@ -680,6 +685,17 @@ class DownloadManager: ObservableObject {
         likesAccessVerification = .idle
     }
 
+    func cookieBrowserChanged() {
+        normalizeCookieBrowserProfile()
+        likesAccessVerification = .idle
+        saveSettings()
+    }
+
+    func cookieBrowserProfileChanged() {
+        likesAccessVerification = .idle
+        saveSettings()
+    }
+
     func verifyLikesAccess() {
         guard likesVerificationProcess == nil, !likesSyncSnapshot.status.isActive else { return }
         guard let executable = galleryDlPath else {
@@ -712,6 +728,7 @@ class DownloadManager: ObservableObject {
                     arguments: LikesSyncArgumentBuilder.makeVerification(
                         handle: handle,
                         cookieBrowser: self.cookieBrowser,
+                        cookieBrowserProfile: self.cookieBrowserProfile,
                         cookiesFile: cookies.path
                     ).args,
                     register: { [weak self] in self?.likesVerificationProcess = $0 },
@@ -793,6 +810,7 @@ class DownloadManager: ObservableObject {
         let args = LikesSyncArgumentBuilder.make(
             plan: plan,
             cookieBrowser: cookieBrowser,
+            cookieBrowserProfile: cookieBrowserProfile,
             cookiesFile: cookies.path,
             inputURLs: inputURLs
         ).args
@@ -1073,7 +1091,7 @@ class DownloadManager: ObservableObject {
         let category = LikesSyncFailureCategory.classify(diagnostic)
         switch category {
         case .authentication:
-            return "X login could not be verified. Sign in using the browser selected in Settings, or choose a fresh cookies.txt file."
+            return "X login could not be verified. Select the browser profile where you are signed in to X, then try again."
         case .rateLimited:
             return "X rate-limited this sync. Wait a while, then retry."
         case .disk:
@@ -1101,6 +1119,7 @@ class DownloadManager: ObservableObject {
         return AppSettings(
             outputDirectory: outputDirectory,
             cookieBrowser: cookieBrowser,
+            cookieBrowserProfile: cookieBrowserProfile,
             cookiesFilePath: cookiesFilePath,
             cookiesFileBookmarkData: cookieAccess.bookmarkForSaving,
             twitterHandle: persistedTwitterHandle,
@@ -1123,6 +1142,7 @@ class DownloadManager: ObservableObject {
         let s = settingsStore.load(fallback: currentSettings())
         outputDirectory = s.outputDirectory
         cookieBrowser = s.cookieBrowser
+        cookieBrowserProfile = s.cookieBrowserProfile
         cookiesFilePath = s.cookiesFilePath
         twitterHandle = s.twitterHandle
         if let bm = s.cookiesFileBookmarkData { cookieAccess.loadBookmark(bm) }
@@ -1136,6 +1156,21 @@ class DownloadManager: ObservableObject {
         openPreference = s.openPreference
         saveHistoryEnabled = s.saveHistoryEnabled
         showMenuBarExtra = s.showMenuBarExtra
+        normalizeCookieBrowserProfile()
+    }
+
+    private func normalizeCookieBrowserProfile() {
+        let profiles = availableCookieBrowserProfiles
+        guard !profiles.isEmpty else {
+            cookieBrowserProfile = ""
+            return
+        }
+        guard profiles.contains(where: { $0.id == cookieBrowserProfile }) else {
+            cookieBrowserProfile =
+                profiles.first(where: { $0.id == "Default" })?.id
+                ?? profiles[0].id
+            return
+        }
     }
 
     private func drainQueue() {
@@ -1180,6 +1215,7 @@ class DownloadManager: ObservableObject {
                 subtitleLanguage: effectiveSubtitleLanguage,
                 embedSubtitles: embedSubtitles,
                 cookieBrowser: cookieBrowser,
+                cookieBrowserProfile: cookieBrowserProfile,
                 cookiesFile: cookies.path
             )
 
@@ -1333,6 +1369,7 @@ class DownloadManager: ObservableObject {
                 executablePath: gdlPath,
                 outputDirectory: outputDirectory,
                 cookieBrowser: cookieBrowser,
+                cookieBrowserProfile: cookieBrowserProfile,
                 cookiesFile: cookies.path,
                 register: { [weak self] p in self?.activeProcesses[item.id] = p },
                 unregister: { [weak self] in self?.activeProcesses.removeValue(forKey: item.id) }
@@ -1355,6 +1392,7 @@ class DownloadManager: ObservableObject {
                 executablePath: executablePath,
                 outputDirectory: outputDirectory,
                 cookieBrowser: cookieBrowser,
+                cookieBrowserProfile: cookieBrowserProfile,
                 cookiesFile: cookies.path,
                 register: { [weak self] p in self?.activeProcesses[item.id] = p },
                 unregister: { [weak self] in self?.activeProcesses.removeValue(forKey: item.id) }

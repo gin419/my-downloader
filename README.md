@@ -131,7 +131,7 @@ After `./build.sh`, drag the resulting `XDownloader.app` to `/Applications/`.
 - Status-line feedback for every capture (queued / no link / already in your list)
 
 ### Download engine
-- **X / Twitter Likes sync** — manually scan one account's Likes with your browser session or `cookies.txt`; results stay in one aggregate task instead of flooding the normal queue
+- **X / Twitter Likes sync** — manually scan one account's Likes using the selected browser profile; results stay in one aggregate task instead of flooding the normal queue, and `cookies.txt` is only an optional fallback
 - **X / Twitter videos** via `yt-dlp` + your browser cookies
 - **X / Twitter images** via `gallery-dl` fallback (multi-image aware)
 - **Instagram** — Reels, videos & video carousels via `yt-dlp`, image & mixed carousels via the `gallery-dl` fallback (sign in to Instagram in your cookie-source browser)

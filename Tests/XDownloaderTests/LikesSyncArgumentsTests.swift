@@ -49,6 +49,20 @@ final class LikesSyncArgumentsTests: XCTestCase {
         XCTAssertEqual(Array(args.prefix(2)), ["--cookies-from-browser", "chrome"])
     }
 
+    func testArgumentsUseTheSelectedBrowserProfile() throws {
+        let plan = LikesSyncPlanner.plan(
+            for: try LikesSyncHandle("@Gin"),
+            rootDirectory: URL(fileURLWithPath: "/tmp/downloads")
+        )
+        let args = LikesSyncArgumentBuilder.make(
+            plan: plan,
+            cookieBrowser: .chrome,
+            cookieBrowserProfile: "Default",
+            cookiesFile: nil
+        ).args
+        XCTAssertEqual(Array(args.prefix(2)), ["--cookies-from-browser", "chrome:Default"])
+    }
+
     func testVerificationIsBoundedAndNeverDownloads() throws {
         let args = LikesSyncArgumentBuilder.makeVerification(
             handle: try LikesSyncHandle("@gin"), cookieBrowser: .safari, cookiesFile: nil

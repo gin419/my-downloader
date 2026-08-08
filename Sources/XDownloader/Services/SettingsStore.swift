@@ -6,6 +6,7 @@ import Foundation
 struct AppSettings {
     var outputDirectory: URL
     var cookieBrowser: CookieBrowser
+    var cookieBrowserProfile: String
     var cookiesFilePath: String?
     var cookiesFileBookmarkData: Data?
     var twitterHandle: String
@@ -32,6 +33,7 @@ struct SettingsStore {
         let d = defaults
         d.set(s.outputDirectory.absoluteString, forKey: "outputDirectory")
         d.set(s.cookieBrowser.rawValue, forKey: "cookieBrowser")
+        d.set(s.cookieBrowserProfile, forKey: "cookieBrowserProfile")
         d.set(s.cookiesFilePath, forKey: "cookiesFilePath")
         d.set(s.twitterHandle, forKey: "twitterHandle")
         if let bm = s.cookiesFileBookmarkData {
@@ -60,6 +62,7 @@ struct SettingsStore {
         var s = fallback
         if let v = d.string(forKey: "outputDirectory"), let u = URL(string: v) { s.outputDirectory = u }
         if let r = d.string(forKey: "cookieBrowser"), let v = CookieBrowser(rawValue: r) { s.cookieBrowser = v }
+        s.cookieBrowserProfile = d.string(forKey: "cookieBrowserProfile") ?? fallback.cookieBrowserProfile
         if let p = d.string(forKey: "cookiesFilePath"), !p.isEmpty { s.cookiesFilePath = p } else { s.cookiesFilePath = nil }
         s.twitterHandle = d.string(forKey: "twitterHandle") ?? fallback.twitterHandle
         s.cookiesFileBookmarkData = d.data(forKey: "cookiesFileBookmarkData")

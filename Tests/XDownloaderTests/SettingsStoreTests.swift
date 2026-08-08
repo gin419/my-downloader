@@ -12,7 +12,8 @@ final class SettingsStoreTests: XCTestCase {
     private func sampleFallback() -> AppSettings {
         AppSettings(
             outputDirectory: URL(fileURLWithPath: "/fallback"),
-            cookieBrowser: .safari, cookiesFilePath: nil, cookiesFileBookmarkData: nil,
+            cookieBrowser: .safari, cookieBrowserProfile: "", cookiesFilePath: nil,
+            cookiesFileBookmarkData: nil,
             twitterHandle: "",
             showDownloadDate: false, youtubeFormat: .videoAndAudio, videoQuality: .best,
             audioQuality: .best, subtitleLanguage: .none, embedSubtitles: true,
@@ -24,6 +25,7 @@ final class SettingsStoreTests: XCTestCase {
         let store = freshStore()
         var saved = sampleFallback()
         saved.cookieBrowser = .chrome
+        saved.cookieBrowserProfile = "Profile 2"
         saved.youtubeFormat = .audioOnly
         saved.maxConcurrent = 4
         saved.embedSubtitles = false
@@ -36,6 +38,7 @@ final class SettingsStoreTests: XCTestCase {
 
         let loaded = store.load(fallback: sampleFallback())
         XCTAssertEqual(loaded.cookieBrowser, .chrome)
+        XCTAssertEqual(loaded.cookieBrowserProfile, "Profile 2")
         XCTAssertEqual(loaded.youtubeFormat, .audioOnly)
         XCTAssertEqual(loaded.maxConcurrent, 4)
         XCTAssertFalse(loaded.embedSubtitles)  // round-tripped false, not the `true` fallback

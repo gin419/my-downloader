@@ -34,10 +34,12 @@ enum LikesSyncArgumentBuilder {
     static func make(
         plan: LikesSyncPlan,
         cookieBrowser: CookieBrowser,
+        cookieBrowserProfile: String? = nil,
         cookiesFile: String?,
         inputURLs: [String]? = nil
     ) -> LikesSyncArguments {
-        var args = CookieArgs.make(browser: cookieBrowser, file: cookiesFile)
+        var args = CookieArgs.make(
+            browser: cookieBrowser, profile: cookieBrowserProfile, file: cookiesFile)
         args += [
             "--config-ignore",
             "--no-input",
@@ -69,9 +71,11 @@ enum LikesSyncArgumentBuilder {
     static func makeVerification(
         handle: LikesSyncHandle,
         cookieBrowser: CookieBrowser,
+        cookieBrowserProfile: String? = nil,
         cookiesFile: String?
     ) -> LikesSyncArguments {
-        var args = CookieArgs.make(browser: cookieBrowser, file: cookiesFile)
+        var args = CookieArgs.make(
+            browser: cookieBrowser, profile: cookieBrowserProfile, file: cookiesFile)
         args += [
             "--config-ignore", "--no-input", "--simulate", "--range", "1",
             "-o", "extractor.twitter.quoted=false",

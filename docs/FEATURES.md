@@ -20,7 +20,7 @@
 - **Finish notifications** — when the app is in the background, a macOS notification announces each completed or failed download (delivery is controlled per-app in System Settings → Notifications)
 
 ## Download Engine
-- **X.com / Twitter Likes sync** — enter one `@handle` and manually sync all accessible native media from that account's Likes using the selected browser session or `cookies.txt`; later scans skip archived media and download only new or previously failed items
+- **X.com / Twitter Likes sync** — enter one `@handle` and manually sync all accessible native media from that account's Likes using a specific browser profile; later scans skip archived media and download only new or previously failed items, while `cookies.txt` remains an optional fallback
 - **Durable sync summary** — Likes appears as one aggregate task with downloaded, skipped, no-media, failed, and ignored counts; failures can be expanded, copied, opened, retried, or ignored without filling the normal queue with thousands of rows
 - **X.com / Twitter videos** — downloaded via yt-dlp using your browser's session cookies
 - **X.com / Twitter images** — automatic fallback to gallery-dl when yt-dlp finds no video; supports multi-image tweets
@@ -65,7 +65,8 @@
 ## Settings
 - **Download folder** — folder picker with "Open in Finder" shortcut (defaults to `~/Downloads/X-Videos`)
 - **Cookie browser** — pick Safari, Chrome, Firefox, or Edge (or None) for authenticated downloads
-- **Cookies file** — point at an exported `cookies.txt` for stubborn authenticated content (e.g. X sensitive/NSFW media); takes precedence over the cookie browser
+- **Browser profiles** — select the Chrome or Edge profile containing the authenticated session instead of relying on the browser's automatic profile choice
+- **Cookies file** — optionally point at an exported `cookies.txt` for stubborn authenticated content; takes precedence over direct browser access
 - **X account** — one normalized `@handle` for manual Likes sync, verified against the selected cookie source; no password or cookie contents are stored by XDownloader
 - **Download format** — Video+Audio / Single File / Audio Only
 - **Subtitle language & embed toggle**

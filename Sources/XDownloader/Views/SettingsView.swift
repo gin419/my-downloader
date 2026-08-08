@@ -52,6 +52,18 @@ struct SettingsView: View {
                 }
                 .pickerStyle(.segmented)
 
+                if !manager.availableCookieBrowserProfiles.isEmpty {
+                    Picker("Profile", selection: $manager.cookieBrowserProfile) {
+                        ForEach(manager.availableCookieBrowserProfiles) { profile in
+                            Text(profile.displayName).tag(profile.id)
+                        }
+                    }
+
+                    Text("Choose the browser profile where you are signed in to X.com.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+
                 Text(
                     "yt-dlp and gallery-dl use cookies from the selected browser to access your X.com session. Make sure you're logged in to X.com in that browser."
                 )
@@ -81,7 +93,7 @@ struct SettingsView: View {
                 }
 
                 Text(
-                    "For X sensitive/NSFW (adult) videos that --cookies-from-browser cannot unlock, export a Netscape-format cookies.txt from your browser (use an extension like 'Get cookies.txt LOCALLY' while logged into x.com) and select the file here. The file path takes precedence over browser cookies."
+                    "Direct browser access is recommended because it does not create a separate copy of your session. A Netscape-format cookies.txt remains available only as a fallback and takes precedence when selected."
                 )
                 .font(.caption)
                 .foregroundColor(.secondary)
@@ -260,7 +272,8 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .frame(width: 440)
-        .onChange(of: manager.cookieBrowser) { manager.saveSettings() }
+        .onChange(of: manager.cookieBrowser) { manager.cookieBrowserChanged() }
+        .onChange(of: manager.cookieBrowserProfile) { manager.cookieBrowserProfileChanged() }
         .onChange(of: manager.cookiesFilePath) { manager.saveSettings() }
         .onChange(of: manager.twitterHandle) {
             manager.likesHandleChanged()

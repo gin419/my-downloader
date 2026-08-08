@@ -10,6 +10,7 @@ enum GalleryDlService {
         executablePath: String,
         outputDirectory: URL,
         cookieBrowser: CookieBrowser,
+        cookieBrowserProfile: String? = nil,
         cookiesFile: String? = nil,
         register: @escaping (Process) -> Void,
         unregister: @escaping () -> Void
@@ -20,7 +21,8 @@ enum GalleryDlService {
             executablePath: executablePath,
             arguments: arguments(
                 for: item.url, outputDirectory: outputDirectory,
-                cookieBrowser: cookieBrowser, cookiesFile: cookiesFile),
+                cookieBrowser: cookieBrowser, cookieBrowserProfile: cookieBrowserProfile,
+                cookiesFile: cookiesFile),
             item: item,
             register: register,
             unregister: unregister,
@@ -114,10 +116,12 @@ enum GalleryDlService {
         for url: String,
         outputDirectory: URL,
         cookieBrowser: CookieBrowser,
+        cookieBrowserProfile: String? = nil,
         cookiesFile: String?,
         extraArgs: [String] = []
     ) -> [String] {
-        var args = CookieArgs.make(browser: cookieBrowser, file: cookiesFile)
+        var args = CookieArgs.make(
+            browser: cookieBrowser, profile: cookieBrowserProfile, file: cookiesFile)
         args += [
             "--dest", outputDirectory.path,
             "-D", ".",
@@ -149,6 +153,7 @@ enum GalleryDlService {
         executablePath: String,
         outputDirectory: URL,
         cookieBrowser: CookieBrowser,
+        cookieBrowserProfile: String? = nil,
         cookiesFile: String? = nil,
         register: @escaping (Process) -> Void,
         unregister: @escaping () -> Void
@@ -160,7 +165,8 @@ enum GalleryDlService {
             executablePath: executablePath,
             arguments: arguments(
                 for: item.url, outputDirectory: outputDirectory,
-                cookieBrowser: cookieBrowser, cookiesFile: cookiesFile, extraArgs: sweepArgs),
+                cookieBrowser: cookieBrowser, cookieBrowserProfile: cookieBrowserProfile,
+                cookiesFile: cookiesFile, extraArgs: sweepArgs),
             item: item,
             register: register,
             unregister: unregister,

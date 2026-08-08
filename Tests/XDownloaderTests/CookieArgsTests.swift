@@ -17,6 +17,18 @@ final class CookieArgsTests: XCTestCase {
         XCTAssertEqual(CookieArgs.make(browser: .chrome, file: nil), ["--cookies-from-browser", "chrome"])
     }
 
+    func testBrowserProfileIsIncludedInCookieSource() {
+        XCTAssertEqual(
+            CookieArgs.make(browser: .chrome, profile: "Profile 8", file: nil),
+            ["--cookies-from-browser", "chrome:Profile 8"])
+    }
+
+    func testCookieFileStillOverridesBrowserProfile() {
+        XCTAssertEqual(
+            CookieArgs.make(browser: .chrome, profile: "Profile 8", file: "/c.txt"),
+            ["--cookies", "/c.txt"])
+    }
+
     func testEmptyFilePathFallsBackToBrowser() {
         XCTAssertEqual(CookieArgs.make(browser: .safari, file: ""), ["--cookies-from-browser", "safari"])
     }
