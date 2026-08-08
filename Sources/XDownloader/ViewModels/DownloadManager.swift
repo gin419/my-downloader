@@ -1078,8 +1078,14 @@ class DownloadManager: ObservableObject {
     nonisolated private static func isUsefulLikesDiagnostic(_ line: String) -> Bool {
         let lower = line.lowercased()
         if lower.contains("[warning]") && lower.contains("api errors (") { return false }
+        if lower.contains("[cookies][info]") || lower.contains("[cookies][debug]") { return false }
+        let cookieFailure =
+            lower.contains("cookie")
+            && (lower.contains("[warning]") || lower.contains("[error]")
+                || lower.contains("failed") || lower.contains("unable")
+                || lower.contains("could not") || lower.contains("not found"))
         return lower.contains("[error]") || lower.contains("429") || lower.contains("rate limit")
-            || lower.contains("login") || lower.contains("unauthorized") || lower.contains("cookie")
+            || lower.contains("login") || lower.contains("unauthorized") || cookieFailure
             || lower.contains("no space") || lower.contains("permission denied")
             || lower.contains("connection") || lower.contains("timeout")
     }

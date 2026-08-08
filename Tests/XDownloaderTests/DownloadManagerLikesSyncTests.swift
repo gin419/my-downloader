@@ -72,6 +72,14 @@ final class DownloadManagerLikesSyncTests: XCTestCase {
         XCTFail("Likes sync did not finish")
     }
 
+    private func waitForVerification(_ manager: DownloadManager) async {
+        for _ in 0..<10_000 {
+            if manager.likesAccessVerification != .verifying { return }
+            await Task.yield()
+        }
+        XCTFail("Likes verification did not finish")
+    }
+
     private func event(_ name: String, _ json: String) -> String {
         "\(name):likes-sync\t\(json)"
     }
@@ -105,6 +113,30 @@ final class DownloadManagerLikesSyncTests: XCTestCase {
         XCTAssertEqual(runner.invocations.count, 2)
         XCTAssertTrue(runner.invocations[0].contains("extractor.twitter.cards=false"))
         XCTAssertEqual(runner.invocations[0].last, "https://x.com/gin/likes")
+    }
+
+    func testCookieExtractionInfoDoesNotFailSuccessfulVerification() async throws {
+        let (manager, runner, _, _) = makeManager(runs: [
+            .init(lines: ["[cookies][info] Extracted 863 cookies from Chrome"], exitCode: 0)
+        ])
+
+        manager.verifyLikesAccess()
+        await waitForVerification(manager)
+
+        XCTAssertEqual(manager.likesAccessVerification, .verified(try LikesSyncHandle("@gin")))
+        XCTAssertEqual(runner.invocations.count, 1)
+    }
+
+    func testCookieExtractionInfoDoesNotCreateSuccessfulSyncFailure() async {
+        let (manager, _, _, _) = makeManager(runs: [
+            .init(lines: ["[cookies][info] Extracted 863 cookies from Chrome"], exitCode: 0)
+        ])
+
+        manager.startLikesSync()
+        await waitForLikesRun(manager)
+
+        XCTAssertEqual(manager.likesSyncSnapshot.status, .completed)
+        XCTAssertTrue(manager.likesSyncSnapshot.failures.isEmpty)
     }
 
     func testCancelBeforeRunnerStartsFinishesCancelledWithoutFailure() async throws {
