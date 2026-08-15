@@ -28,6 +28,17 @@ final class DownloadItemTests: XCTestCase {
         XCTAssertEqual(item.progress, 0)
     }
 
+    func testResetForReattemptClearsExtractorBreakage() {
+        // Per-attempt parse state, like lastToolWarning: a re-run must start
+        // with a clean slate or a stale diagnosis outlives the tool upgrade.
+        let item = DownloadItem(url: "https://youtube.com/shorts/abc")
+        item.extractorBreakage = .staleTool
+
+        item.resetForReattempt()
+
+        XCTAssertEqual(item.extractorBreakage, .none)
+    }
+
     func testTotalBytesParsesUnits() {
         let item = DownloadItem(url: "x")
         item.totalSize = "5 MB"

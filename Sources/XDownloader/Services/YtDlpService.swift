@@ -88,6 +88,20 @@ enum YtDlpService {
         return args
     }
 
+    // MARK: - Failure messages
+
+    // Messages for "Requested format is not available" on YouTube, chosen
+    // from the WARNING-line evidence recorded in `item.extractorBreakage`.
+    // Internal (not private) so tests share one source of truth. None of them
+    // may contain DownloadManager's empty-success auto-retry trigger
+    // substrings — a broken tool would silently re-run and fail identically.
+    static let staleToolMessage =
+        "YouTube blocked this yt-dlp version — update it (e.g. brew upgrade yt-dlp), then Retry."
+    static let missingJSRuntimeMessage =
+        "yt-dlp needs a JavaScript runtime for YouTube — install deno (brew install deno), then Retry."
+    static let transientFormatMessage =
+        "No downloadable format — usually a brief YouTube hiccup, click Retry."
+
     // MARK: - Output parsing
 
     /// Cleans a yt-dlp filename stem into a display title by stripping the suffixes
@@ -210,16 +224,51 @@ enum YtDlpService {
             return
         }
 
+        // Stale-extractor tells: WARNINGs that identify WHY YouTube formats
+        // are about to go missing — a yt-dlp build too old for current
+        // YouTube (signature/nsig extraction failed, only images offered) or
+        // a missing JavaScript runtime. Recorded here, consumed by the
+        // "Requested format is not available" error below to name the real
+        // cause. The WARNING prefix gate is load-bearing: a Destination
+        // filename containing tell text must never trigger detection.
+        // ("Precondition check failed" is deliberately NOT a tell — it fires
+        // transiently on healthy installs.)
+        if line.hasPrefix("WARNING"), SiteRegistry.profile(for: item.url).id == "youtube" {
+            let lowerWarning = line.lowercased()
+            if lowerWarning.contains("no supported javascript runtime") {
+                item.extractorBreakage = .missingJSRuntime
+                return
+            }
+            if lowerWarning.contains("signature extraction failed")
+                || lowerWarning.contains("nsig extraction failed")
+                || lowerWarning.contains("only images are available")
+            {
+                // Never downgrade missingJSRuntime: a missing runtime also
+                // breaks signature extraction, and installing deno is the
+                // actionable root cause.
+                if item.extractorBreakage == .none { item.extractorBreakage = .staleTool }
+                return
+            }
+        }
+
         // Errors
         let lower = line.lowercased()
         if lower.contains("error:") {
             if case .failed = item.status { return }
             if line.contains("Requested format is not available") {
-                // Almost always a transient YouTube extractor hiccup — the
-                // permissive `bv*+ba/b` tail of the selector should absorb
-                // most of these; if it still fires, retrying a minute later
-                // usually works.
-                item.status = .failed("No downloadable format — usually a brief YouTube hiccup, click Retry.")
+                // With no tell recorded this is almost always a transient
+                // YouTube extractor hiccup — the permissive `bv*+ba/b` tail
+                // of the selector should absorb most of these; if it still
+                // fires, retrying a minute later usually works. A recorded
+                // tell means the tool itself is broken and Retry alone can't
+                // fix it — say so.
+                let breakage: ExtractorBreakage =
+                    SiteRegistry.profile(for: item.url).id == "youtube" ? item.extractorBreakage : .none
+                switch breakage {
+                case .missingJSRuntime: item.status = .failed(Self.missingJSRuntimeMessage)
+                case .staleTool: item.status = .failed(Self.staleToolMessage)
+                case .none: item.status = .failed(Self.transientFormatMessage)
+                }
             } else if lower.contains("subtitle") {
                 // Subtitle download failures (e.g. YouTube's "HTTP Error 429:
                 // Too Many Requests") must not fail the whole download — the

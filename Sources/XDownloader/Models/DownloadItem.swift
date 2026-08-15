@@ -99,6 +99,16 @@ enum DownloadStatus: Equatable, Codable {
     }
 }
 
+/// Why YouTube formats went missing this attempt, recorded from yt-dlp
+/// WARNING-line evidence: a yt-dlp build too old for current YouTube
+/// (signature/nsig extraction failed, only images offered) or a missing
+/// JavaScript runtime.
+enum ExtractorBreakage {
+    case none
+    case staleTool
+    case missingJSRuntime
+}
+
 @MainActor
 class DownloadItem: Identifiable, ObservableObject {
     let id = UUID()
@@ -137,6 +147,14 @@ class DownloadItem: Identifiable, ObservableObject {
     /// subtitles forced off. Tells buildArguments to skip subtitle flags and
     /// guards against an infinite subtitle-retry loop.
     var subtitlesDisabled: Bool = false
+    /// In-memory only (NOT persisted). Set by YtDlpService.parseLine from
+    /// WARNING-line evidence; consumed when "Requested format is not
+    /// available" fires to name the real cause (stale yt-dlp / missing JS
+    /// runtime) instead of claiming a transient hiccup. Cleared with the
+    /// other per-attempt parse state in resetForReattempt(); deliberately
+    /// kept across the subtitles-disabled re-run — the same binary re-runs,
+    /// so the same WARNINGs re-fire anyway.
+    var extractorBreakage: ExtractorBreakage = .none
 
     init(url: String, addedAt: Date = Date()) {
         self.url = url
@@ -166,6 +184,7 @@ class DownloadItem: Identifiable, ObservableObject {
         videoCount = nil
         mediaCategory = .unknown
         lastToolWarning = nil
+        extractorBreakage = .none
     }
 
     /// Mark this item finished: completed status, full progress, no live speed/eta.

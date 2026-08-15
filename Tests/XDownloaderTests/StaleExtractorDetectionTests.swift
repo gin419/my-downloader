@@ -10,10 +10,9 @@ import XCTest
 @MainActor
 final class StaleExtractorDetectionTests: XCTestCase {
 
-    private let staleToolMessage =
-        "YouTube blocked this yt-dlp version — update it (e.g. brew upgrade yt-dlp), then Retry."
-    private let missingJSRuntimeMessage =
-        "yt-dlp needs a JavaScript runtime for YouTube — install deno (brew install deno), then Retry."
+    private let staleToolMessage = YtDlpService.staleToolMessage
+    private let missingJSRuntimeMessage = YtDlpService.missingJSRuntimeMessage
+    private let transientFormatMessage = YtDlpService.transientFormatMessage
 
     private let formatErrorLine = "ERROR: [youtube] pzBazEzxqaI: Requested format is not available."
     private let denoTell =
@@ -92,6 +91,50 @@ final class StaleExtractorDetectionTests: XCTestCase {
         XCTAssertEqual(failureMessage(staleFirst), missingJSRuntimeMessage)
     }
 
+    // MARK: - No tell / wrong site: keep the transient explanation
+
+    func testFormatErrorWithoutTellKeepsTransientMessage() {
+        let item = DownloadItem(url: "https://youtube.com/shorts/pzBazEzxqaI")
+        parse(formatErrorLine, into: item)
+
+        XCTAssertEqual(failureMessage(item), transientFormatMessage)
+    }
+
+    func testNonYouTubeProfileIgnoresSpoofedTell() {
+        // The tells are YouTube-extractor specific; on other sites the
+        // format error keeps its transient explanation.
+        let item = DownloadItem(url: "https://x.com/a/status/1")
+        parse(signatureTell, into: item)
+        parse(formatErrorLine, into: item)
+
+        XCTAssertEqual(failureMessage(item), transientFormatMessage)
+    }
+
+    // MARK: - Detection must not disturb normal parsing
+
+    func testDestinationLineWithTellTextDoesNotTriggerDetection() {
+        // A video title can contain tell text; only WARNING-prefixed lines
+        // may record breakage.
+        let item = DownloadItem(url: "https://youtube.com/watch?v=abc")
+        parse("[download] Destination: /tmp/out/nihil - Signature extraction failed.mp4", into: item)
+
+        XCTAssertEqual(item.extractorBreakage, .none)
+        XCTAssertEqual(item.outputPath, "/tmp/out/nihil - Signature extraction failed.mp4")
+        XCTAssertEqual(item.title, "nihil - Signature extraction failed")
+    }
+
+    func testParsingContinuesNormallyAfterTellRecorded() {
+        let item = DownloadItem(url: "https://youtube.com/watch?v=abc")
+        parse(signatureTell, into: item)
+        parse("[download] Destination: /tmp/out/nihil - some title.mp4", into: item)
+        parse("[download]  45.3% of  15.42MiB at  2.34MiB/s ETA 00:05", into: item)
+
+        XCTAssertEqual(item.extractorBreakage, .staleTool)
+        XCTAssertEqual(item.videoPath, "/tmp/out/nihil - some title.mp4")
+        XCTAssertEqual(item.status, .downloading)
+        XCTAssertEqual(item.progress, 0.453, accuracy: 0.0001)
+    }
+
     // MARK: - Tells must only rewrite the format error, nothing else
 
     func testUnrelatedErrorAfterTellKeepsRawErrorLine() {
@@ -103,5 +146,37 @@ final class StaleExtractorDetectionTests: XCTestCase {
         parse(unrelated, into: item)
 
         XCTAssertEqual(failureMessage(item), unrelated)
+    }
+
+    func testFirstErrorWinsOverLaterFormatError() {
+        // Existing first-failure-wins semantics: an earlier unrelated ERROR
+        // keeps its raw line even when the format error follows a tell.
+        let item = DownloadItem(url: "https://youtube.com/shorts/pzBazEzxqaI")
+        parse(signatureTell, into: item)
+        let unrelated = "ERROR: unable to download video data: HTTP Error 403: Forbidden"
+        parse(unrelated, into: item)
+        parse(formatErrorLine, into: item)
+
+        XCTAssertEqual(failureMessage(item), unrelated)
+    }
+
+    // MARK: - Messages must not trip the empty-success auto-retry
+
+    func testMessagesDoNotContainAutoRetryTriggerSubstrings() {
+        // DownloadManager's empty-success auto-retry re-runs an item whose
+        // failure message matches these substrings. A broken tool would
+        // silently re-run and fail identically, so the diagnostic messages
+        // must never match.
+        let autoRetryTriggers = ["found no media", "No media found", "cookies.txt"]
+        let messages = [
+            YtDlpService.staleToolMessage,
+            YtDlpService.missingJSRuntimeMessage,
+            YtDlpService.transientFormatMessage,
+        ]
+        for message in messages {
+            for trigger in autoRetryTriggers {
+                XCTAssertFalse(message.contains(trigger), "\"\(message)\" must not contain \"\(trigger)\"")
+            }
+        }
     }
 }
