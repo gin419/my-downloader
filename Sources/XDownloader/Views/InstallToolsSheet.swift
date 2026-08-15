@@ -2,29 +2,75 @@ import AppKit
 import SwiftUI
 
 /// Pure copy/derivation helpers for the install sheet, split out so the
-/// footer's adaptive primary-button label is testable without a view.
+/// footer's adaptive primary-button label and the per-tool meta line are
+/// testable without a view.
 enum InstallSheetModel {
     /// Footer primary button: only missing → "Install Missing Tools"; only
     /// outdated → "Update Outdated Tools"; both → "Install Missing + Update
     /// Outdated"; neither → nil (Close is the only button).
     static func primaryActionLabel(missingCount: Int, outdatedCount: Int) -> String? {
-        nil  // stub — implemented in the follow-up commit
+        switch (missingCount > 0, outdatedCount > 0) {
+        case (true, true): return "Install Missing + Update Outdated"
+        case (true, false): return "Install Missing Tools"
+        case (false, true): return "Update Outdated Tools"
+        case (false, false): return nil
+        }
+    }
+
+    /// Row meta line: "path · version · age", monospaced small type in the
+    /// view; a missing tool explains itself instead.
+    static func metaLine(for health: ToolHealth) -> String {
+        guard let path = health.path else { return "not found in any search path" }
+        switch health.status {
+        case .missing:
+            return "not found in any search path"
+        case .ok(let version):
+            return "\(path) · \(version)"
+        case .outdated(let installed, let detail):
+            var parts = [path, installed]
+            if let detail { parts.append(detail) }
+            return parts.joined(separator: " · ")
+        }
+    }
+
+    static func pillLabel(for status: ToolStatus) -> String {
+        switch status {
+        case .missing: return "Missing"
+        case .outdated: return "Outdated"
+        case .ok: return "OK"
+        }
     }
 }
 
+/// Per-tool health table (every tool, not just missing ones) + the combined
+/// Homebrew repair flow: install what's missing, then upgrade what's
+/// outdated, streaming into one log.
 struct InstallToolsSheet: View {
     @EnvironmentObject var manager: DownloadManager
     @Environment(\.dismiss) private var dismiss
 
-    let tools: [ToolRequirement]
-
     @State private var installState: InstallState = .idle
     @State private var log: [String] = []
-    @State private var scrollProxy: ScrollViewProxy? = nil
+    /// Friendly cause line shown above the log on failure (e.g. network);
+    /// nil keeps the generic check-the-log pointer.
+    @State private var failureSummary: String? = nil
 
     enum InstallState {
         case idle, running
         case done(success: Bool)
+    }
+
+    private var healths: [ToolHealth] { manager.toolHealths }
+    private var missingHealths: [ToolHealth] {
+        healths.filter { $0.status == .missing }
+    }
+    private var outdatedHealths: [ToolHealth] {
+        healths.filter {
+            if case .outdated = $0.status { return true } else { return false }
+        }
+    }
+    private var isRunning: Bool {
+        if case .running = installState { return true } else { return false }
     }
 
     // MARK: - Body
@@ -35,16 +81,22 @@ struct InstallToolsSheet: View {
             Divider()
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
-                    toolStatusSection
-                    Divider()
-                    autoInstallSection
-                    Divider()
-                    manualInstallSection
+                    toolTable
+                    if showsLogSection {
+                        Divider()
+                        logSection
+                    }
+                    if !manager.toolProblems.isEmpty {
+                        Divider()
+                        manualSection
+                    }
                 }
                 .padding(20)
             }
+            Divider()
+            footer
         }
-        .frame(width: 500, height: 500)
+        .frame(width: 500, height: 520)
     }
 
     // MARK: - Header
@@ -53,7 +105,7 @@ struct InstallToolsSheet: View {
         HStack {
             Image(systemName: "wrench.and.screwdriver.fill")
                 .foregroundColor(.orange)
-            Text("Set Up Missing Tools")
+            Text("Tool Health")
                 .font(.system(size: 15, weight: .semibold))
             Spacer()
             Button(action: { dismiss() }) {
@@ -67,87 +119,78 @@ struct InstallToolsSheet: View {
         .padding(.vertical, 14)
     }
 
-    // MARK: - Tool status list
+    // MARK: - Tool health table
 
-    private var toolStatusSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("MISSING TOOLS")
+    private var toolTable: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("TOOLS")
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundColor(.secondary)
 
-            ForEach(tools) { tool in
-                HStack(spacing: 10) {
-                    Image(systemName: iconFor(tool))
-                        .foregroundColor(colorFor(tool))
-                        .font(.system(size: 13))
-                        .frame(width: 18)
-
-                    Text(tool.name)
-                        .font(.system(size: 13, weight: .medium))
+            ForEach(healths) { health in
+                HStack(alignment: .center, spacing: 10) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(health.name)
+                            .font(.system(size: 13, weight: .bold))
+                        Text(InstallSheetModel.metaLine(for: health))
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundColor(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
 
                     Spacer()
 
-                    Text(statusLabel(for: tool))
-                        .font(.system(size: 11))
-                        .foregroundColor(colorFor(tool))
+                    statusPill(for: health.status)
                 }
             }
         }
     }
 
-    // MARK: - Auto install
+    private func statusPill(for status: ToolStatus) -> some View {
+        let color: Color
+        switch status {
+        case .missing: color = .red
+        case .outdated: color = .orange
+        case .ok: color = .green
+        }
+        return Text(InstallSheetModel.pillLabel(for: status))
+            .font(.system(size: 11, weight: .medium))
+            .foregroundColor(color)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(color.opacity(0.12))
+            .clipShape(Capsule())
+    }
 
-    private var autoInstallSection: some View {
+    // MARK: - Homebrew log
+
+    private var showsLogSection: Bool {
+        if case .idle = installState { return false } else { return true }
+    }
+
+    private var logSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("AUTOMATIC")
+            Text("HOMEBREW")
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundColor(.secondary)
 
-            if RequirementsService.brewPath == nil {
+            if case .done(let success) = installState {
                 HStack(spacing: 8) {
-                    Image(systemName: "info.circle")
-                        .foregroundColor(.secondary)
-                    Text("Homebrew is not installed. Install it from brew.sh, then relaunch the app.")
+                    Image(systemName: success ? "checkmark.circle.fill" : "xmark.circle.fill")
+                        .foregroundColor(success ? .green : .red)
+                    Text(resultLine(success: success))
                         .font(.system(size: 12))
-                        .foregroundColor(.secondary)
-                }
-            } else {
-                switch installState {
-                case .idle:
-                    Button(action: startInstall) {
-                        Label("Install all with Homebrew", systemImage: "arrow.down.circle.fill")
-                            .font(.system(size: 13, weight: .semibold))
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 8)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(.orange)
-
-                case .running:
-                    logView
-                        .transition(.opacity)
-
-                case .done(let success):
-                    VStack(alignment: .leading, spacing: 8) {
-                        logView
-
-                        HStack(spacing: 8) {
-                            Image(systemName: success ? "checkmark.circle.fill" : "xmark.circle.fill")
-                                .foregroundColor(success ? .green : .red)
-                            Text(success ? "All tools installed successfully." : "Some tools failed to install. Check the log above.")
-                                .font(.system(size: 12))
-                        }
-
-                        if success {
-                            Button("Done") { dismiss() }
-                                .buttonStyle(.borderedProminent)
-                                .tint(.green)
-                        }
-                    }
-                    .transition(.opacity)
                 }
             }
+
+            logView
         }
+    }
+
+    private func resultLine(success: Bool) -> String {
+        if success { return "All done — the statuses above are refreshed." }
+        return failureSummary ?? "Some tools failed to install or update. Check the log below."
     }
 
     private var logView: some View {
@@ -177,26 +220,40 @@ struct InstallToolsSheet: View {
 
     // MARK: - Manual install
 
-    private var manualInstallSection: some View {
+    private var manualSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("MANUAL")
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundColor(.secondary)
 
-            ForEach(tools) { tool in
+            if RequirementsService.brewPath == nil {
+                HStack(spacing: 8) {
+                    Image(systemName: "info.circle")
+                        .foregroundColor(.secondary)
+                    Text("Homebrew is not installed. Install it from brew.sh, then relaunch the app.")
+                        .font(.system(size: 12))
+                        .foregroundColor(.secondary)
+                }
+            }
+
+            ForEach(manager.toolProblems) { health in
+                let command =
+                    health.status == .missing
+                    ? "brew install \(health.brewPackage)"
+                    : "brew upgrade \(health.brewPackage)"
                 VStack(alignment: .leading, spacing: 6) {
                     HStack {
-                        Text(tool.name)
+                        Text(health.name)
                             .font(.system(size: 13, weight: .medium))
                         Spacer()
-                        if let docs = URL(string: tool.docsURL) {
+                        if let docs = URL(string: health.docsURL) {
                             Link("Docs ↗", destination: docs)
                                 .font(.system(size: 11))
                         }
                     }
 
                     HStack(spacing: 8) {
-                        Text("brew install \(tool.brewPackage)")
+                        Text(command)
                             .font(.system(size: 12, design: .monospaced))
                             .padding(.horizontal, 10)
                             .padding(.vertical, 5)
@@ -205,7 +262,7 @@ struct InstallToolsSheet: View {
 
                         Button {
                             NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString("brew install \(tool.brewPackage)", forType: .string)
+                            NSPasteboard.general.setString(command, forType: .string)
                         } label: {
                             Label("Copy", systemImage: "doc.on.clipboard")
                                 .font(.system(size: 11))
@@ -222,47 +279,51 @@ struct InstallToolsSheet: View {
         }
     }
 
+    // MARK: - Footer
+
+    private var footer: some View {
+        HStack(spacing: 10) {
+            Spacer()
+
+            Button("Close") { dismiss() }
+
+            if RequirementsService.brewPath != nil,
+                let label = InstallSheetModel.primaryActionLabel(
+                    missingCount: missingHealths.count,
+                    outdatedCount: outdatedHealths.count)
+            {
+                Button(label, action: startRepair)
+                    .buttonStyle(.borderedProminent)
+                    .tint(.orange)
+                    .disabled(isRunning)
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 14)
+    }
+
     // MARK: - Actions
 
-    private func startInstall() {
-        let stillMissing = tools.filter { !$0.isInstalled }
-        guard !stillMissing.isEmpty else {
-            dismiss()
-            return
-        }
+    private func startRepair() {
+        let missingTools = missingHealths.compactMap { RequirementsService.tool(withID: $0.id) }
+        let outdatedTools = outdatedHealths.compactMap { RequirementsService.tool(withID: $0.id) }
+        guard !(missingTools.isEmpty && outdatedTools.isEmpty) else { return }
 
         log = []
+        failureSummary = nil
         withAnimation { installState = .running }
 
         Task {
-            let code = await RequirementsService.installWithBrew(tools: stillMissing) { line in
-                log.append(line)
+            let code = await RequirementsService.repairWithBrew(
+                missing: missingTools, outdated: outdatedTools
+            ) { line in
+                // "already installed" chatter would drown the signal — drop it.
+                if !RequirementsService.isSuppressedBrewNoise(line) { log.append(line) }
             }
-            manager.checkRequirements()
+            // Re-probe so the pills above tell the post-repair truth.
+            manager.toolHealth.refresh(force: true)
+            if code != 0 { failureSummary = RequirementsService.friendlyBrewFailure(inLog: log) }
             withAnimation { installState = .done(success: code == 0) }
         }
-    }
-
-    // MARK: - Helpers
-
-    private func iconFor(_ tool: ToolRequirement) -> String {
-        if case .done(true) = installState, !manager.missingTools.contains(where: { $0.id == tool.id }) {
-            return "checkmark.circle.fill"
-        }
-        return "xmark.circle.fill"
-    }
-
-    private func colorFor(_ tool: ToolRequirement) -> Color {
-        if case .done(true) = installState, !manager.missingTools.contains(where: { $0.id == tool.id }) {
-            return .green
-        }
-        return .red
-    }
-
-    private func statusLabel(for tool: ToolRequirement) -> String {
-        if case .done(true) = installState, !manager.missingTools.contains(where: { $0.id == tool.id }) {
-            return "Installed"
-        }
-        return "Not found"
     }
 }

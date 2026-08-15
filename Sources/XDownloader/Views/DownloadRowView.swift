@@ -1,5 +1,27 @@
 import SwiftUI
 
+/// The fetching row's "why it's waiting" note. Phase 2 stores gallery-dl
+/// backoff waits in `item.eta` ("14 minutes (rate limited)") and clears it as
+/// soon as a file lands — so during `.fetching`, a non-nil eta IS a rate-limit
+/// wait, and the row should say so instead of looking hung.
+enum FetchingWaitNote {
+    /// "rate limited — resuming in 14 minutes" — the eta's own
+    /// "(rate limited)" suffix folds into the leading label instead of
+    /// printing twice.
+    static func note(eta: String) -> String {
+        var wait = eta
+        if let range = wait.range(of: " (rate limited)") { wait.removeSubrange(range) }
+        return "rate limited — resuming in \(wait)"
+    }
+
+    /// The full status line ("Fetching… · rate limited — resuming in 14
+    /// minutes"); nil unless the row is `.fetching` with a stored wait.
+    static func statusLine(status: DownloadStatus, eta: String?) -> String? {
+        guard status == .fetching, let eta, !eta.isEmpty else { return nil }
+        return "Fetching… · \(note(eta: eta))"
+    }
+}
+
 struct DownloadRowView: View {
     @ObservedObject var item: DownloadItem
     @EnvironmentObject var manager: DownloadManager
@@ -36,7 +58,17 @@ struct DownloadRowView: View {
                 }
             }
 
-            if let meta = metaLine {
+            if item.status == .fetching, let eta = item.eta {
+                // Backoff wait (Phase 2 stores it in eta): same text slot as
+                // the meta line — no new views, no layout shift — with the
+                // note in the warning color. Disappears when eta clears.
+                (Text("Fetching…").foregroundColor(.secondary)
+                    + Text(" · \(FetchingWaitNote.note(eta: eta))").foregroundColor(.orange))
+                    .font(.system(size: 11))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .padding(.leading, 30)
+            } else if let meta = metaLine {
                 Text(meta)
                     .font(.system(size: 11))
                     .foregroundColor(.secondary)

@@ -36,7 +36,10 @@ class DownloadManager: ObservableObject {
     @Published var historyCount: Int = 0
     @Published var historySizeBytes: Int64 = 0
     @Published var pendingDuplicates: DuplicateBatch? = nil
-    @Published var missingTools: [ToolRequirement] = []
+    /// Honest Toolbox: per-tool health (existence + version + brew-outdated),
+    /// mirrored from `toolHealth` so views observing the manager re-render on
+    /// probe results.
+    @Published private(set) var toolHealths: [ToolHealth] = []
     /// Result of the most recent capture, shown in the window's fixed status
     /// line. Non-persistent feedback clears itself after a few seconds.
     @Published var captureFeedback: CaptureFeedback? = nil
@@ -90,8 +93,13 @@ class DownloadManager: ObservableObject {
     private let likesSyncStore: LikesSyncStore
     private let likesProcessRunner: any LikesSyncProcessRunning
     private let galleryDlPathProvider: () -> String?
+    /// Probes tool health on the app-lifecycle cadence; views reach it for
+    /// forced refreshes (install sheet) and it feeds `toolHealths` above.
+    let toolHealth: ToolHealthMonitor
 
-    // Resolved at runtime via RequirementsService so paths stay in one place.
+    // Resolved at runtime through RequirementsService's ONE shared resolver —
+    // the same one the banner uses, so the banner can never disagree with
+    // what downloads actually execute.
     private var ytdlpPath: String { RequirementsService.ytdlp.installedPath ?? "yt-dlp" }
     private var galleryDlPath: String? { galleryDlPathProvider() }
 
@@ -109,7 +117,8 @@ class DownloadManager: ObservableObject {
         likesProcessRunner: (any LikesSyncProcessRunning)? = nil,
         galleryDlPathProvider: @escaping () -> String? = {
             RequirementsService.galleryDl.installedPath
-        }
+        },
+        toolHealthMonitor: ToolHealthMonitor? = nil
     ) {
         self.history = history ?? HistoryStore()
         self.queueStore = queueStore
@@ -117,6 +126,7 @@ class DownloadManager: ObservableObject {
         self.likesSyncStore = likesSyncStore ?? LikesSyncStore()
         self.likesProcessRunner = likesProcessRunner ?? LiveLikesSyncProcessRunner()
         self.galleryDlPathProvider = galleryDlPathProvider
+        self.toolHealth = toolHealthMonitor ?? ToolHealthMonitor()
         let downloads =
             FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
             ?? FileManager.default.homeDirectoryForCurrentUser
@@ -127,7 +137,9 @@ class DownloadManager: ObservableObject {
         loadSettings()
         restoreLikesSyncSnapshot()
         loadQueue()
-        checkRequirements()
+        // Mirror the monitor's probe results into our own @Published so every
+        // view observing the manager re-renders when tool health changes.
+        toolHealth.$healths.assign(to: &$toolHealths)
         refreshHistoryStats()
         drainQueue()
 
@@ -151,8 +163,10 @@ class DownloadManager: ObservableObject {
     // No deinit cleanup needed: security-scoped access is started and stopped
     // per download by CookieFileScope (paired via defer), never held long-lived.
 
-    func checkRequirements() {
-        missingTools = RequirementsService.missingTools()
+    /// Tool problems for the banner: missing first, then outdated — the
+    /// Honest Toolbox replacement for the old missing-only vocabulary.
+    var toolProblems: [ToolHealth] {
+        RequirementsService.orderedProblems(toolHealths)
     }
 
     // MARK: - Menu bar state
@@ -1187,6 +1201,9 @@ class DownloadManager: ObservableObject {
     }
 
     private func drainQueue() {
+        // Queue-drain start is a probe moment: a stale tool is about to run.
+        // Cached ≥60s, so back-to-back drains don't spawn probe processes.
+        toolHealth.refreshIfStale()
         while activeCount < maxConcurrent, !downloadQueue.isEmpty {
             let item = downloadQueue.removeFirst()
             activeCount += 1
@@ -1228,6 +1245,19 @@ class DownloadManager: ObservableObject {
     static func annotatedWithGalleryDlMissingHint(_ message: String) -> String {
         guard message != DownloadStatus.externalRedirectSentinel else { return message }
         return message + galleryDlMissingHint
+    }
+
+    /// Honest Toolbox downstream feed: when the probe already knows yt-dlp is
+    /// outdated AND the failure is the stale-tool diagnosis, pin the installed
+    /// version onto the message ("… (installed: 2024.11.04)"). Exact-match
+    /// guarded, so an already-annotated retry never grows a second suffix,
+    /// and appending keeps the message outside the empty-success auto-retry
+    /// family.
+    static func annotatedWithInstalledVersion(_ message: String, ytDlpStatus: ToolStatus?) -> String {
+        guard message == YtDlpService.staleToolMessage,
+            case .outdated(let installed, _)? = ytDlpStatus
+        else { return message }
+        return message + " (installed: \(installed))"
     }
 
     /// Signal-aware yt-dlp failure line — a signal number is not an exit code
@@ -1468,6 +1498,15 @@ class DownloadManager: ObservableObject {
             try? await Task.sleep(nanoseconds: 5_000_000_000)
             await runDownload(item)
             return
+        }
+
+        // Same finalization point as the annotations above — the last moment
+        // before the message reaches a renderer: a stale-tool diagnosis gains
+        // the probe's installed-version knowledge.
+        if case .failed(let message) = item.status {
+            let annotated = Self.annotatedWithInstalledVersion(
+                message, ytDlpStatus: toolHealth.health(for: RequirementsService.ytdlp.id)?.status)
+            if annotated != message { item.status = .failed(annotated) }
         }
 
         finalize(item)

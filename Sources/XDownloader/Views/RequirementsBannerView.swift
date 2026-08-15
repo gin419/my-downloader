@@ -23,7 +23,49 @@ struct RequirementsBannerModel: Equatable {
 
     /// nil = State A (no problems → hidden).
     static func make(problems: [ToolHealth]) -> RequirementsBannerModel? {
-        nil  // stub — implemented in the follow-up commit
+        let missing = problems.filter { $0.status == .missing }
+        let outdated = problems.filter {
+            if case .outdated = $0.status { return true } else { return false }
+        }
+        guard !(missing.isEmpty && outdated.isEmpty) else { return nil }
+        let sig = signature(for: problems)
+
+        if outdated.isEmpty {
+            // State B
+            return RequirementsBannerModel(
+                headline: "Missing: \(missing.map(\.name).joined(separator: ", "))",
+                subtitle: "\(sitesPhrase(for: missing)) need \(missing.count == 1 ? "it" : "them").",
+                buttonTitle: "Set Up…",
+                severity: .missing,
+                signature: sig)
+        }
+        if missing.isEmpty {
+            // State C
+            let headline: String
+            if outdated.count == 1, let tool = outdated.first,
+                case .outdated(let installed, let detail) = tool.status
+            {
+                let tag = detail.map { "\(installed) · \($0)" } ?? installed
+                headline = "\(tool.name) is outdated (\(tag))"
+            } else {
+                headline = "Outdated: \(outdated.map(versionTag).joined(separator: ", "))"
+            }
+            return RequirementsBannerModel(
+                headline: headline,
+                subtitle: "\(sitesPhrase(for: outdated)) likely fail until \(outdated.count == 1 ? "it's" : "they're") updated.",
+                buttonTitle: "Update…",
+                severity: .outdated,
+                signature: sig)
+        }
+        // State D — red wins; outdated entries show the version only (the age
+        // would crowd out the missing half).
+        return RequirementsBannerModel(
+            headline:
+                "Missing: \(missing.map(\.name).joined(separator: ", ")) · Outdated: \(outdated.map(versionTag).joined(separator: ", "))",
+            subtitle: "Downloads will fail or degrade until both are fixed.",
+            buttonTitle: "Set Up…",
+            severity: .missing,
+            signature: sig)
     }
 
     /// Dismissal key: sorted "kind:id" components joined with "|"
@@ -31,31 +73,82 @@ struct RequirementsBannerModel: Equatable {
     /// session, but only for THIS signature — when the problem set changes,
     /// the banner reappears.
     static func signature(for problems: [ToolHealth]) -> String {
-        ""  // stub — implemented in the follow-up commit
+        problems
+            .compactMap { health -> String? in
+                switch health.status {
+                case .missing: return "missing:\(health.id)"
+                case .outdated: return "outdated:\(health.id)"
+                case .ok: return nil
+                }
+            }
+            .sorted()
+            .joined(separator: "|")
+    }
+
+    // MARK: - Copy helpers
+
+    private static func versionTag(_ health: ToolHealth) -> String {
+        if case .outdated(let installed, _) = health.status {
+            return "\(health.name) (\(installed))"
+        }
+        return health.name
+    }
+
+    /// What actually breaks for the user, per tool — the sub-line names the
+    /// affected downloads, not the tool internals.
+    private static let siteOrder = ["YouTube", "X", "Instagram", "Reddit"]
+    private static let affectedSites: [String: [String]] = [
+        "yt-dlp": ["YouTube", "X"],
+        "gallery-dl": ["X", "Instagram", "Reddit"],
+        "ffmpeg": ["YouTube", "X"],
+        "deno": ["YouTube"],
+    ]
+
+    private static func sitesPhrase(for tools: [ToolHealth]) -> String {
+        let hit = Set(tools.flatMap { affectedSites[$0.id] ?? [] })
+        let ordered = siteOrder.filter(hit.contains)
+        guard !ordered.isEmpty else { return "Downloads" }
+        return "\(naturalJoin(ordered)) downloads"
+    }
+
+    private static func naturalJoin(_ items: [String]) -> String {
+        guard items.count > 1 else { return items.first ?? "" }
+        return items.dropLast().joined(separator: ", ") + " and " + items[items.count - 1]
     }
 }
 
 struct RequirementsBannerView: View {
-    let tools: [ToolRequirement]
-    let onSetup: () -> Void
+    let model: RequirementsBannerModel
+    let onAction: () -> Void
     let onDismiss: () -> Void
+
+    private var stripeColor: Color {
+        model.severity == .missing ? .red : .orange
+    }
 
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundColor(.orange)
+                .foregroundColor(stripeColor)
                 .font(.system(size: 13))
 
-            Text("Missing: \(tools.map(\.name).joined(separator: ", "))")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundColor(.primary)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(model.headline)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(.primary)
+                Text(model.subtitle)
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+            }
+            .lineLimit(1)
+            .truncationMode(.tail)
 
             Spacer()
 
-            Button("Set up…", action: onSetup)
+            Button(model.buttonTitle, action: onAction)
                 .font(.system(size: 12, weight: .medium))
                 .buttonStyle(.plain)
-                .foregroundColor(.orange)
+                .foregroundColor(stripeColor)
 
             Button(action: onDismiss) {
                 Image(systemName: "xmark")
@@ -63,15 +156,15 @@ struct RequirementsBannerView: View {
                     .foregroundColor(.secondary)
             }
             .buttonStyle(.plain)
-            .help("Dismiss warning")
+            .help("Hide until the problem set changes")
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 9)
-        .background(Color.orange.opacity(0.08))
+        .background(stripeColor.opacity(0.08))
         .overlay(
             Rectangle()
                 .frame(height: 1)
-                .foregroundColor(.orange.opacity(0.2)),
+                .foregroundColor(stripeColor.opacity(0.2)),
             alignment: .bottom
         )
     }
