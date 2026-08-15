@@ -71,6 +71,18 @@ final class YtDlpErrorMappingTests: XCTestCase {
             XCTAssertEqual(failureMessage(for: c.line), c.expected, "line: \(c.line)")
         }
     }
+
+    /// The stale-yt-dlp diagnosis for a 403 is a YouTube pattern — on other
+    /// sites the same line gets generic copy, not YouTube wording.
+    func testNonYouTube403GetsGenericCopyNotYouTubeWording() {
+        let message = failureMessage(
+            for: "ERROR: unable to download video data: HTTP Error 403: Forbidden",
+            url: "https://x.com/a/status/1")
+        XCTAssertEqual(
+            message,
+            "The site rejected the download (HTTP 403) — Retry; if it persists, the media may need different cookies.")
+        XCTAssertFalse(message?.contains("YouTube") ?? true)
+    }
 }
 
 /// Known raw gallery-dl error lines must be replaced with app-native copy,
@@ -147,5 +159,17 @@ final class GalleryDlErrorMappingTests: XCTestCase {
         for c in cases {
             XCTAssertEqual(failureMessage(for: c.line, url: c.url), c.expected, "line: \(c.line)")
         }
+    }
+
+    /// The X sign-in copy is gated to the twitter profile: an auth failure on
+    /// another site must never tell the user to sign in to X. Instagram's
+    /// 401-shaped line gets the generic sign-in copy instead (its login
+    /// redirect already has a dedicated mapping).
+    func testNonTwitterAuthLinesDoNotGetXWording() {
+        let message = failureMessage(
+            for: "[instagram][error] 401 Unauthorized",
+            url: "https://www.instagram.com/p/Daoe_4TTVY0/")
+        XCTAssertEqual(message, "Sign-in required or session expired — check Settings → Cookies, then Retry.")
+        XCTAssertFalse(message?.contains("sign in to X") ?? true)
     }
 }

@@ -11,10 +11,14 @@ final class FailureMessageCompositionTests: XCTestCase {
     // MARK: - gallery-dl exit bitmask decode
 
     func testExitBitmaskDecodesSingleCauses() {
+        // Bit meanings verified against gallery-dl 1.32.9's exception.py:
+        // 8 is ChallengeError (a bot check), NOT a network problem, and 32
+        // is the InputError family.
         let cases: [(code: Int32, cause: String)] = [
             (4, "a network/HTTP error"),
-            (8, "a connection problem"),
+            (8, "a bot-check challenge — open the site in your browser and complete it, or refresh cookies"),
             (16, "an authorization problem — check Settings → Cookies"),
+            (32, "an input or format problem"),
             (64, "URL not recognized"),
             (128, "a disk or file error"),
         ]
@@ -75,15 +79,37 @@ final class FailureMessageCompositionTests: XCTestCase {
 
     func testExternalRedirectMessageNamesHost() {
         XCTAssertEqual(
-            DownloadManager.externalRedirectMessage(detectedURL: "https://example.com/article?x=1"),
+            DownloadStatus.externalRedirectMessage(detectedURL: "https://example.com/article?x=1"),
             "This tweet links to external content (example.com) — paste that link directly to download it.")
     }
 
     func testExternalRedirectMessageWithoutURLDropsParenthetical() {
         let expected = "This tweet links to external content — paste that link directly to download it."
-        XCTAssertEqual(DownloadManager.externalRedirectMessage(detectedURL: nil), expected)
+        XCTAssertEqual(DownloadStatus.externalRedirectMessage(detectedURL: nil), expected)
         // Host-less strings (a relative path) fall back the same way.
-        XCTAssertEqual(DownloadManager.externalRedirectMessage(detectedURL: "/relative/path"), expected)
+        XCTAssertEqual(DownloadStatus.externalRedirectMessage(detectedURL: "/relative/path"), expected)
+    }
+
+    // MARK: - gallery-dl-missing hint annotation
+
+    func testGalleryDlMissingHintIsAppendedToRealFailures() {
+        // The hint applies whenever gallery-dl was skipped for being missing
+        // and the item ends failed — a ran fxtwitter fallback must not
+        // suppress it, so composition is a pure function of the message.
+        XCTAssertEqual(
+            DownloadManager.annotatedWithGalleryDlMissingHint(YtDlpService.privateVideoMessage),
+            YtDlpService.privateVideoMessage + DownloadManager.galleryDlMissingHint)
+        XCTAssertEqual(
+            DownloadManager.annotatedWithGalleryDlMissingHint(DownloadManager.ytDlpEmptySuccessMessage),
+            DownloadManager.ytDlpEmptySuccessMessage + DownloadManager.galleryDlMissingHint)
+    }
+
+    func testGalleryDlMissingHintNeverAnnotatesTheSentinel() {
+        // Annotating the sentinel would break the wholesale replacement
+        // comparison right before finalize.
+        XCTAssertEqual(
+            DownloadManager.annotatedWithGalleryDlMissingHint(DownloadStatus.externalRedirectSentinel),
+            DownloadStatus.externalRedirectSentinel)
     }
 
     // MARK: - Signal-aware yt-dlp exit line
@@ -129,6 +155,50 @@ final class FailureMessageCompositionTests: XCTestCase {
         XCTAssertEqual(loaded.first?.status, .failed(DownloadStatus.decodedFailureFallbackMessage))
         XCTAssertEqual(loaded.last?.status, .failed("boom"))
     }
+
+    func testQueueRoundtripOfPersistedSentinelIsNotBlank() {
+        // A quit mid-fallback can persist the internal sentinel; after
+        // relaunch it must read as the external-content explanation (no host
+        // available at decode time), never as a blank red row.
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("fm-\(UUID().uuidString)")
+        let store = QueueStore(directory: dir)
+        let item = DownloadItem(url: "https://x.com/a/status/1")
+        item.status = .failed(DownloadStatus.externalRedirectSentinel)
+        store.save([item.toPersisted()])
+
+        XCTAssertEqual(
+            store.load().first?.status,
+            .failed(DownloadStatus.externalRedirectMessage(detectedURL: nil)))
+    }
+
+    // MARK: - retryItem cross-attempt resets
+
+    private func makeManager() -> DownloadManager {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("fm-mgr-\(UUID().uuidString)")
+        let defaults = UserDefaults(suiteName: "fm-mgr-\(UUID().uuidString)")!
+        return DownloadManager(
+            history: HistoryStore(directory: dir),
+            queueStore: QueueStore(directory: dir),
+            settingsStore: SettingsStore(defaults: defaults),
+            likesSyncStore: LikesSyncStore(directory: dir),
+            galleryDlPathProvider: { nil })
+    }
+
+    func testRetryItemClearsExternalRedirectURL() {
+        // The detected URL survives resetForReattempt (fallback/auto-retry
+        // resets within one run) but a user Retry is a genuinely new attempt.
+        // The item is deliberately NOT in manager.items, so the queued
+        // runDownload no-ops via its stillInList guard — no process spawns.
+        let manager = makeManager()
+        let item = DownloadItem(url: "https://x.com/a/status/1")
+        item.externalRedirectURL = "https://example.com/article"
+        item.status = .failed(DownloadStatus.externalRedirectSentinel)
+
+        manager.retryItem(item)
+
+        XCTAssertNil(item.externalRedirectURL)
+        XCTAssertEqual(item.status, .queued)
+    }
 }
 
 /// The empty-success auto-retry predicate, pinned in both directions: it must
@@ -163,6 +233,7 @@ final class EmptySuccessMatcherTests: XCTestCase {
             YtDlpService.membersOnlyMessage,
             YtDlpService.botCheckMessage,
             YtDlpService.http403Message,
+            YtDlpService.genericHttp403Message,
             YtDlpService.cookieDatabaseMessage,
             YtDlpService.ffmpegMissingMessage,
             YtDlpService.staleToolMessage,
@@ -171,6 +242,7 @@ final class EmptySuccessMatcherTests: XCTestCase {
             GalleryDlService.nsfwTweetMessage,  // mentions cookies.txt — the old matcher's trap
             GalleryDlService.protectedTweetMessage,
             GalleryDlService.xAuthMessage,
+            GalleryDlService.signInGenericMessage,
             GalleryDlService.internalErrorMessage,
             GalleryDlService.instagramChallengeMessage,
             GalleryDlService.unsupportedURLMessage,
@@ -178,9 +250,12 @@ final class EmptySuccessMatcherTests: XCTestCase {
             GalleryDlService.exitFailureMessage(code: 16, lastWarning: "AuthRequired"),
             DownloadManager.ytDlpFailureMessage(code: 2, wasSignal: false, lastWarning: nil),
             DownloadManager.ytDlpFailureMessage(code: 15, wasSignal: true, lastWarning: nil),
-            DownloadManager.externalRedirectMessage(detectedURL: "https://example.com/a"),
+            // A positively identified external link must never burn the
+            // one-shot auto-retry — with or without a named host.
+            DownloadStatus.externalRedirectMessage(detectedURL: "https://example.com/a"),
+            DownloadStatus.externalRedirectMessage(detectedURL: nil),
             DownloadStatus.decodedFailureFallbackMessage,
-            "external_redirect",  // the internal sentinel must never re-queue
+            DownloadStatus.externalRedirectSentinel,  // the internal sentinel must never re-queue
         ]
         for message in nonMatching {
             XCTAssertFalse(DownloadManager.isEmptySuccessMessage(message), "must NOT auto-retry: \(message)")
@@ -227,16 +302,44 @@ final class ToolWarningCaptureTests: XCTestCase {
         XCTAssertNil(item.lastToolWarning)
     }
 
-    func testGalleryDlRateLimitWaitIsCapturedAndSurfacedAsEta() {
+    func testGalleryDlBackoffWaitSurfacesAsEtaOnly() {
         let item = DownloadItem(url: "https://x.com/a/status/1")
         GalleryDlService.parseLine("[twitter][info] Waiting for 14 minutes until 12:34:56 (rate limit)", item: item)
 
-        XCTAssertEqual(item.lastToolWarning, "Waiting for 14 minutes until 12:34:56 (rate limit)")
-        XCTAssertEqual(item.eta, "14 minutes (rate limit)")
+        XCTAssertEqual(item.eta, "14 minutes (rate limited)")
+        XCTAssertNil(item.lastToolWarning, "a routine wait is not a diagnostic")
         XCTAssertEqual(item.status, .queued, "the wait is not a failure")
     }
 
-    func testExternalRedirectURLIsRememberedAndClearedOnReattempt() {
+    func testGalleryDlWaitMatcherCoversNonRateLimitReasons() {
+        // 429 backoffs and CloudFront blocks use the same wait() line with a
+        // different reason — the matcher must not require "(rate limit)".
+        let item = DownloadItem(url: "https://x.com/a/status/1")
+        GalleryDlService.parseLine("[twitter][info] Waiting for 60 seconds until 12:01:00 (429 Too Many Requests)", item: item)
+
+        XCTAssertEqual(item.eta, "60 seconds (rate limited)")
+    }
+
+    func testGalleryDlWaitDoesNotClobberACapturedWarning() {
+        let item = DownloadItem(url: "https://x.com/a/status/1")
+        GalleryDlService.parseLine("[twitter][warning] this tweet is age-restricted", item: item)
+        GalleryDlService.parseLine("[twitter][info] Waiting for 14 minutes until 12:34:56 (rate limit)", item: item)
+
+        XCTAssertEqual(
+            item.lastToolWarning, "this tweet is age-restricted",
+            "the wait line must not overwrite the diagnostic that explains an empty run")
+    }
+
+    func testGalleryDlFileLineClearsStaleWaitEta() {
+        let item = DownloadItem(url: "https://x.com/a/status/1")
+        GalleryDlService.parseLine("[twitter][info] Waiting for 14 minutes until 12:34:56 (rate limit)", item: item)
+        GalleryDlService.parseLine("/tmp/out/user - clip [123] #1.mp4", item: item)
+
+        XCTAssertNil(item.eta, "activity resuming must clear the stale wait ETA")
+        XCTAssertEqual(item.status, .downloading)
+    }
+
+    func testExternalRedirectURLSurvivesReattemptAndIsClearedByRetry() {
         let item = DownloadItem(url: "https://x.com/a/status/1")
         var terminated = false
         YtDlpService.parseLine("[redirect] Following redirect to: https://example.com/article", item: item) {
@@ -244,10 +347,15 @@ final class ToolWarningCaptureTests: XCTestCase {
         }
 
         XCTAssertTrue(terminated, "the redirect must kill yt-dlp so a fallback can take over")
-        XCTAssertEqual(item.status, .failed("external_redirect"), "the internal sentinel itself must survive parsing")
+        XCTAssertEqual(
+            item.status, .failed(DownloadStatus.externalRedirectSentinel),
+            "the internal sentinel itself must survive parsing")
         XCTAssertEqual(item.externalRedirectURL, "https://example.com/article")
 
+        // Must survive the fallback/auto-retry resets within one run so the
+        // final message can name the destination even after gallery-dl ran.
+        // (Cleared on a user Retry — see testRetryItemClearsExternalRedirectURL.)
         item.resetForReattempt()
-        XCTAssertNil(item.externalRedirectURL)
+        XCTAssertEqual(item.externalRedirectURL, "https://example.com/article")
     }
 }

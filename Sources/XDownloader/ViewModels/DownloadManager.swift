@@ -586,6 +586,13 @@ class DownloadManager: ObservableObject {
         item.resetForReattempt()
         item.subtitleDownloadFailed = false
         item.subtitlesDisabled = false
+        // Cross-attempt state: the detected external-redirect URL must survive
+        // resetForReattempt (the fallback/auto-retry resets within one run)
+        // but a user-initiated Retry starts a genuinely new attempt.
+        item.externalRedirectURL = nil
+        // A stale pause request from a previous run must never freeze the
+        // retried download to .paused the moment its process exits.
+        pausedItemIDs.remove(item.id)
         downloadQueue.append(item)
         saveQueue()
         drainQueue()
@@ -1214,15 +1221,13 @@ class DownloadManager: ObservableObject {
     static let galleryDlMissingHint =
         " (gallery-dl is not installed — installing it usually fixes X/Instagram/Reddit downloads; see Settings.)"
 
-    /// User-facing copy replacing the internal "external_redirect" sentinel.
-    /// The sentinel itself must survive the fallback chain (which keys on a
-    /// `.failed` status to run fxtwitter), so the swap happens at the last
-    /// moment before the message can reach any renderer.
-    static func externalRedirectMessage(detectedURL: String?) -> String {
-        if let detectedURL, let host = URL(string: detectedURL)?.host {
-            return "This tweet links to external content (\(host)) — paste that link directly to download it."
-        }
-        return "This tweet links to external content — paste that link directly to download it."
+    /// Appends the gallery-dl-missing hint to a final failure message. The
+    /// external-redirect sentinel is internal control flow, replaced wholesale
+    /// before finalize — never annotate it, or the replacement comparison
+    /// breaks.
+    static func annotatedWithGalleryDlMissingHint(_ message: String) -> String {
+        guard message != DownloadStatus.externalRedirectSentinel else { return message }
+        return message + galleryDlMissingHint
     }
 
     /// Signal-aware yt-dlp failure line — a signal number is not an exit code
@@ -1370,25 +1375,44 @@ class DownloadManager: ObservableObject {
         }
 
         // No fallback ran (none declared for this site, or gallery-dl missing) —
-        // finalize yt-dlp's own outcome. When gallery-dl was skipped for being
-        // missing, say so: the absent tool, not the site, is the likely cause.
+        // finalize yt-dlp's own outcome.
         if !ranFallback {
-            let hint = skippedMissingGalleryDl ? Self.galleryDlMissingHint : ""
-            if case .failed(let message) = item.status {
-                // already set by YtDlpService — annotate real messages only,
-                // never the external_redirect control-flow sentinel (replaced
-                // wholesale right before finalize below).
-                if !hint.isEmpty, message != "external_redirect" {
-                    item.status = .failed(message + hint)
-                }
+            if case .failed = item.status {
+                // already set by YtDlpService
             } else if ytResult.isSuccess {
-                item.status = .failed(Self.ytDlpEmptySuccessMessage + hint)
+                item.status = .failed(Self.ytDlpEmptySuccessMessage)
             } else {
                 item.status = .failed(
                     Self.ytDlpFailureMessage(
                         code: ytResult.code, wasSignal: ytResult.wasSignal,
-                        lastWarning: item.lastToolWarning) + hint)
+                        lastWarning: item.lastToolWarning))
             }
+        }
+
+        // gallery-dl was skipped for being missing: whatever failure stands —
+        // yt-dlp's own, or fxtwitter's restored prior — the absent tool, not
+        // the site, is the likely cause; say so. (The helper leaves the
+        // external-redirect sentinel untouched.)
+        if skippedMissingGalleryDl, case .failed(let message) = item.status {
+            item.status = .failed(Self.annotatedWithGalleryDlMissingHint(message))
+        }
+
+        // External link positively identified: whether the sentinel itself
+        // survived (fxtwitter restored it as the prior status) or the
+        // fallbacks ran and came up empty — the tweet's only content IS the
+        // external link, so name the destination instead of guessing "no
+        // media". Placed BEFORE the auto-retry check: the replacement copy
+        // never matches the empty-success predicate, so a positively
+        // identified external link doesn't burn the one-shot retry. This is
+        // still the last moment before the message can reach a renderer
+        // (row, menu bar, NotificationService, history write); every earlier
+        // consumer — the fallback chain above — saw the sentinel itself.
+        if case .failed(let message) = item.status,
+            message == DownloadStatus.externalRedirectSentinel
+                || (item.externalRedirectURL != nil && Self.isEmptySuccessMessage(message))
+        {
+            item.status = .failed(
+                DownloadStatus.externalRedirectMessage(detectedURL: item.externalRedirectURL))
         }
 
         // Auto-retry once on "empty success" — yt-dlp or gallery-dl exited 0
@@ -1410,17 +1434,6 @@ class DownloadManager: ObservableObject {
             try? await Task.sleep(nanoseconds: 5_000_000_000)
             await runDownload(item)
             return
-        }
-
-        // Replace the internal external-redirect sentinel with user-facing
-        // copy at the LAST moment before the message can reach a renderer
-        // (row, menu bar, NotificationService, history write). Every earlier
-        // consumer — the fallback chain, the auto-retry predicate — must keep
-        // seeing the sentinel itself, whichever path let it survive (the
-        // !ranFallback branch above, or fxtwitter restoring it as the prior
-        // status when it couldn't help).
-        if case .failed(let message) = item.status, message == "external_redirect" {
-            item.status = .failed(Self.externalRedirectMessage(detectedURL: item.externalRedirectURL))
         }
 
         finalize(item)

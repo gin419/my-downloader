@@ -169,23 +169,6 @@ enum ProcessRunner {
 
         register(process)
 
-        let stdoutBuffer = LineBuffer()
-        let stderrBuffer = LineBuffer()
-        func makeHandler(_ buffer: LineBuffer) -> @Sendable (FileHandle) -> Void {
-            return { @Sendable handle in
-                let lines = buffer.take(handle.availableData)
-                guard !lines.isEmpty else { return }
-                Task { @MainActor in
-                    for line in lines {
-                        lineParser(line.trimmingCharacters(in: .whitespaces), item)
-                    }
-                }
-            }
-        }
-
-        stdout.fileHandleForReading.readabilityHandler = makeHandler(stdoutBuffer)
-        stderr.fileHandleForReading.readabilityHandler = makeHandler(stderrBuffer)
-
         do {
             try process.run()
         } catch {
@@ -194,18 +177,28 @@ enum ProcessRunner {
             return ProcessResult(code: -1, wasSignal: false)
         }
 
+        // Same reader pattern as runStreaming: blocking availableData loops
+        // (trailing partial line included) that are awaited below.
+        let stdoutTask = makeStreamingReader(
+            handle: stdout.fileHandleForReading,
+            buffer: LineBuffer(),
+            onLine: { line in lineParser(line, item) })
+        let stderrTask = makeStreamingReader(
+            handle: stderr.fileHandleForReading,
+            buffer: LineBuffer(),
+            onLine: { line in lineParser(line, item) })
+
         await withCheckedContinuation { continuation in
             process.terminationHandler = { _ in continuation.resume() }
         }
 
-        stdout.fileHandleForReading.readabilityHandler = nil
-        stderr.fileHandleForReading.readabilityHandler = nil
-        // Flush any trailing partial line (final output without a newline).
-        for tail in [stdoutBuffer.flush(), stderrBuffer.flush()] {
-            if let trimmed = tail?.trimmingCharacters(in: .whitespaces), !trimmed.isEmpty {
-                lineParser(trimmed, item)
-            }
-        }
+        // The process can terminate before its pipes have delivered the final
+        // bytes. Await both readers so a last ERROR line always reaches
+        // lineParser before the caller composes a generic exit message —
+        // the detach-a-readabilityHandler approach used here before could
+        // drop it on short-lived processes.
+        await stdoutTask.value
+        await stderrTask.value
         unregister()
 
         return ProcessResult(

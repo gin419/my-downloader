@@ -117,6 +117,8 @@ enum YtDlpService {
         "YouTube wants a signed-in session — pick your YouTube browser in Settings → Cookies (update yt-dlp if this repeats)."
     static let http403Message =
         "YouTube rejected the download (HTTP 403) — this usually means yt-dlp is outdated. Update it, then Retry."
+    static let genericHttp403Message =
+        "The site rejected the download (HTTP 403) — Retry; if it persists, the media may need different cookies."
     static let cookieDatabaseMessage =
         "Couldn't read the selected browser's cookies — pick the browser and profile you actually use in Settings → Cookies."
     static let ffmpegMissingMessage =
@@ -124,8 +126,9 @@ enum YtDlpService {
 
     /// Known raw ERROR lines → app-native copy. Compound (multi-substring)
     /// patterns come first so the most specific match wins; nil keeps the
-    /// caller's verbatim-line behavior for unrecognized errors.
-    static func mappedErrorMessage(for line: String) -> String? {
+    /// caller's verbatim-line behavior for unrecognized errors. `profileID`
+    /// site-gates the diagnoses whose copy names a specific site.
+    static func mappedErrorMessage(for line: String, profileID: String) -> String? {
         let lower = line.lowercased()
         if lower.contains("postprocessing"),
             lower.contains("ffmpeg") || lower.contains("ffprobe"),
@@ -137,7 +140,9 @@ enum YtDlpService {
             return cookieDatabaseMessage
         }
         if lower.contains("unable to download video data"), lower.contains("403") {
-            return http403Message
+            // The stale-tool diagnosis is a YouTube pattern; on other sites a
+            // 403 usually means a cookie/session problem, not an old yt-dlp.
+            return profileID == "youtube" ? http403Message : genericHttp403Message
         }
         // yt-dlp relays YouTube's own phrasing, which uses a right single
         // quote ("you’re") — accept the plain apostrophe too.
@@ -272,10 +277,11 @@ enum YtDlpService {
             !SiteRegistry.isTwitterContent(detected)
         {
             terminate()
-            // Remembered so DownloadManager can name the destination host if
-            // the sentinel below survives the whole fallback chain.
+            // Remembered so DownloadManager can name the destination host in
+            // the final message, whether the sentinel below survives or the
+            // fallbacks run and come up empty.
             item.externalRedirectURL = detected
-            item.status = .failed("external_redirect")
+            item.status = .failed(DownloadStatus.externalRedirectSentinel)
             return
         }
 
@@ -348,7 +354,8 @@ enum YtDlpService {
             } else {
                 // Known raw errors get app-native copy naming the true cause
                 // and the in-app fix; everything else stays verbatim.
-                item.status = .failed(Self.mappedErrorMessage(for: line) ?? line)
+                let profileID = SiteRegistry.profile(for: item.url).id
+                item.status = .failed(Self.mappedErrorMessage(for: line, profileID: profileID) ?? line)
             }
         }
     }

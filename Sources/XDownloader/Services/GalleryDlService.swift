@@ -15,6 +15,8 @@ enum GalleryDlService {
     static let xAuthMessage =
         "X sign-in needed or expired — sign in to X in the browser in Settings → Cookies, then Retry. "
         + "If you're already signed in and this persists, update gallery-dl."
+    static let signInGenericMessage =
+        "Sign-in required or session expired — check Settings → Cookies, then Retry."
     static let internalErrorMessage =
         "gallery-dl hit an internal error — the site may have changed its API. "
         + "Updating gallery-dl (brew upgrade gallery-dl) usually fixes this."
@@ -54,7 +56,9 @@ enum GalleryDlService {
     /// Known raw error lines → app-native copy, ordered most-specific-first:
     /// the NSFW/Protected forms must win over the AuthRequired umbrella they
     /// are nested in. nil keeps the caller's verbatim-line behavior.
-    static func mappedErrorMessage(for line: String) -> String? {
+    /// `profileID` site-gates the X-specific sign-in copy: other sites get a
+    /// generic sign-in message instead of being told to sign in to X.
+    static func mappedErrorMessage(for line: String, profileID: String) -> String? {
         if line.contains("NSFW Tweet") { return nsfwTweetMessage }
         if line.contains("Protected Tweet") || line.contains("Tweets are protected") {
             return protectedTweetMessage
@@ -62,7 +66,7 @@ enum GalleryDlService {
         if line.contains("AuthRequired") || line.contains("Could not authenticate you")
             || line.contains("401 Unauthorized")
         {
-            return xAuthMessage
+            return profileID == "twitter" ? xAuthMessage : signInGenericMessage
         }
         if line.contains("An unexpected error occurred") { return internalErrorMessage }
         if line.contains("[instagram]"), line.lowercased().contains("challenge") {
@@ -72,15 +76,19 @@ enum GalleryDlService {
         return nil
     }
 
-    /// Decodes gallery-dl's documented exit-status bitmask (1 unspecified,
-    /// 4 HTTP, 8 network, 16 auth, 64 unsupported URL, 128 OS error — see
-    /// gallery_dl/exception.py) into named causes, citing the run's last
-    /// captured warning when there is one.
+    /// Decodes gallery-dl's exit-status bitmask into named causes, citing the
+    /// run's last captured warning when there is one. Bits verified against
+    /// gallery-dl 1.32.9's exception.py / __init__.py: 1 unspecified,
+    /// 4 extraction/HTTP, 8 ChallengeError (bot check), 16 auth,
+    /// 32 InputError family, 64 unsupported URL, 128 OS error.
     static func exitFailureMessage(code: Int32, lastWarning: String?) -> String {
         var causes: [String] = []
         if code & 4 != 0 { causes.append("a network/HTTP error") }
-        if code & 8 != 0 { causes.append("a connection problem") }
+        if code & 8 != 0 {
+            causes.append("a bot-check challenge — open the site in your browser and complete it, or refresh cookies")
+        }
         if code & 16 != 0 { causes.append("an authorization problem — check Settings → Cookies") }
+        if code & 32 != 0 { causes.append("an input or format problem") }
         if code & 64 != 0 { causes.append("URL not recognized") }
         if code & 128 != 0 { causes.append("a disk or file error") }
         if causes.isEmpty { causes = ["an unspecified error"] }
@@ -119,9 +127,10 @@ enum GalleryDlService {
         guard result.isSuccess else {
             if case .failed = item.status {
             } else if result.wasSignal {
-                // Killed by a signal (our own pause/cancel terminate(), or a
-                // crash) — the exit bitmask only describes real exits, so
-                // decoding a signal number would invent false causes.
+                // Killed by a signal — the exit bitmask only describes real
+                // exits, so decoding a signal number would invent false
+                // causes. (Distinguishing a user pause from a crash on this
+                // path is Phase 4 scope; today both read as terminated.)
                 item.status = .failed("gallery-dl was terminated (signal \(result.code))")
             } else {
                 item.status = .failed(
@@ -295,6 +304,9 @@ enum GalleryDlService {
             let isImage = MediaExtensions.image.contains(ext)
             let isVideo = MediaExtensions.video.contains(ext)
             item.status = .downloading
+            // A file landing means any backoff wait is over — a stale
+            // "14 minutes (rate limited)" ETA must not outlive the wait.
+            item.eta = nil
             item.outputPath = pathLine
             if isImage {
                 item.imageCount = (item.imageCount ?? 0) + 1
@@ -321,22 +333,19 @@ enum GalleryDlService {
             return
         }
 
-        // Rate limit: gallery-dl sleeps through site rate limits printing only
-        // "[…][info] Waiting for 14 minutes until 12:34:56 (rate limit)" — up
-        // to ~15 minutes on X, during which the row would look hung. Remember
-        // it like a warning, and surface the wait through the row's existing
-        // ETA field (shown whenever the progress section is; no layout change).
-        if line.contains("Waiting for"), line.contains("rate limit") {
-            if let r = line.range(of: "[info] ") {
-                item.lastToolWarning = String(line[r.upperBound...]).trimmingCharacters(in: .whitespaces)
-            } else {
-                item.lastToolWarning = line
-            }
+        // Backoff wait: gallery-dl sleeps through rate limits, 429 backoffs,
+        // and CloudFront blocks printing only "[…][info] Waiting for
+        // 14 minutes until 12:34:56 (<reason>)" — up to ~15 minutes on X,
+        // during which the row would look hung. Surface the wait through the
+        // row's existing ETA field (no layout change). Deliberately NOT
+        // written to lastToolWarning: a wait is routine, and it must not
+        // clobber a real [warning] diagnostic captured above.
+        if line.contains("Waiting for "), line.contains(" until ") {
             if let start = line.range(of: "Waiting for "),
                 let end = line.range(of: " until "),
                 start.upperBound < end.lowerBound
             {
-                item.eta = "\(line[start.upperBound..<end.lowerBound]) (rate limit)"
+                item.eta = "\(line[start.upperBound..<end.lowerBound]) (rate limited)"
             }
             return
         }
@@ -363,7 +372,8 @@ enum GalleryDlService {
             if case .failed = item.status { return }
             // Known raw errors get app-native copy naming the true cause and
             // the in-app fix; everything else stays verbatim.
-            item.status = .failed(Self.mappedErrorMessage(for: line) ?? line)
+            let profileID = SiteRegistry.profile(for: item.url).id
+            item.status = .failed(Self.mappedErrorMessage(for: line, profileID: profileID) ?? line)
         }
     }
 

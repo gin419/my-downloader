@@ -56,6 +56,22 @@ enum DownloadStatus: Equatable, Codable {
     static let decodedFailureFallbackMessage =
         "Download failed before a reason was recorded — Retry."
 
+    /// Internal control-flow marker set by YtDlpService when yt-dlp follows a
+    /// link out of a tweet: it drives the fallback chain and is replaced with
+    /// `externalRedirectMessage` before it can reach a renderer. One shared
+    /// constant — every site that sets or compares it must use this.
+    static let externalRedirectSentinel = "external_redirect"
+
+    /// User-facing copy replacing the sentinel. Nonisolated home so the
+    /// Codable decode path below can also substitute it (the detected URL is
+    /// transient, so a decode-time substitution has no host to name).
+    static func externalRedirectMessage(detectedURL: String?) -> String {
+        if let detectedURL, let host = URL(string: detectedURL)?.host {
+            return "This tweet links to external content (\(host)) — paste that link directly to download it."
+        }
+        return "This tweet links to external content — paste that link directly to download it."
+    }
+
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         switch try c.decode(Kind.self, forKey: .kind) {
@@ -64,7 +80,15 @@ enum DownloadStatus: Equatable, Codable {
         case .completed: self = .completed
         case .failed:
             let m = (try? c.decode(String.self, forKey: .message)) ?? ""
-            self = .failed(m.isEmpty ? Self.decodedFailureFallbackMessage : m)
+            if m.isEmpty {
+                self = .failed(Self.decodedFailureFallbackMessage)
+            } else if m == Self.externalRedirectSentinel {
+                // A quit mid-fallback can persist the internal sentinel —
+                // without this, relaunch shows a blank red row.
+                self = .failed(Self.externalRedirectMessage(detectedURL: nil))
+            } else {
+                self = .failed(m)
+            }
         }
     }
 
@@ -162,9 +186,12 @@ class DownloadItem: Identifiable, ObservableObject {
     /// so the same WARNINGs re-fire anyway.
     var extractorBreakage: ExtractorBreakage = .none
     /// In-memory only (NOT persisted). The off-site URL yt-dlp was following
-    /// when the "external_redirect" sentinel fired — lets DownloadManager name
-    /// the destination host in the final user-facing failure message. Cleared
-    /// with the other per-attempt parse state in resetForReattempt().
+    /// when the external-redirect sentinel fired — lets DownloadManager name
+    /// the destination host in the final user-facing failure message.
+    /// Deliberately NOT cleared in resetForReattempt(): it must survive the
+    /// gallery-dl fallback and auto-retry resets within one attempt so the
+    /// final message can name the destination. Cleared by retryItem() with
+    /// the other cross-attempt flags.
     var externalRedirectURL: String?
 
     init(url: String, addedAt: Date = Date()) {
@@ -196,7 +223,6 @@ class DownloadItem: Identifiable, ObservableObject {
         mediaCategory = .unknown
         lastToolWarning = nil
         extractorBreakage = .none
-        externalRedirectURL = nil
     }
 
     /// Mark this item finished: completed status, full progress, no live speed/eta.

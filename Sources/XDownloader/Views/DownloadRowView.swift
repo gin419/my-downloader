@@ -288,7 +288,7 @@ struct DownloadRowView: View {
                 .buttonStyle(.plain)
                 .foregroundColor(.blue)
 
-                let displayMsg = msg == "external_redirect" ? "" : msg
+                let displayMsg = msg == DownloadStatus.externalRedirectSentinel ? "" : msg
                 if !displayMsg.isEmpty {
                     Text(displayMsg)
                         .font(.system(size: 11))
