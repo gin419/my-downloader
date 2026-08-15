@@ -189,7 +189,8 @@ jobs:
 
             ## Requirements
 
-            The app checks for missing tools on launch and can install them for you, or run manually:
+            - **macOS 14 (Sonoma) or later** — runs natively on **Apple Silicon and Intel** (universal binary)
+            - The app checks for missing tools on launch and can install them for you, or run manually:
 
             ```bash
             brew install yt-dlp gallery-dl ffmpeg
