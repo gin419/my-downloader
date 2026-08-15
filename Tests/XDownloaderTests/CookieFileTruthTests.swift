@@ -62,4 +62,153 @@ final class CookieFileTruthTests: XCTestCase {
         XCTAssertFalse(
             DownloadManager.isEmptySuccessMessage(DownloadManager.cookieSaveFailedFeedbackMessage))
     }
+
+    // MARK: - isCookieSaveOnlyFailure rescue decision (mirror of subtitleOnlyFailure)
+
+    private func failedItem(outputPath: String?, message: String) -> DownloadItem {
+        let item = DownloadItem(url: "https://x.com/gin/status/1")
+        item.outputPath = outputPath
+        item.status = .failed(message)
+        return item
+    }
+
+    func testCookieSaveOnlyFailureRescuesDownloadedMedia() {
+        let item = failedItem(
+            outputPath: "/tmp/video.mp4",
+            message: "FileNotFoundError: [Errno 2] No such file or directory: '/tmp/profile/cookies.txt'")
+        XCTAssertTrue(
+            DownloadManager.isCookieSaveOnlyFailure(item: item, exitedCleanly: false, cookiesFilePath: cookiesPath))
+    }
+
+    func testCookieSaveOnlyFailureRequiresMediaOnDisk() {
+        let item = failedItem(
+            outputPath: nil,
+            message: "FileNotFoundError: [Errno 2] No such file or directory: '/tmp/profile/cookies.txt'")
+        XCTAssertFalse(
+            DownloadManager.isCookieSaveOnlyFailure(item: item, exitedCleanly: false, cookiesFilePath: cookiesPath))
+    }
+
+    func testCookieSaveOnlyFailureRequiresNonZeroExit() {
+        let item = failedItem(
+            outputPath: "/tmp/video.mp4",
+            message: "FileNotFoundError: [Errno 2] No such file or directory: '/tmp/profile/cookies.txt'")
+        XCTAssertFalse(
+            DownloadManager.isCookieSaveOnlyFailure(item: item, exitedCleanly: true, cookiesFilePath: cookiesPath))
+    }
+
+    func testCookieSaveOnlyFailureRequiresMatchingTraceback() {
+        let item = failedItem(
+            outputPath: "/tmp/video.mp4",
+            message: "ERROR: unable to download video data: HTTP Error 403: Forbidden")
+        XCTAssertFalse(
+            DownloadManager.isCookieSaveOnlyFailure(item: item, exitedCleanly: false, cookiesFilePath: cookiesPath))
+    }
+
+    func testCookieSaveOnlyFailureRequiresFailedStatus() {
+        let item = DownloadItem(url: "https://x.com/gin/status/1")
+        item.outputPath = "/tmp/video.mp4"
+        item.status = .completed
+        XCTAssertFalse(
+            DownloadManager.isCookieSaveOnlyFailure(item: item, exitedCleanly: false, cookiesFilePath: cookiesPath))
+    }
+
+    // MARK: - resolveCookiesForDownload / setCookiesFile manager behavior
+
+    private func makeManager(seedDefaults: ((UserDefaults) -> Void)? = nil) -> DownloadManager {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cookie-truth-\(UUID().uuidString)")
+        let defaults = UserDefaults(suiteName: "cookie-truth-\(UUID().uuidString)")!
+        seedDefaults?(defaults)
+        let manager = DownloadManager(
+            history: HistoryStore(directory: directory),
+            queueStore: QueueStore(directory: directory),
+            settingsStore: SettingsStore(defaults: defaults),
+            likesSyncStore: LikesSyncStore(directory: directory),
+            galleryDlPathProvider: { nil })
+        manager.outputDirectory = directory.appendingPathComponent("downloads")
+        return manager
+    }
+
+    /// Bug 2 (plain-path half): a stored cookiesFilePath whose file no longer
+    /// exists must behave exactly like .bookmarkFailed — browser-cookie
+    /// fallback plus the persistent feedback, once per session.
+    func testResolveFallsBackToBrowserCookiesWhenStoredPathIsMissing() {
+        let manager = makeManager()
+        let missing = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cookie-truth-missing-\(UUID().uuidString)")
+            .appendingPathComponent("cookies.txt").path
+        manager.cookiesFilePath = missing
+
+        let resolved = manager.resolveCookiesForDownload()
+
+        XCTAssertNil(resolved.path)
+        XCTAssertNil(resolved.granted)
+        XCTAssertEqual(manager.captureFeedback?.message, DownloadManager.cookiesFileInaccessibleFeedbackMessage)
+        XCTAssertEqual(manager.captureFeedback?.isPersistent, true)
+
+        // Once per session: the next affected download must not re-post it.
+        let firstID = manager.captureFeedback?.id
+        _ = manager.resolveCookiesForDownload()
+        XCTAssertEqual(manager.captureFeedback?.id, firstID)
+    }
+
+    func testResolveUsesStoredPlainPathWhenFileExists() throws {
+        let manager = makeManager()
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cookie-truth-exists-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let file = dir.appendingPathComponent("cookies.txt")
+        try "# Netscape HTTP Cookie File".write(to: file, atomically: true, encoding: .utf8)
+        manager.cookiesFilePath = file.path
+
+        let resolved = manager.resolveCookiesForDownload()
+
+        XCTAssertEqual(resolved.path, file.path)
+        XCTAssertNil(resolved.granted)
+        XCTAssertNil(manager.captureFeedback)
+    }
+
+    func testResolveWithNoCookiesFileConfiguredStaysSilent() {
+        let manager = makeManager()
+
+        let resolved = manager.resolveCookiesForDownload()
+
+        XCTAssertNil(resolved.path)
+        XCTAssertNil(resolved.granted)
+        XCTAssertNil(manager.captureFeedback)
+    }
+
+    /// Bug 2 (bookmark half): a bookmark that no longer resolves must surface
+    /// itself instead of silently downgrading to browser cookies.
+    func testResolveSurfacesFeedbackWhenBookmarkFails() {
+        let manager = makeManager { defaults in
+            // Garbage bookmark data: loads on init, never resolves.
+            defaults.set(Data([1, 2, 3]), forKey: "cookiesFileBookmarkData")
+            defaults.set("/tmp/profile/cookies.txt", forKey: "cookiesFilePath")
+        }
+
+        let resolved = manager.resolveCookiesForDownload()
+
+        XCTAssertNil(resolved.path)
+        XCTAssertNil(resolved.granted)
+        XCTAssertEqual(manager.captureFeedback?.message, DownloadManager.cookiesFileInaccessibleFeedbackMessage)
+        XCTAssertEqual(manager.captureFeedback?.isPersistent, true)
+    }
+
+    /// Bug 3: bookmark creation fails at selection time (the file must exist
+    /// for a bookmark to be created). The plain path still stores — downloads
+    /// can work while the app stays open — but the user hears immediately
+    /// that persistence is broken.
+    func testSetCookiesFileWithFailingBookmarkStoresPathAndSurfacesFeedback() {
+        let manager = makeManager()
+        let missing = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cookie-truth-nofile-\(UUID().uuidString)")
+            .appendingPathComponent("cookies.txt")
+
+        manager.setCookiesFile(from: missing)
+
+        XCTAssertEqual(manager.cookiesFilePath, missing.path)
+        XCTAssertEqual(manager.captureFeedback?.message, DownloadManager.cookiesFileInaccessibleFeedbackMessage)
+        XCTAssertEqual(manager.captureFeedback?.isPersistent, true)
+    }
 }
