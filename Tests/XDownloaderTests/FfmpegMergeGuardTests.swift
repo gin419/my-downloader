@@ -65,4 +65,85 @@ final class FfmpegMergeGuardTests: XCTestCase {
         XCTAssertFalse(item.ffmpegMissingForMerge)
         XCTAssertEqual(item.outputPath, path)
     }
+
+    // MARK: - Success-branch guard (unmergedStreamsFailure)
+
+    func testFlagPlusIntermediateOutputPathFailsTruthfully() {
+        let item = DownloadItem(url: "https://youtube.com/watch?v=abc")
+        item.ffmpegMissingForMerge = true
+        item.outputPath = "/tmp/out/user - clip.f137.mp4"
+
+        XCTAssertEqual(DownloadManager.unmergedStreamsFailure(for: item), DownloadManager.unmergedStreamsMessage)
+    }
+
+    func testFlagWithMergedFinalPathIsNotAFailure() {
+        // A real [Merger] line lands a final path without `.f{format_id}` —
+        // the merge DID happen, whatever warned earlier.
+        let item = DownloadItem(url: "https://youtube.com/watch?v=abc")
+        item.ffmpegMissingForMerge = true
+        item.outputPath = "/tmp/out/user - clip.mp4"
+
+        XCTAssertNil(DownloadManager.unmergedStreamsFailure(for: item))
+    }
+
+    func testIntermediateOutputPathWithoutFlagIsNotAFailure() {
+        // Single-format downloads can keep `.f…` in the on-disk name with no
+        // merge ever requested — only the warning makes it a broken delivery.
+        let item = DownloadItem(url: "https://youtube.com/watch?v=abc")
+        item.outputPath = "/tmp/out/user - clip.f137.mp4"
+
+        XCTAssertNil(DownloadManager.unmergedStreamsFailure(for: item))
+    }
+
+    func testFlagWithImageOutputPathIsNotAFailure() {
+        let item = DownloadItem(url: "https://x.com/a/status/1")
+        item.ffmpegMissingForMerge = true
+        item.outputPath = "/tmp/out/user - pic_2.jpg"
+        item.imageCount = 1
+        item.mediaCategory = .image
+
+        XCTAssertNil(DownloadManager.unmergedStreamsFailure(for: item))
+    }
+
+    func testFlagWithAudioOnlyRunIsNotAFailure() {
+        // Audio-only runs extract to a final `.m4a`/`.mp3` — no merge, no
+        // intermediate left as the deliverable.
+        let item = DownloadItem(url: "https://youtube.com/watch?v=abc")
+        item.ffmpegMissingForMerge = true
+        item.audioPath = "/tmp/out/user - song.m4a"
+        item.outputPath = "/tmp/out/user - song.m4a"
+        item.mediaCategory = .audio
+
+        XCTAssertNil(DownloadManager.unmergedStreamsFailure(for: item))
+    }
+
+    func testUnmergedMessageDoesNotTriggerEmptySuccessAutoRetry() {
+        // Streams DID land on disk, so the one-shot empty-success auto-retry
+        // must not burn itself re-running into the same missing tool.
+        XCTAssertFalse(DownloadManager.isEmptySuccessMessage(DownloadManager.unmergedStreamsMessage))
+        // And none of the empty-success trigger shapes may appear inside it.
+        XCTAssertFalse(DownloadManager.unmergedStreamsMessage.contains(GalleryDlService.noMediaGenericMessage))
+        XCTAssertFalse(DownloadManager.unmergedStreamsMessage.contains(GalleryDlService.noMediaWarningPrefix))
+        XCTAssertFalse(DownloadManager.unmergedStreamsMessage.contains(DownloadManager.ytDlpEmptySuccessMessage))
+    }
+
+    // MARK: - End-to-end at parse level
+
+    func testFullParseSequenceOfUnmergedRunProducesFailureMessage() {
+        // The live-verified shape: merge WARNING, then the two streams land
+        // separately and yt-dlp exits 0 with outputPath on the LAST
+        // Destination — the audio intermediate.
+        let item = DownloadItem(url: "https://youtube.com/watch?v=abc")
+        parse(Self.mergeWarning, into: item)
+        parse("[download] Destination: /tmp/out/user - clip.f137.mp4", into: item)
+        parse("[download] Destination: /tmp/out/user - clip.f140.m4a", into: item)
+
+        XCTAssertEqual(item.outputPath, "/tmp/out/user - clip.f140.m4a")
+        XCTAssertEqual(DownloadManager.unmergedStreamsFailure(for: item), DownloadManager.unmergedStreamsMessage)
+
+        // Same run WITH ffmpeg present: the [Merger] line flips outputPath to
+        // the final deliverable and the guard stands down.
+        parse(#"[Merger] Merging formats into "/tmp/out/user - clip.mp4""#, into: item)
+        XCTAssertNil(DownloadManager.unmergedStreamsFailure(for: item))
+    }
 }

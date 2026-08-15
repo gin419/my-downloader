@@ -1238,6 +1238,30 @@ class DownloadManager: ObservableObject {
         return message
     }
 
+    /// Shown when yt-dlp exited 0 but left un-merged streams on disk because
+    /// ffmpeg is missing (see `unmergedStreamsFailure`). Must NOT match
+    /// `isEmptySuccessMessage` — files DID land, so the empty-success
+    /// auto-retry would just re-run into the same missing tool.
+    static let unmergedStreamsMessage =
+        "Video and audio were downloaded but not merged — ffmpeg is missing. Install it (brew install ffmpeg), then Retry."
+
+    /// The success-branch truth guard for the ffmpeg merge gap: yt-dlp warns
+    /// ("requested merging … but ffmpeg is not installed"), downloads the
+    /// streams separately, and still exits 0 — leaving `outputPath` on a
+    /// pre-merge `.f{format_id}` intermediate. Marking that run "Done" hands
+    /// the user a silent video. Returns the failure message when the warning
+    /// fired AND the final deliverable is still an intermediate; a real
+    /// `[Merger]` line, an image, or an audio-only run yields a final path
+    /// and returns nil. Retry after installing ffmpeg reuses the on-disk
+    /// streams and merges — no cleanup needed.
+    static func unmergedStreamsFailure(for item: DownloadItem) -> String? {
+        guard item.ffmpegMissingForMerge,
+            let outputPath = item.outputPath,
+            YtDlpService.isIntermediateFormatPath(outputPath)
+        else { return nil }
+        return unmergedStreamsMessage
+    }
+
     /// True only for the "empty success" family — a tool exited 0 with no
     /// files — which is exactly what the one-shot auto-retry re-queues.
     /// Formerly a substring match ("found no media" / "No media found" /
@@ -1312,6 +1336,16 @@ class DownloadManager: ObservableObject {
         // that partially downloaded) still fall through to the fallback below.
         let subtitleOnlyFailure = item.subtitleDownloadFailed && !hasFatalError
         if mediaCaptured && (ytResult.isSuccess || subtitleOnlyFailure) {
+            // ffmpeg was missing at merge time: the exit code says success,
+            // but the deliverable is still a pre-merge intermediate — a
+            // video without its audio. Fail truthfully (normal failure
+            // finalize keeps history and notifications honest) instead of a
+            // green "Done" on a silent video.
+            if let message = Self.unmergedStreamsFailure(for: item) {
+                item.status = .failed(message)
+                finalize(item)
+                return
+            }
             // Counts must match deliverables on disk: pre-merge stream
             // Destination lines are ignored, so fill any zero left when only
             // intermediates were seen (or refresh the title off the final path).
