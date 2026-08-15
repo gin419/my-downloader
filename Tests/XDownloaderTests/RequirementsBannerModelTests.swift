@@ -18,6 +18,13 @@ final class RequirementsBannerModelTests: XCTestCase {
             status: .outdated(installed: installed, detail: detail))
     }
 
+    private func broken(_ id: String) -> ToolHealth {
+        ToolHealth(
+            id: id, name: id, brewPackage: id, docsURL: "",
+            path: "/opt/homebrew/bin/\(id)",
+            status: .broken(detail: "can't run"))
+    }
+
     // MARK: - State A: no problems → hidden
 
     func testStateANoProblemsHidesBanner() {
@@ -77,6 +84,30 @@ final class RequirementsBannerModelTests: XCTestCase {
         XCTAssertEqual(model?.buttonTitle, "Update…")
     }
 
+    // MARK: - Broken (red family: missing ∪ broken)
+
+    func testBrokenSingleToolIsRedWithReinstallCopy() {
+        let model = RequirementsBannerModel.make(problems: [broken("yt-dlp")])
+        XCTAssertEqual(model?.headline, "yt-dlp is broken (can't run) — reinstall it.")
+        XCTAssertEqual(model?.subtitle, "YouTube and X downloads need it.")
+        XCTAssertEqual(model?.buttonTitle, "Set Up…")
+        XCTAssertEqual(model?.severity, .missing)
+    }
+
+    func testBrokenMultipleTools() {
+        let model = RequirementsBannerModel.make(problems: [broken("yt-dlp"), broken("ffmpeg")])
+        XCTAssertEqual(model?.headline, "Broken: yt-dlp, ffmpeg — reinstall them.")
+        XCTAssertEqual(model?.subtitle, "YouTube and X downloads need them.")
+        XCTAssertEqual(model?.severity, .missing)
+    }
+
+    func testMixedMissingAndBrokenJoinsSegments() {
+        let model = RequirementsBannerModel.make(problems: [missing("deno"), broken("yt-dlp")])
+        XCTAssertEqual(model?.headline, "Missing: deno · Broken: yt-dlp")
+        XCTAssertEqual(model?.subtitle, "Downloads will fail or degrade until both are fixed.")
+        XCTAssertEqual(model?.severity, .missing)
+    }
+
     // MARK: - State D: mixed (red wins)
 
     func testStateDMixedRedWins() {
@@ -122,5 +153,30 @@ final class RequirementsBannerModelTests: XCTestCase {
         let problems = [missing("deno"), outdated("yt-dlp", "2024.11.04", nil)]
         let model = RequirementsBannerModel.make(problems: problems)
         XCTAssertEqual(model?.signature, RequirementsBannerModel.signature(for: problems))
+    }
+
+    func testSignatureIncludesBroken() {
+        XCTAssertEqual(RequirementsBannerModel.signature(for: [broken("yt-dlp")]), "broken:yt-dlp")
+    }
+
+    // MARK: - Dismissal visibility (session-scoped, held by the manager)
+
+    func testDismissedSignatureHidesTheBanner() {
+        let problems = [missing("deno")]
+        let signature = RequirementsBannerModel.signature(for: problems)
+        XCTAssertNil(
+            RequirementsBannerModel.visibleModel(problems: problems, dismissedSignature: signature))
+    }
+
+    func testChangedProblemSetResurrectsADismissedBanner() {
+        let dismissed = RequirementsBannerModel.signature(for: [missing("deno")])
+        let grown = [missing("deno"), outdated("yt-dlp", "2024.11.04", nil)]
+        XCTAssertNotNil(
+            RequirementsBannerModel.visibleModel(problems: grown, dismissedSignature: dismissed))
+    }
+
+    func testNoDismissalShowsTheBanner() {
+        XCTAssertNotNil(
+            RequirementsBannerModel.visibleModel(problems: [missing("deno")], dismissedSignature: nil))
     }
 }

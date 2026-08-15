@@ -27,6 +27,17 @@ final class FetchingWaitNoteTests: XCTestCase {
 
     func testNoEtaNoNote() {
         XCTAssertNil(FetchingWaitNote.statusLine(status: .fetching, eta: nil))
+        XCTAssertNil(FetchingWaitNote.statusLine(status: .fetching, eta: ""))
+    }
+
+    func testViewPartsShareTheStatusLineGate() {
+        // The view renders from parts(); it must agree with statusLine both
+        // on visibility and on text.
+        let parts = FetchingWaitNote.parts(status: .fetching, eta: "14 minutes (rate limited)")
+        XCTAssertEqual(parts?.label, "Fetching…")
+        XCTAssertEqual(parts?.note, "rate limited — resuming in 14 minutes")
+        XCTAssertNil(FetchingWaitNote.parts(status: .fetching, eta: nil))
+        XCTAssertNil(FetchingWaitNote.parts(status: .downloading, eta: "5 minutes (rate limited)"))
     }
 
     func testOnlyFetchingRowsGetTheNote() {

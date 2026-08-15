@@ -61,11 +61,9 @@ enum ProcessRunner {
             process.environment = environment
         } else {
             var env = ProcessInfo.processInfo.environment
-            let existingPath = env["PATH"] ?? ""
-            env["PATH"] =
-                existingPath.isEmpty
-                ? Homebrew.fullPATH
-                : "\(Homebrew.binPaths):\(existingPath)"
+            env["PATH"] = Homebrew.launchPATH(
+                toolPaths: RequirementsService.resolvedToolPaths,
+                existingPath: env["PATH"] ?? "")
             process.environment = env
         }
 
@@ -154,12 +152,13 @@ enum ProcessRunner {
         // shell out to `deno` (to solve YouTube's JS n-challenge) and `ffmpeg` (to
         // merge streams); without them, YouTube downloads fail with "Requested
         // format is not available". gallery-dl similarly needs ffmpeg on PATH.
+        // launchPATH also appends the parent dirs of every RESOLVED catalogue
+        // tool — the probe certifies tools in pipx/MacPorts/~/.deno locations,
+        // and the child must be able to exec the SAME binaries.
         var env = ProcessInfo.processInfo.environment
-        let existingPath = env["PATH"] ?? ""
-        env["PATH"] =
-            existingPath.isEmpty
-            ? Homebrew.fullPATH
-            : "\(Homebrew.binPaths):\(existingPath)"
+        env["PATH"] = Homebrew.launchPATH(
+            toolPaths: RequirementsService.resolvedToolPaths,
+            existingPath: env["PATH"] ?? "")
         process.environment = env
 
         let stdout = Pipe()

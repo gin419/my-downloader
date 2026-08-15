@@ -14,11 +14,18 @@ enum FetchingWaitNote {
         return "rate limited — resuming in \(wait)"
     }
 
+    /// The note's two render parts — the view colors the label and the note
+    /// differently, and MUST derive both text and visibility from here so it
+    /// can never drift from the tested statusLine below.
+    static func parts(status: DownloadStatus, eta: String?) -> (label: String, note: String)? {
+        guard status == .fetching, let eta, !eta.isEmpty else { return nil }
+        return ("Fetching…", note(eta: eta))
+    }
+
     /// The full status line ("Fetching… · rate limited — resuming in 14
     /// minutes"); nil unless the row is `.fetching` with a stored wait.
     static func statusLine(status: DownloadStatus, eta: String?) -> String? {
-        guard status == .fetching, let eta, !eta.isEmpty else { return nil }
-        return "Fetching… · \(note(eta: eta))"
+        parts(status: status, eta: eta).map { "\($0.label) · \($0.note)" }
     }
 }
 
@@ -58,12 +65,13 @@ struct DownloadRowView: View {
                 }
             }
 
-            if item.status == .fetching, let eta = item.eta {
+            if let wait = FetchingWaitNote.parts(status: item.status, eta: item.eta) {
                 // Backoff wait (Phase 2 stores it in eta): same text slot as
                 // the meta line — no new views, no layout shift — with the
-                // note in the warning color. Disappears when eta clears.
-                (Text("Fetching…").foregroundColor(.secondary)
-                    + Text(" · \(FetchingWaitNote.note(eta: eta))").foregroundColor(.orange))
+                // note in the warning color. Text and visibility both come
+                // from FetchingWaitNote, the helper the tests pin.
+                (Text(wait.label).foregroundColor(.secondary)
+                    + Text(" · \(wait.note)").foregroundColor(.orange))
                     .font(.system(size: 11))
                     .lineLimit(1)
                     .truncationMode(.tail)

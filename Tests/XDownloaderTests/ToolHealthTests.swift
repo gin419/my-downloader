@@ -122,9 +122,16 @@ final class ToolHealthTests: XCTestCase {
         XCTAssertEqual(RequirementsService.calVerDate("2026.07.04"), date(2026, 7, 4))
     }
 
+    func testCalVerDateAcceptsFourPartNightly() {
+        // Nightly builds append a timestamp part — the first three parts are
+        // still the build date.
+        XCTAssertEqual(RequirementsService.calVerDate("2024.11.04.232815"), date(2024, 11, 4))
+    }
+
     func testCalVerDateRejectsSemver() {
         // gallery-dl is SEMVER — age is NOT derivable from "1.32.9".
         XCTAssertNil(RequirementsService.calVerDate("1.32.9"))
+        XCTAssertNil(RequirementsService.calVerDate("1.2.3.4"))
     }
 
     func testHumanizedAgeInMonths() {
@@ -137,6 +144,13 @@ final class ToolHealthTests: XCTestCase {
         XCTAssertEqual(
             RequirementsService.humanizedAge(from: date(2026, 7, 2), now: date(2026, 8, 16)),
             "45 days old")
+    }
+
+    func testHumanizedAgeClampsAtZero() {
+        // A build date in the future (clock skew) must never read negative.
+        XCTAssertEqual(
+            RequirementsService.humanizedAge(from: date(2026, 8, 20), now: date(2026, 8, 16)),
+            "0 days old")
     }
 
     // MARK: - Status derivation (probe result × brew-outdated list)
@@ -197,28 +211,60 @@ final class ToolHealthTests: XCTestCase {
             .ok(version: "1.32.9"))
     }
 
-    func testUnparseableProbeStillCountsAsInstalled() {
+    func testUnrunnableProbeDerivesBrokenNotOK() {
+        // Exec failure, non-zero exit, or a hung probe all surface here as a
+        // nil version line — an unrunnable binary must never read as OK.
         XCTAssertEqual(
             derive("ffmpeg", path: "/opt/homebrew/bin/ffmpeg", versionLine: nil, now: date(2026, 8, 16)),
-            .ok(version: "unknown"))
+            .broken(detail: "can't run"))
     }
 
-    func testBrewOutdatedWithUnparseableProbeShowsUnknownVersion() {
+    func testGarbageProbeOutputDerivesBroken() {
+        XCTAssertEqual(
+            derive("ffmpeg", path: "/opt/homebrew/bin/ffmpeg", versionLine: "usage: tool [options]", now: date(2026, 8, 16)),
+            .broken(detail: "can't run"))
+    }
+
+    func testBrokenBeatsBrewOutdated() {
+        // A binary that can't even run needs a reinstall, not an upgrade.
         XCTAssertEqual(
             derive("ffmpeg", path: "/opt/homebrew/bin/ffmpeg", versionLine: nil, brewOutdated: ["ffmpeg"], now: date(2026, 8, 16)),
-            .outdated(installed: "unknown", detail: nil))
+            .broken(detail: "can't run"))
     }
 
     // MARK: - Problem ordering
 
-    func testProblemsOrderMissingFirstThenOutdated() {
+    func testProblemsOrderMissingThenBrokenThenOutdated() {
         let healths = [
             health("yt-dlp", .outdated(installed: "2024.11.04", detail: "21 months old")),
-            health("gallery-dl", .ok(version: "1.32.9")),
+            health("gallery-dl", .broken(detail: "can't run")),
             health("ffmpeg", .missing),
             health("deno", .missing),
         ]
         let problems = RequirementsService.orderedProblems(healths)
-        XCTAssertEqual(problems.map(\.id), ["ffmpeg", "deno", "yt-dlp"])
+        XCTAssertEqual(problems.map(\.id), ["ffmpeg", "deno", "gallery-dl", "yt-dlp"])
+    }
+
+    // MARK: - Child-process PATH truth
+
+    func testLaunchPATHIncludesResolvedToolParentDirs() {
+        // The probe certifies tools wherever the resolver finds them; the
+        // children must be able to exec those SAME binaries — deduped,
+        // order-stable, inherited PATH last.
+        XCTAssertEqual(
+            Homebrew.launchPATH(
+                toolPaths: [
+                    "/usr/local/bin/yt-dlp",
+                    "/Users/gin/.deno/bin/deno",
+                    "/Users/gin/.local/bin/gallery-dl",
+                    "/Users/gin/.deno/bin/other",
+                ],
+                existingPath: "/usr/bin:/bin"),
+            "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/Users/gin/.deno/bin:/Users/gin/.local/bin:/usr/bin:/bin"
+        )
+    }
+
+    func testLaunchPATHFallsBackToSystemDirsWhenEnvEmpty() {
+        XCTAssertEqual(Homebrew.launchPATH(toolPaths: [], existingPath: ""), Homebrew.fullPATH)
     }
 }

@@ -19,4 +19,25 @@ enum Homebrew {
     static let binPaths = "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin"
     /// A full PATH with Homebrew first, then the standard system dirs.
     static let fullPATH = "\(binPaths):/usr/bin:/bin:/usr/sbin:/sbin"
+
+    /// PATH truth for child processes: Homebrew dirs, then the parent
+    /// directory of every RESOLVED catalogue tool (deduped, order-stable),
+    /// then the inherited PATH (or the standard system dirs when it's empty).
+    /// The probe certifies tools wherever the shared resolver finds them
+    /// (pipx, MacPorts, ~/.deno/bin, python framework bins); without this,
+    /// yt-dlp/gallery-dl child processes could not exec the SAME deno/ffmpeg
+    /// the banner just called healthy.
+    static func launchPATH(toolPaths: [String], existingPath: String) -> String {
+        var dirs = binPaths.split(separator: ":").map(String.init)
+        var seen = Set(dirs)
+        for toolPath in toolPaths {
+            let dir = (toolPath as NSString).deletingLastPathComponent
+            guard !dir.isEmpty, seen.insert(dir).inserted else { continue }
+            dirs.append(dir)
+        }
+        let prefix = dirs.joined(separator: ":")
+        return existingPath.isEmpty
+            ? "\(prefix):/usr/bin:/bin:/usr/sbin:/sbin"
+            : "\(prefix):\(existingPath)"
+    }
 }

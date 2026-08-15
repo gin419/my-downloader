@@ -22,8 +22,12 @@ struct ToolRequirement: Identifiable {
 /// `outdated` carries the installed version string for display; `detail` is a
 /// humanized age ("21 months old") when it is derivable from the version
 /// (yt-dlp's CalVer), nil otherwise (SEMVER tools flagged by brew).
+/// `broken` is a file that exists but can't be run (exec failure, non-zero
+/// exit, hung probe, or no parseable version output) — red family, because a
+/// broken tool fails downloads exactly like a missing one.
 enum ToolStatus: Equatable {
     case missing
+    case broken(detail: String)
     case outdated(installed: String, detail: String?)
     case ok(version: String)
 }
@@ -137,6 +141,13 @@ enum RequirementsService {
         tool.searchPaths.first(where: exists)
     }
 
+    /// Every catalogue tool's resolved absolute path — feeds child-process
+    /// PATH composition (Homebrew.launchPATH) so launched downloads can exec
+    /// exactly the binaries the probe certified.
+    static var resolvedToolPaths: [String] {
+        all.compactMap(\.installedPath)
+    }
+
     // MARK: - Version probing (pure parts)
 
     /// yt-dlp CalVer builds older than this are considered outdated even when
@@ -168,12 +179,13 @@ enum RequirementsService {
         return nil
     }
 
-    /// yt-dlp CalVer "2026.07.04" → its build date. Nil for anything that is
-    /// not a yyyy.MM.dd version (gallery-dl's SEMVER "1.32.9" carries no date
-    /// — age is NOT derivable from it).
+    /// yt-dlp CalVer "2026.07.04" → its build date; nightly builds append a
+    /// timestamp part ("2024.11.04.232815"), so 3 OR 4 dot-parts are accepted
+    /// and the first three are used. Nil for anything else (gallery-dl's
+    /// SEMVER "1.32.9" carries no date — age is NOT derivable from it).
     static func calVerDate(_ version: String) -> Date? {
         let parts = version.split(separator: ".")
-        guard parts.count == 3, parts[0].count == 4,
+        guard parts.count == 3 || parts.count == 4, parts[0].count == 4,
             let year = Int(parts[0]), let month = Int(parts[1]), let day = Int(parts[2]),
             (1...12).contains(month), (1...31).contains(day)
         else { return nil }
@@ -181,19 +193,26 @@ enum RequirementsService {
     }
 
     /// "21 months old" / "45 days old" — the banner's humanized age.
+    /// Clamped at zero: a build date in the future (clock skew, timezone
+    /// edges) must never render a negative age.
     static func humanizedAge(from date: Date, now: Date) -> String {
         let months = utcCalendar.dateComponents([.month], from: date, to: now).month ?? 0
         if months >= 2 { return "\(months) months old" }
-        let days = utcCalendar.dateComponents([.day], from: date, to: now).day ?? 0
+        let days = max(0, utcCalendar.dateComponents([.day], from: date, to: now).day ?? 0)
         return days == 1 ? "1 day old" : "\(days) days old"
     }
 
+    /// The `broken` detail — the probe couldn't get a version out of the
+    /// binary (exec failure, non-zero exit, timeout, or unparseable output).
+    static let brokenProbeDetail = "can't run"
+
     /// Probe result × brew-outdated list → per-tool status.
-    /// Rules: no path → missing; yt-dlp CalVer older than `ytDlpMaxAgeDays` →
-    /// outdated (with humanized age); any tool listed by `brew outdated` →
-    /// outdated; unparseable probe output → ok("unknown") so existence still
-    /// counts. ffmpeg/deno/gallery-dl have no age rule — existence + probe +
-    /// brew-outdated only.
+    /// Rules: no path → missing; no parseable probed version (exec failure,
+    /// non-zero exit, timeout, garbage output) → broken, NEVER ok — an
+    /// unrunnable binary fails downloads exactly like a missing one; yt-dlp
+    /// CalVer older than `ytDlpMaxAgeDays` → outdated (with humanized age);
+    /// any tool listed by `brew outdated` → outdated. ffmpeg/deno/gallery-dl
+    /// have no age rule — existence + probe + brew-outdated only.
     static func deriveStatus(
         toolID: String,
         brewPackage: String,
@@ -203,28 +222,34 @@ enum RequirementsService {
         now: Date
     ) -> ToolStatus {
         guard installedPath != nil else { return .missing }
-        let version = versionLine.flatMap { parsedVersion(fromFirstLine: $0) }
-        let age = version.flatMap { calVerDate($0) }.map { humanizedAge(from: $0, now: now) }
-        if toolID == ytdlp.id, let version, let buildDate = calVerDate(version) {
+        guard let version = versionLine.flatMap({ parsedVersion(fromFirstLine: $0) }) else {
+            return .broken(detail: brokenProbeDetail)
+        }
+        let age = calVerDate(version).map { humanizedAge(from: $0, now: now) }
+        if toolID == ytdlp.id, let buildDate = calVerDate(version) {
             let days = utcCalendar.dateComponents([.day], from: buildDate, to: now).day ?? 0
             if days > ytDlpMaxAgeDays {
                 return .outdated(installed: version, detail: age)
             }
         }
         if brewOutdated.contains(brewPackage) {
-            return .outdated(installed: version ?? "unknown", detail: age)
+            return .outdated(installed: version, detail: age)
         }
-        return .ok(version: version ?? "unknown")
+        return .ok(version: version)
     }
 
-    /// Problems only (statuses ≠ ok), ordered missing first, then outdated,
-    /// keeping the catalogue's relative order within each group.
+    /// Problems only (statuses ≠ ok), ordered missing first, then broken,
+    /// then outdated, keeping the catalogue's relative order within each
+    /// group. Red family = missing ∪ broken.
     static func orderedProblems(_ healths: [ToolHealth]) -> [ToolHealth] {
         let missing = healths.filter { $0.status == .missing }
+        let broken = healths.filter {
+            if case .broken = $0.status { return true } else { return false }
+        }
         let outdated = healths.filter {
             if case .outdated = $0.status { return true } else { return false }
         }
-        return missing + outdated
+        return missing + broken + outdated
     }
 
     // MARK: - Checks
@@ -245,9 +270,8 @@ enum RequirementsService {
     @MainActor
     static func brewOutdatedNames(packages: [String]) async -> Set<String> {
         guard let brew = brewPath, !packages.isEmpty else { return [] }
-        var env = ProcessInfo.processInfo.environment
-        env["PATH"] = Homebrew.fullPATH
-        env["HOMEBREW_NO_AUTO_UPDATE"] = "1"
+        let env = brewEnvironment(
+            base: ProcessInfo.processInfo.environment, allowAutoUpdate: false)
         var names: Set<String> = []
         _ = await ProcessRunner.runRaw(
             executablePath: brew,
@@ -278,6 +302,7 @@ enum RequirementsService {
 
     /// Maps a failed brew run's log to a friendly one-liner when the cause is
     /// recognizably the network; nil keeps the generic check-the-log pointer.
+    /// "Already installed" chatter is excluded from failure detection.
     static func friendlyBrewFailure(inLog lines: [String]) -> String? {
         let networkTells = [
             "could not resolve host",
@@ -286,20 +311,69 @@ enum RequirementsService {
             "no route to host",
             "couldn't connect to server",
         ]
-        for line in lines {
+        for line in lines where !isSuppressedBrewNoise(line) {
             let lower = line.lowercased()
             if networkTells.contains(where: lower.contains) { return brewNetworkFailureMessage }
         }
         return nil
     }
 
-    /// The combined flow's argument plan: install what's missing, then
-    /// upgrade what's outdated. Pure so tests can pin the exact argv.
-    static func brewInvocations(missing: [String], outdated: [String]) -> [[String]] {
+    /// What the repair run means for the user, derived AFTER the forced
+    /// re-probe so the sheet never claims "All done" while a problem stands.
+    enum RepairOutcome: Equatable {
+        /// Exit 0 and no problems remain.
+        case success
+        /// Exit 0 but a repaired tool still derives a problem: brew's local
+        /// index likely lags the release. Carries the full user-facing copy.
+        case indexMayLag(String)
+        /// Non-zero exit: a friendly cause when recognizable, else nil
+        /// (the view keeps its generic check-the-log pointer).
+        case failed(String?)
+    }
+
+    static func repairOutcome(
+        exitCode: Int32,
+        remainingProblems: [ToolHealth],
+        log: [String]
+    ) -> RepairOutcome {
+        guard exitCode == 0 else { return .failed(friendlyBrewFailure(inLog: log)) }
+        guard !remainingProblems.isEmpty else { return .success }
+        let names = remainingProblems.map(\.brewPackage).joined(separator: " ")
+        return .indexMayLag(
+            "Homebrew reports it's already at its newest available version — the index may lag the release; try again later or update manually (brew upgrade \(names))."
+        )
+    }
+
+    /// The combined flow's argument plan: install what's missing, reinstall
+    /// what's broken, then upgrade what's outdated. Pure so tests can pin the
+    /// exact argv.
+    static func brewInvocations(missing: [String], broken: [String], outdated: [String]) -> [[String]] {
         var invocations: [[String]] = []
         if !missing.isEmpty { invocations.append(["install"] + missing) }
+        if !broken.isEmpty { invocations.append(["reinstall"] + broken) }
         if !outdated.isEmpty { invocations.append(["upgrade"] + outdated) }
         return invocations
+    }
+
+    /// The brew process environment. `allowAutoUpdate` must actively REMOVE
+    /// an inherited HOMEBREW_NO_AUTO_UPDATE (a shell-profile export would
+    /// otherwise silently keep the index stale through an upgrade).
+    static func brewEnvironment(base: [String: String], allowAutoUpdate: Bool) -> [String: String] {
+        var env = base
+        env["PATH"] = Homebrew.fullPATH
+        if allowAutoUpdate {
+            env.removeValue(forKey: "HOMEBREW_NO_AUTO_UPDATE")
+        } else {
+            env["HOMEBREW_NO_AUTO_UPDATE"] = "1"
+        }
+        return env
+    }
+
+    /// Strips brew's ANSI colour codes. The escape is a literal U+001B scalar
+    /// — an ICU pattern spelled "\\u{1B}" silently matches nothing.
+    static func strippedANSI(_ line: String) -> String {
+        line.replacingOccurrences(
+            of: "\u{1B}\\[[0-9;]*[A-Za-z]", with: "", options: .regularExpression)
     }
 
     /// Install `tools` via Homebrew, streaming each output line to `onLine`.
@@ -329,16 +403,19 @@ enum RequirementsService {
             onLine: onLine)
     }
 
-    /// The combined flow: install missing, then upgrade outdated, one shared
-    /// log stream. Stops at the first failing step and returns its exit code.
+    /// The combined flow: install missing, reinstall broken, then upgrade
+    /// outdated — one shared log stream. Stops at the first failing step and
+    /// returns its exit code.
     static func repairWithBrew(
         missing: [ToolRequirement],
+        broken: [ToolRequirement],
         outdated: [ToolRequirement],
         onLine: @escaping @MainActor (String) -> Void
     ) async -> Int32 {
         await runBrew(
             invocations: brewInvocations(
                 missing: missing.map(\.brewPackage),
+                broken: broken.map(\.brewPackage),
                 outdated: outdated.map(\.brewPackage)),
             allowAutoUpdate: !outdated.isEmpty,
             onLine: onLine)
@@ -350,18 +427,15 @@ enum RequirementsService {
         onLine: @escaping @MainActor (String) -> Void
     ) async -> Int32 {
         guard let brew = brewPath else { return -1 }
-        var env = ProcessInfo.processInfo.environment
-        env["PATH"] = Homebrew.fullPATH
-        if !allowAutoUpdate { env["HOMEBREW_NO_AUTO_UPDATE"] = "1" }
+        let env = brewEnvironment(
+            base: ProcessInfo.processInfo.environment, allowAutoUpdate: allowAutoUpdate)
         for arguments in invocations {
             let code = await ProcessRunner.runRaw(
                 executablePath: brew,
                 arguments: arguments,
                 environment: env,
                 onLine: { line in
-                    // Strip ANSI colour codes that brew emits
-                    let stripped = line.replacingOccurrences(
-                        of: "\\u{1B}\\[[0-9;]*[A-Za-z]", with: "", options: .regularExpression)
+                    let stripped = strippedANSI(line)
                     if !stripped.isEmpty { onLine(stripped) }
                 }
             )

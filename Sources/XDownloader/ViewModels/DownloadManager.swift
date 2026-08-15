@@ -40,6 +40,10 @@ class DownloadManager: ObservableObject {
     /// mirrored from `toolHealth` so views observing the manager re-render on
     /// probe results.
     @Published private(set) var toolHealths: [ToolHealth] = []
+    /// Session-scoped banner dismissal, keyed to the problem-set signature.
+    /// Lives here — not view @State — so closing and reopening the window
+    /// cannot resurrect a dismissed banner for an unchanged problem set.
+    @Published var dismissedBannerSignature: String? = nil
     /// Result of the most recent capture, shown in the window's fixed status
     /// line. Non-persistent feedback clears itself after a few seconds.
     @Published var captureFeedback: CaptureFeedback? = nil
@@ -1563,6 +1567,11 @@ class DownloadManager: ObservableObject {
                 unregister: { [weak self] in self?.activeProcesses.removeValue(forKey: item.id) }
             )
         }
+        // A backoff eta must not outlive the run that set it: a file landing
+        // already clears it (Phase 2); this covers a run that ends with NO
+        // file, so the next fallback never inherits a stale
+        // "rate limited — resuming in 14 minutes" note.
+        if item.outputPath == nil { item.eta = nil }
     }
 
     /// Last-resort fallback: X's GraphQL APIs sometimes hide tweets from
@@ -1572,6 +1581,9 @@ class DownloadManager: ObservableObject {
     /// (gallery-dl) failure message when it can't help. Returns true if the user
     /// pressed Stop mid-run — the item is set to .paused and the caller returns.
     private func runFxTwitterFallback(_ item: DownloadItem) async -> Bool {
+        // A seconds-long fxtwitter fetch must never display a rate-limit wait
+        // inherited from a previous tool's backoff.
+        item.eta = nil
         let fxTask = Task { await FxTwitterService.run(item: item, outputDirectory: outputDirectory) }
         activeFxTasks[item.id] = fxTask
         _ = await fxTask.value

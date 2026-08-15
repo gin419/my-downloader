@@ -39,9 +39,6 @@ struct ContentView: View {
     @State private var urlInput: String = ""
     @State private var isHoveringDrop = false
     @State private var showInstallSheet = false
-    /// ✕ hides the banner for the session — but keyed to the problem-set
-    /// signature, so a CHANGED problem set brings the banner back.
-    @State private var dismissedBannerSignature: String? = nil
     @State private var statusFilter: DownloadFilter = .all
     /// "Already in your list": the row to scroll to and pulse.
     @State private var scrollTarget: UUID?
@@ -50,11 +47,13 @@ struct ContentView: View {
     @State private var pulseTask: Task<Void, Never>?
     @FocusState private var isInputFocused: Bool
 
+    /// Dismissal lives on the manager (session-scoped), so closing and
+    /// reopening the window cannot resurrect a dismissed banner for an
+    /// unchanged problem set.
     private var bannerModel: RequirementsBannerModel? {
-        guard let model = RequirementsBannerModel.make(problems: manager.toolProblems),
-            model.signature != dismissedBannerSignature
-        else { return nil }
-        return model
+        RequirementsBannerModel.visibleModel(
+            problems: manager.toolProblems,
+            dismissedSignature: manager.dismissedBannerSignature)
     }
 
     var body: some View {
@@ -63,7 +62,7 @@ struct ContentView: View {
                 RequirementsBannerView(
                     model: model,
                     onAction: { showInstallSheet = true },
-                    onDismiss: { dismissedBannerSignature = model.signature }
+                    onDismiss: { manager.dismissedBannerSignature = model.signature }
                 )
                 .transition(.move(edge: .top).combined(with: .opacity))
             }
@@ -116,9 +115,10 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showInstallSheet) {
             // Signature-keyed dismissal makes a post-repair reset unnecessary:
-            // fixed problems hide the banner, changed ones bring it back.
-            InstallToolsSheet()
-                .environmentObject(manager)
+            // fixed problems hide the banner, changed ones bring it back. The
+            // sheet observes the monitor directly — a running repair survives
+            // dismissal and re-presentation.
+            InstallToolsSheet(monitor: manager.toolHealth)
         }
         .onDrop(of: [.plainText, .url], isTargeted: $isHoveringDrop) { providers in
             // Collect every provider first so one drop gesture is ONE capture —

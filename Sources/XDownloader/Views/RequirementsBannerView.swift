@@ -24,13 +24,16 @@ struct RequirementsBannerModel: Equatable {
     /// nil = State A (no problems → hidden).
     static func make(problems: [ToolHealth]) -> RequirementsBannerModel? {
         let missing = problems.filter { $0.status == .missing }
+        let broken = problems.filter {
+            if case .broken = $0.status { return true } else { return false }
+        }
         let outdated = problems.filter {
             if case .outdated = $0.status { return true } else { return false }
         }
-        guard !(missing.isEmpty && outdated.isEmpty) else { return nil }
+        guard !(missing.isEmpty && broken.isEmpty && outdated.isEmpty) else { return nil }
         let sig = signature(for: problems)
 
-        if outdated.isEmpty {
+        if broken.isEmpty && outdated.isEmpty {
             // State B
             return RequirementsBannerModel(
                 headline: "Missing: \(missing.map(\.name).joined(separator: ", "))",
@@ -39,7 +42,7 @@ struct RequirementsBannerModel: Equatable {
                 severity: .missing,
                 signature: sig)
         }
-        if missing.isEmpty {
+        if missing.isEmpty && broken.isEmpty {
             // State C
             let headline: String
             if outdated.count == 1, let tool = outdated.first,
@@ -57,15 +60,44 @@ struct RequirementsBannerModel: Equatable {
                 severity: .outdated,
                 signature: sig)
         }
-        // State D — red wins; outdated entries show the version only (the age
-        // would crowd out the missing half).
+        if missing.isEmpty && outdated.isEmpty {
+            // Broken only — red family: an unrunnable tool fails downloads
+            // exactly like a missing one.
+            let headline: String
+            if broken.count == 1, let tool = broken.first, case .broken(let detail) = tool.status {
+                headline = "\(tool.name) is broken (\(detail)) — reinstall it."
+            } else {
+                headline = "Broken: \(broken.map(\.name).joined(separator: ", ")) — reinstall them."
+            }
+            return RequirementsBannerModel(
+                headline: headline,
+                subtitle: "\(sitesPhrase(for: broken)) need \(broken.count == 1 ? "it" : "them").",
+                buttonTitle: "Set Up…",
+                severity: .missing,
+                signature: sig)
+        }
+        // State D — mixed categories, red wins; outdated entries show the
+        // version only (the age would crowd out the rest).
+        var segments: [String] = []
+        if !missing.isEmpty { segments.append("Missing: \(missing.map(\.name).joined(separator: ", "))") }
+        if !broken.isEmpty { segments.append("Broken: \(broken.map(\.name).joined(separator: ", "))") }
+        if !outdated.isEmpty { segments.append("Outdated: \(outdated.map(versionTag).joined(separator: ", "))") }
         return RequirementsBannerModel(
-            headline:
-                "Missing: \(missing.map(\.name).joined(separator: ", ")) · Outdated: \(outdated.map(versionTag).joined(separator: ", "))",
+            headline: segments.joined(separator: " · "),
             subtitle: "Downloads will fail or degrade until both are fixed.",
             buttonTitle: "Set Up…",
             severity: .missing,
             signature: sig)
+    }
+
+    /// The banner the window should actually show: nil when there are no
+    /// problems OR the current problem set's signature was dismissed. The
+    /// dismissal lives on DownloadManager (session-scoped), so closing and
+    /// reopening the window cannot resurrect a dismissed banner.
+    static func visibleModel(problems: [ToolHealth], dismissedSignature: String?) -> RequirementsBannerModel? {
+        guard let model = make(problems: problems), model.signature != dismissedSignature
+        else { return nil }
+        return model
     }
 
     /// Dismissal key: sorted "kind:id" components joined with "|"
@@ -77,6 +109,7 @@ struct RequirementsBannerModel: Equatable {
             .compactMap { health -> String? in
                 switch health.status {
                 case .missing: return "missing:\(health.id)"
+                case .broken: return "broken:\(health.id)"
                 case .outdated: return "outdated:\(health.id)"
                 case .ok: return nil
                 }

@@ -7,7 +7,8 @@ import SwiftUI
 enum InstallSheetModel {
     /// Footer primary button: only missing → "Install Missing Tools"; only
     /// outdated → "Update Outdated Tools"; both → "Install Missing + Update
-    /// Outdated"; neither → nil (Close is the only button).
+    /// Outdated"; neither → nil (Close is the only button). Broken tools
+    /// count in the missing bucket — the repair flow treats them alike.
     static func primaryActionLabel(missingCount: Int, outdatedCount: Int) -> String? {
         switch (missingCount > 0, outdatedCount > 0) {
         case (true, true): return "Install Missing + Update Outdated"
@@ -24,6 +25,8 @@ enum InstallSheetModel {
         switch health.status {
         case .missing:
             return "not found in any search path"
+        case .broken(let detail):
+            return "\(path) · \(detail)"
         case .ok(let version):
             return "\(path) · \(version)"
         case .outdated(let installed, let detail):
@@ -36,42 +39,45 @@ enum InstallSheetModel {
     static func pillLabel(for status: ToolStatus) -> String {
         switch status {
         case .missing: return "Missing"
+        case .broken: return "Broken"
         case .outdated: return "Outdated"
         case .ok: return "OK"
+        }
+    }
+
+    /// The manual fix-it command per problem kind.
+    static func manualCommand(for health: ToolHealth) -> String {
+        switch health.status {
+        case .broken: return "brew reinstall \(health.brewPackage)"
+        case .outdated: return "brew upgrade \(health.brewPackage)"
+        default: return "brew install \(health.brewPackage)"
         }
     }
 }
 
 /// Per-tool health table (every tool, not just missing ones) + the combined
-/// Homebrew repair flow: install what's missing, then upgrade what's
-/// outdated, streaming into one log.
+/// Homebrew repair flow: install missing → reinstall broken → upgrade
+/// outdated, streaming into one log. The run's state lives on the monitor,
+/// so dismissing and reopening the sheet shows the live run.
 struct InstallToolsSheet: View {
-    @EnvironmentObject var manager: DownloadManager
+    @ObservedObject var monitor: ToolHealthMonitor
     @Environment(\.dismiss) private var dismiss
 
-    @State private var installState: InstallState = .idle
-    @State private var log: [String] = []
-    /// Friendly cause line shown above the log on failure (e.g. network);
-    /// nil keeps the generic check-the-log pointer.
-    @State private var failureSummary: String? = nil
-
-    enum InstallState {
-        case idle, running
-        case done(success: Bool)
+    private var healths: [ToolHealth] { monitor.healths }
+    private var redFamilyCount: Int {
+        healths.filter {
+            switch $0.status {
+            case .missing, .broken: return true
+            case .outdated, .ok: return false
+            }
+        }.count
     }
-
-    private var healths: [ToolHealth] { manager.toolHealths }
-    private var missingHealths: [ToolHealth] {
-        healths.filter { $0.status == .missing }
-    }
-    private var outdatedHealths: [ToolHealth] {
+    private var outdatedCount: Int {
         healths.filter {
             if case .outdated = $0.status { return true } else { return false }
-        }
+        }.count
     }
-    private var isRunning: Bool {
-        if case .running = installState { return true } else { return false }
-    }
+    private var isRunning: Bool { monitor.repairState == .running }
 
     // MARK: - Body
 
@@ -86,7 +92,7 @@ struct InstallToolsSheet: View {
                         Divider()
                         logSection
                     }
-                    if !manager.toolProblems.isEmpty {
+                    if !monitor.problems.isEmpty {
                         Divider()
                         manualSection
                     }
@@ -150,7 +156,7 @@ struct InstallToolsSheet: View {
     private func statusPill(for status: ToolStatus) -> some View {
         let color: Color
         switch status {
-        case .missing: color = .red
+        case .missing, .broken: color = .red
         case .outdated: color = .orange
         case .ok: color = .green
         }
@@ -166,7 +172,7 @@ struct InstallToolsSheet: View {
     // MARK: - Homebrew log
 
     private var showsLogSection: Bool {
-        if case .idle = installState { return false } else { return true }
+        if case .idle = monitor.repairState { return false } else { return true }
     }
 
     private var logSection: some View {
@@ -175,34 +181,51 @@ struct InstallToolsSheet: View {
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundColor(.secondary)
 
-            if case .done(let success) = installState {
-                HStack(spacing: 8) {
-                    Image(systemName: success ? "checkmark.circle.fill" : "xmark.circle.fill")
-                        .foregroundColor(success ? .green : .red)
-                    Text(resultLine(success: success))
-                        .font(.system(size: 12))
-                }
+            if case .done(let outcome) = monitor.repairState {
+                resultRow(for: outcome)
             }
 
             logView
         }
     }
 
-    private func resultLine(success: Bool) -> String {
-        if success { return "All done — the statuses above are refreshed." }
-        return failureSummary ?? "Some tools failed to install or update. Check the log below."
+    /// Post-repair truth, judged AFTER the forced re-probe: "All done" only
+    /// when no problem remains; an exit-0 run that left a problem standing
+    /// names the likely index lag instead.
+    private func resultRow(for outcome: RequirementsService.RepairOutcome) -> some View {
+        let icon: String
+        let color: Color
+        let text: String
+        switch outcome {
+        case .success:
+            icon = "checkmark.circle.fill"
+            color = .green
+            text = "All done — the statuses above are refreshed."
+        case .indexMayLag(let copy):
+            icon = "exclamationmark.triangle.fill"
+            color = .orange
+            text = copy
+        case .failed(let friendly):
+            icon = "xmark.circle.fill"
+            color = .red
+            text = friendly ?? "Some tools failed to install or update. Check the log below."
+        }
+        return HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: icon).foregroundColor(color)
+            Text(text).font(.system(size: 12))
+        }
     }
 
     private var logView: some View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 2) {
-                    ForEach(Array(log.enumerated()), id: \.offset) { _, line in
+                    ForEach(Array(monitor.repairLog.enumerated()), id: \.offset) { _, line in
                         Text(line)
                             .font(.system(size: 11, design: .monospaced))
                             .foregroundColor(.primary.opacity(0.8))
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .id(line + String(log.count))
+                            .id(line + String(monitor.repairLog.count))
                     }
                     Color.clear.frame(height: 1).id("bottom")
                 }
@@ -212,7 +235,7 @@ struct InstallToolsSheet: View {
             .background(Color(nsColor: .textBackgroundColor).opacity(0.6))
             .clipShape(RoundedRectangle(cornerRadius: 8))
             .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.primary.opacity(0.1), lineWidth: 1))
-            .onChange(of: log.count) {
+            .onChange(of: monitor.repairLog.count) {
                 proxy.scrollTo("bottom")
             }
         }
@@ -236,11 +259,8 @@ struct InstallToolsSheet: View {
                 }
             }
 
-            ForEach(manager.toolProblems) { health in
-                let command =
-                    health.status == .missing
-                    ? "brew install \(health.brewPackage)"
-                    : "brew upgrade \(health.brewPackage)"
+            ForEach(monitor.problems) { health in
+                let command = InstallSheetModel.manualCommand(for: health)
                 VStack(alignment: .leading, spacing: 6) {
                     HStack {
                         Text(health.name)
@@ -289,10 +309,10 @@ struct InstallToolsSheet: View {
 
             if RequirementsService.brewPath != nil,
                 let label = InstallSheetModel.primaryActionLabel(
-                    missingCount: missingHealths.count,
-                    outdatedCount: outdatedHealths.count)
+                    missingCount: redFamilyCount,
+                    outdatedCount: outdatedCount)
             {
-                Button(label, action: startRepair)
+                Button(label) { monitor.startRepair() }
                     .buttonStyle(.borderedProminent)
                     .tint(.orange)
                     .disabled(isRunning)
@@ -300,30 +320,5 @@ struct InstallToolsSheet: View {
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 14)
-    }
-
-    // MARK: - Actions
-
-    private func startRepair() {
-        let missingTools = missingHealths.compactMap { RequirementsService.tool(withID: $0.id) }
-        let outdatedTools = outdatedHealths.compactMap { RequirementsService.tool(withID: $0.id) }
-        guard !(missingTools.isEmpty && outdatedTools.isEmpty) else { return }
-
-        log = []
-        failureSummary = nil
-        withAnimation { installState = .running }
-
-        Task {
-            let code = await RequirementsService.repairWithBrew(
-                missing: missingTools, outdated: outdatedTools
-            ) { line in
-                // "already installed" chatter would drown the signal — drop it.
-                if !RequirementsService.isSuppressedBrewNoise(line) { log.append(line) }
-            }
-            // Re-probe so the pills above tell the post-repair truth.
-            manager.toolHealth.refresh(force: true)
-            if code != 0 { failureSummary = RequirementsService.friendlyBrewFailure(inLog: log) }
-            withAnimation { installState = .done(success: code == 0) }
-        }
     }
 }
