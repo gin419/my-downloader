@@ -50,6 +50,12 @@ enum DownloadStatus: Equatable, Codable {
     private enum CodingKeys: String, CodingKey { case kind, message }
     private enum Kind: String, Codable { case queued, fetching, downloading, paused, completed, failed }
 
+    /// Substituted when a persisted failed status decodes with a missing or
+    /// empty message — without it the row renders as a blank red row after
+    /// relaunch, with nothing to explain the state.
+    static let decodedFailureFallbackMessage =
+        "Download failed before a reason was recorded — Retry."
+
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         switch try c.decode(Kind.self, forKey: .kind) {
@@ -58,7 +64,7 @@ enum DownloadStatus: Equatable, Codable {
         case .completed: self = .completed
         case .failed:
             let m = (try? c.decode(String.self, forKey: .message)) ?? ""
-            self = .failed(m)
+            self = .failed(m.isEmpty ? Self.decodedFailureFallbackMessage : m)
         }
     }
 
@@ -155,6 +161,11 @@ class DownloadItem: Identifiable, ObservableObject {
     /// kept across the subtitles-disabled re-run — the same binary re-runs,
     /// so the same WARNINGs re-fire anyway.
     var extractorBreakage: ExtractorBreakage = .none
+    /// In-memory only (NOT persisted). The off-site URL yt-dlp was following
+    /// when the "external_redirect" sentinel fired — lets DownloadManager name
+    /// the destination host in the final user-facing failure message. Cleared
+    /// with the other per-attempt parse state in resetForReattempt().
+    var externalRedirectURL: String?
 
     init(url: String, addedAt: Date = Date()) {
         self.url = url
@@ -185,6 +196,7 @@ class DownloadItem: Identifiable, ObservableObject {
         mediaCategory = .unknown
         lastToolWarning = nil
         extractorBreakage = .none
+        externalRedirectURL = nil
     }
 
     /// Mark this item finished: completed status, full progress, no live speed/eta.

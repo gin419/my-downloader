@@ -102,6 +102,58 @@ enum YtDlpService {
     static let transientFormatMessage =
         "No downloadable format — usually a brief YouTube hiccup, click Retry."
 
+    // Known raw ERROR lines replaced with app-native copy naming the true
+    // cause and the in-app fix (the model is GalleryDlService's
+    // Instagram-login mapping). Same constraints as above: internal so tests
+    // share one source of truth, and none may match DownloadManager's
+    // empty-success auto-retry predicate.
+    static let privateVideoMessage =
+        "Private video — sign in with an authorized account in the browser chosen in Settings → Cookies, then Retry."
+    static let ageRestrictedMessage =
+        "Age-restricted — needs a signed-in browser session (Settings → Cookies)."
+    static let membersOnlyMessage =
+        "Members-only video — needs cookies from a member account."
+    static let botCheckMessage =
+        "YouTube wants a signed-in session — pick your YouTube browser in Settings → Cookies (update yt-dlp if this repeats)."
+    static let http403Message =
+        "YouTube rejected the download (HTTP 403) — this usually means yt-dlp is outdated. Update it, then Retry."
+    static let cookieDatabaseMessage =
+        "Couldn't read the selected browser's cookies — pick the browser and profile you actually use in Settings → Cookies."
+    static let ffmpegMissingMessage =
+        "ffmpeg is required to convert or merge media — install it (brew install ffmpeg), then Retry."
+
+    /// Known raw ERROR lines → app-native copy. Compound (multi-substring)
+    /// patterns come first so the most specific match wins; nil keeps the
+    /// caller's verbatim-line behavior for unrecognized errors.
+    static func mappedErrorMessage(for line: String) -> String? {
+        let lower = line.lowercased()
+        if lower.contains("postprocessing"),
+            lower.contains("ffmpeg") || lower.contains("ffprobe"),
+            lower.contains("not found") || lower.contains("not installed")
+        {
+            return ffmpegMissingMessage
+        }
+        if lower.contains("could not find"), lower.contains("cookies database") {
+            return cookieDatabaseMessage
+        }
+        if lower.contains("unable to download video data"), lower.contains("403") {
+            return http403Message
+        }
+        // yt-dlp relays YouTube's own phrasing, which uses a right single
+        // quote ("you’re") — accept the plain apostrophe too.
+        if lower.contains("sign in to confirm you're not a bot")
+            || lower.contains("sign in to confirm you’re not a bot")
+        {
+            return botCheckMessage
+        }
+        if lower.contains("sign in to confirm your age") { return ageRestrictedMessage }
+        if lower.contains("members-only") || lower.contains("join this channel") {
+            return membersOnlyMessage
+        }
+        if lower.contains("private video") { return privateVideoMessage }
+        return nil
+    }
+
     // MARK: - Output parsing
 
     /// Cleans a yt-dlp filename stem into a display title by stripping the suffixes
@@ -220,6 +272,9 @@ enum YtDlpService {
             !SiteRegistry.isTwitterContent(detected)
         {
             terminate()
+            // Remembered so DownloadManager can name the destination host if
+            // the sentinel below survives the whole fallback chain.
+            item.externalRedirectURL = detected
             item.status = .failed("external_redirect")
             return
         }
@@ -233,22 +288,34 @@ enum YtDlpService {
         // filename containing tell text must never trigger detection.
         // ("Precondition check failed" is deliberately NOT a tell — it fires
         // transiently on healthy installs.)
-        if line.hasPrefix("WARNING"), SiteRegistry.profile(for: item.url).id == "youtube" {
-            let lowerWarning = line.lowercased()
-            if lowerWarning.contains("no supported javascript runtime") {
-                item.extractorBreakage = .missingJSRuntime
-                return
+        if line.hasPrefix("WARNING") {
+            if SiteRegistry.profile(for: item.url).id == "youtube" {
+                let lowerWarning = line.lowercased()
+                if lowerWarning.contains("no supported javascript runtime") {
+                    item.extractorBreakage = .missingJSRuntime
+                    return
+                }
+                if lowerWarning.contains("signature extraction failed")
+                    || lowerWarning.contains("nsig extraction failed")
+                    || lowerWarning.contains("only images are available")
+                {
+                    // Never downgrade missingJSRuntime: a missing runtime also
+                    // breaks signature extraction, and installing deno is the
+                    // actionable root cause.
+                    if item.extractorBreakage == .none { item.extractorBreakage = .staleTool }
+                    return
+                }
             }
-            if lowerWarning.contains("signature extraction failed")
-                || lowerWarning.contains("nsig extraction failed")
-                || lowerWarning.contains("only images are available")
-            {
-                // Never downgrade missingJSRuntime: a missing runtime also
-                // breaks signature extraction, and installing deno is the
-                // actionable root cause.
-                if item.extractorBreakage == .none { item.extractorBreakage = .staleTool }
-                return
-            }
+            // Any other WARNING (all sites): not a failure by itself, but when
+            // the run ends badly the most recent one is the best clue why —
+            // remember it (minus the prefix) so DownloadManager can cite it in
+            // exit-code failures, mirroring GalleryDlService's capture.
+            let body =
+                line.hasPrefix("WARNING: ")
+                ? String(line.dropFirst("WARNING: ".count)) : line
+            let trimmed = body.trimmingCharacters(in: .whitespaces)
+            if !trimmed.isEmpty { item.lastToolWarning = trimmed }
+            return
         }
 
         // Errors
@@ -279,7 +346,9 @@ enum YtDlpService {
                 item.subtitleDownloadFailed = true
                 return
             } else {
-                item.status = .failed(line)
+                // Known raw errors get app-native copy naming the true cause
+                // and the in-app fix; everything else stays verbatim.
+                item.status = .failed(Self.mappedErrorMessage(for: line) ?? line)
             }
         }
     }

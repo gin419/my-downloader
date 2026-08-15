@@ -1200,6 +1200,54 @@ class DownloadManager: ObservableObject {
         items.contains { $0.id == item.id }
     }
 
+    // MARK: - Failure messages
+
+    /// yt-dlp exit-0-but-no-files message. Part of the empty-success family:
+    /// `isEmptySuccessMessage` matches it by prefix (the gallery-dl-missing
+    /// hint may be appended) so the one-shot auto-retry keeps firing.
+    static let ytDlpEmptySuccessMessage =
+        "yt-dlp reported success but found no media to download — the link may be a playlist/channel page, or the post has no video."
+
+    /// Appended to the final failure when the fallback loop skipped gallery-dl
+    /// because it isn't installed — the missing tool, not the site, is then
+    /// the likely cause.
+    static let galleryDlMissingHint =
+        " (gallery-dl is not installed — installing it usually fixes X/Instagram/Reddit downloads; see Settings.)"
+
+    /// User-facing copy replacing the internal "external_redirect" sentinel.
+    /// The sentinel itself must survive the fallback chain (which keys on a
+    /// `.failed` status to run fxtwitter), so the swap happens at the last
+    /// moment before the message can reach any renderer.
+    static func externalRedirectMessage(detectedURL: String?) -> String {
+        if let detectedURL, let host = URL(string: detectedURL)?.host {
+            return "This tweet links to external content (\(host)) — paste that link directly to download it."
+        }
+        return "This tweet links to external content — paste that link directly to download it."
+    }
+
+    /// Signal-aware yt-dlp failure line — a signal number is not an exit code
+    /// the tool chose. Cites the run's last captured WARNING when present.
+    static func ytDlpFailureMessage(code: Int32, wasSignal: Bool, lastWarning: String?) -> String {
+        var message = wasSignal ? "yt-dlp was terminated (signal \(code))" : "yt-dlp exited with code \(code)"
+        if let lastWarning { message += " — last warning: \(lastWarning)" }
+        return message
+    }
+
+    /// True only for the "empty success" family — a tool exited 0 with no
+    /// files — which is exactly what the one-shot auto-retry re-queues.
+    /// Formerly a substring match ("found no media" / "No media found" /
+    /// "cookies.txt") that new error copy kept tripping (the NSFW mapping
+    /// mentions cookies.txt but must NOT re-run); now pinned to the message
+    /// constants themselves. Prefix matches cover the two dynamic variants:
+    /// "No media found — <captured warning>" and the appended
+    /// `galleryDlMissingHint`.
+    static func isEmptySuccessMessage(_ message: String) -> Bool {
+        if message == GalleryDlService.noMediaGenericMessage { return true }
+        if message.hasPrefix(GalleryDlService.noMediaWarningPrefix) { return true }
+        if message.hasPrefix(ytDlpEmptySuccessMessage) { return true }
+        return false
+    }
+
     private func runDownload(_ item: DownloadItem) async {
         guard stillInList(item) else { return }
         item.status = .fetching
@@ -1210,7 +1258,7 @@ class DownloadManager: ObservableObject {
         let effectiveSubtitleLanguage: SubtitleLanguage = item.subtitlesDisabled ? .none : subtitleLanguage
 
         let cookies = resolveCookiesForDownload()
-        var ytExitCode: Int32 = 0
+        var ytResult = ProcessResult(code: 0, wasSignal: false)
         await cookieAccess.withScope(for: item.id, file: cookies.path, grantedURL: cookies.granted) {
             let args = YtDlpService.buildArguments(
                 for: item,
@@ -1225,7 +1273,7 @@ class DownloadManager: ObservableObject {
                 cookiesFile: cookies.path
             )
 
-            ytExitCode = await ProcessRunner.run(
+            ytResult = await ProcessRunner.run(
                 executablePath: ytdlpPath,
                 arguments: args,
                 item: item,
@@ -1258,7 +1306,7 @@ class DownloadManager: ObservableObject {
         // subtitle case so other non-zero exits (e.g. a Twitter multi-video tweet
         // that partially downloaded) still fall through to the fallback below.
         let subtitleOnlyFailure = item.subtitleDownloadFailed && !hasFatalError
-        if mediaCaptured && (ytExitCode == 0 || subtitleOnlyFailure) {
+        if mediaCaptured && (ytResult.isSuccess || subtitleOnlyFailure) {
             // Counts must match deliverables on disk: pre-merge stream
             // Destination lines are ignored, so fill any zero left when only
             // intermediates were seen (or refresh the title off the final path).
@@ -1302,12 +1350,16 @@ class DownloadManager: ObservableObject {
         // reordering a site's fallbacks is now a profile edit, not a change here.
         let profile = SiteRegistry.profile(for: item.url)
         var ranFallback = false
+        var skippedMissingGalleryDl = false
         for fallback in profile.fallbacks {
             guard stillInList(item) else { return }  // ✕ during a fallback run
             if case .completed = item.status { break }  // a prior fallback already won
             switch fallback {
             case .galleryDl:
-                guard let gdlPath = galleryDlPath else { continue }  // tool not installed
+                guard let gdlPath = galleryDlPath else {  // tool not installed
+                    skippedMissingGalleryDl = true
+                    continue
+                }
                 ranFallback = true
                 await runGalleryDlFallback(item, executablePath: gdlPath)
             case .fxTwitter:
@@ -1318,14 +1370,24 @@ class DownloadManager: ObservableObject {
         }
 
         // No fallback ran (none declared for this site, or gallery-dl missing) —
-        // finalize yt-dlp's own outcome.
+        // finalize yt-dlp's own outcome. When gallery-dl was skipped for being
+        // missing, say so: the absent tool, not the site, is the likely cause.
         if !ranFallback {
-            if case .failed = item.status {
-                // already set by YtDlpService
-            } else if ytExitCode == 0 {
-                item.status = .failed("yt-dlp reported success but found no media to download.")
+            let hint = skippedMissingGalleryDl ? Self.galleryDlMissingHint : ""
+            if case .failed(let message) = item.status {
+                // already set by YtDlpService — annotate real messages only,
+                // never the external_redirect control-flow sentinel (replaced
+                // wholesale right before finalize below).
+                if !hint.isEmpty, message != "external_redirect" {
+                    item.status = .failed(message + hint)
+                }
+            } else if ytResult.isSuccess {
+                item.status = .failed(Self.ytDlpEmptySuccessMessage + hint)
             } else {
-                item.status = .failed("yt-dlp exited with code \(ytExitCode)")
+                item.status = .failed(
+                    Self.ytDlpFailureMessage(
+                        code: ytResult.code, wasSignal: ytResult.wasSignal,
+                        lastWarning: item.lastToolWarning) + hint)
             }
         }
 
@@ -1334,11 +1396,11 @@ class DownloadManager: ObservableObject {
         // hiccup (token rotation, brief rate-limit, cache miss) that one
         // extra attempt clears. Genuinely-unreachable tweets just hit the
         // same outcome and stay Failed. Real errors (non-zero exit codes)
-        // don't match the message check below and skip the retry, so we
-        // don't waste time re-running obvious network/auth failures.
+        // don't match the predicate below and skip the retry, so we don't
+        // waste time re-running obvious network/auth failures.
         let isEmptySuccess: Bool = {
             guard case .failed(let msg) = item.status else { return false }
-            return msg.contains("found no media") || msg.contains("No media found") || msg.contains("cookies.txt")
+            return Self.isEmptySuccessMessage(msg)
         }()
         if isEmptySuccess && !item.autoRetryAttempted {
             item.autoRetryAttempted = true
@@ -1348,6 +1410,17 @@ class DownloadManager: ObservableObject {
             try? await Task.sleep(nanoseconds: 5_000_000_000)
             await runDownload(item)
             return
+        }
+
+        // Replace the internal external-redirect sentinel with user-facing
+        // copy at the LAST moment before the message can reach a renderer
+        // (row, menu bar, NotificationService, history write). Every earlier
+        // consumer — the fallback chain, the auto-retry predicate — must keep
+        // seeing the sentinel itself, whichever path let it survive (the
+        // !ranFallback branch above, or fxtwitter restoring it as the prior
+        // status when it couldn't help).
+        if case .failed(let message) = item.status, message == "external_redirect" {
+            item.status = .failed(Self.externalRedirectMessage(detectedURL: item.externalRedirectURL))
         }
 
         finalize(item)

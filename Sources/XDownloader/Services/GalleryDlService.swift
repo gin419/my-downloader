@@ -2,6 +2,93 @@ import Foundation
 
 enum GalleryDlService {
 
+    // MARK: - Failure messages
+
+    // Known raw gallery-dl output replaced with app-native copy naming the
+    // true cause and the in-app fix. Internal (not private) so tests share
+    // one source of truth. Only the empty-success family further down may
+    // match DownloadManager's empty-success auto-retry predicate.
+    static let nsfwTweetMessage =
+        "This tweet is marked sensitive — export a cookies.txt file in Settings (browser cookies often can't unlock NSFW X media), then Retry."
+    static let protectedTweetMessage =
+        "This account's posts are protected — you must follow it; sign in via Settings → Cookies, then Retry."
+    static let xAuthMessage =
+        "X sign-in needed or expired — sign in to X in the browser in Settings → Cookies, then Retry. "
+        + "If you're already signed in and this persists, update gallery-dl."
+    static let internalErrorMessage =
+        "gallery-dl hit an internal error — the site may have changed its API. "
+        + "Updating gallery-dl (brew upgrade gallery-dl) usually fixes this."
+    static let instagramChallengeMessage =
+        "Instagram is asking for a security check — open instagram.com, complete it, then Retry."
+    static let unsupportedURLMessage =
+        "gallery-dl doesn't recognize this URL — if the site recently changed links, updating gallery-dl may add support."
+    static let instagramLoginMessage =
+        "Instagram requires login — sign in to Instagram in the browser selected in Settings → Cookies, then Retry."
+
+    // Empty-success messages (exit 0, no files): the ONLY messages allowed to
+    // trigger DownloadManager's one-shot empty-success auto-retry — its
+    // predicate matches exactly these (plus the `noMediaWarningPrefix`
+    // dynamic variant), so new failure copy must not reuse this phrasing.
+    static let noMediaTwitterMessage =
+        "No media found — the tweet may be deleted, or export cookies.txt in Settings (recommended for X sensitive/NSFW content)."
+    static let noMediaInstagramMessage =
+        "No media found — the post may be deleted, or sign in to Instagram in the browser selected in Settings → Cookies, then Retry."
+    static let noMediaRedditMessage =
+        "No media found — the post may be deleted, or the subreddit may be private."
+    static let noMediaGenericMessage = "No media found at this link."
+    /// Prefix of the dynamic "No media found — <captured warning>" variant.
+    static let noMediaWarningPrefix = "No media found — "
+
+    /// Site-appropriate "exit 0 but no files" message. (The pre-Phase-2 code
+    /// hardcoded the Twitter wording for every non-Instagram site, telling
+    /// Reddit users about deleted tweets and cookies.txt.)
+    static func emptySuccessMessage(forProfileID id: String) -> String {
+        switch id {
+        case "twitter": return noMediaTwitterMessage
+        case "instagram": return noMediaInstagramMessage
+        case "reddit": return noMediaRedditMessage
+        default: return noMediaGenericMessage
+        }
+    }
+
+    /// Known raw error lines → app-native copy, ordered most-specific-first:
+    /// the NSFW/Protected forms must win over the AuthRequired umbrella they
+    /// are nested in. nil keeps the caller's verbatim-line behavior.
+    static func mappedErrorMessage(for line: String) -> String? {
+        if line.contains("NSFW Tweet") { return nsfwTweetMessage }
+        if line.contains("Protected Tweet") || line.contains("Tweets are protected") {
+            return protectedTweetMessage
+        }
+        if line.contains("AuthRequired") || line.contains("Could not authenticate you")
+            || line.contains("401 Unauthorized")
+        {
+            return xAuthMessage
+        }
+        if line.contains("An unexpected error occurred") { return internalErrorMessage }
+        if line.contains("[instagram]"), line.lowercased().contains("challenge") {
+            return instagramChallengeMessage
+        }
+        if line.contains("Unsupported URL") { return unsupportedURLMessage }
+        return nil
+    }
+
+    /// Decodes gallery-dl's documented exit-status bitmask (1 unspecified,
+    /// 4 HTTP, 8 network, 16 auth, 64 unsupported URL, 128 OS error — see
+    /// gallery_dl/exception.py) into named causes, citing the run's last
+    /// captured warning when there is one.
+    static func exitFailureMessage(code: Int32, lastWarning: String?) -> String {
+        var causes: [String] = []
+        if code & 4 != 0 { causes.append("a network/HTTP error") }
+        if code & 8 != 0 { causes.append("a connection problem") }
+        if code & 16 != 0 { causes.append("an authorization problem — check Settings → Cookies") }
+        if code & 64 != 0 { causes.append("URL not recognized") }
+        if code & 128 != 0 { causes.append("a disk or file error") }
+        if causes.isEmpty { causes = ["an unspecified error"] }
+        var message = "gallery-dl failed: \(causes.joined(separator: " + ")) (code \(code))"
+        if let lastWarning { message += " — last warning: \(lastWarning)" }
+        return message
+    }
+
     // MARK: - Download
 
     @MainActor
@@ -17,7 +104,7 @@ enum GalleryDlService {
     ) async {
         let beforeFiles = Set((try? FileManager.default.contentsOfDirectory(atPath: outputDirectory.path)) ?? [])
 
-        let exitCode = await ProcessRunner.run(
+        let result = await ProcessRunner.run(
             executablePath: executablePath,
             arguments: arguments(
                 for: item.url, outputDirectory: outputDirectory,
@@ -29,10 +116,16 @@ enum GalleryDlService {
             lineParser: { line, item in parseLine(line, item: item) }
         )
 
-        guard exitCode == 0 else {
+        guard result.isSuccess else {
             if case .failed = item.status {
+            } else if result.wasSignal {
+                // Killed by a signal (our own pause/cancel terminate(), or a
+                // crash) — the exit bitmask only describes real exits, so
+                // decoding a signal number would invent false causes.
+                item.status = .failed("gallery-dl was terminated (signal \(result.code))")
             } else {
-                item.status = .failed("gallery-dl exit code \(exitCode)")
+                item.status = .failed(
+                    Self.exitFailureMessage(code: result.code, lastWarning: item.lastToolWarning))
             }
             return
         }
@@ -61,13 +154,10 @@ enum GalleryDlService {
         // (age-restriction, media unavailable, …) over the generic guess.
         guard item.outputPath != nil else {
             if let warning = item.lastToolWarning {
-                item.status = .failed("No media found — \(warning)")
-            } else if SiteRegistry.profile(for: item.url).id == "instagram" {
-                item.status = .failed(
-                    "No media found — the post may be deleted, or sign in to Instagram in the browser selected in Settings → Cookies, then Retry.")
+                item.status = .failed(Self.noMediaWarningPrefix + warning)
             } else {
                 item.status = .failed(
-                    "No media found — the tweet may be deleted, or export cookies.txt in Settings (recommended for X sensitive/NSFW content).")
+                    Self.emptySuccessMessage(forProfileID: SiteRegistry.profile(for: item.url).id))
             }
             return
         }
@@ -231,6 +321,26 @@ enum GalleryDlService {
             return
         }
 
+        // Rate limit: gallery-dl sleeps through site rate limits printing only
+        // "[…][info] Waiting for 14 minutes until 12:34:56 (rate limit)" — up
+        // to ~15 minutes on X, during which the row would look hung. Remember
+        // it like a warning, and surface the wait through the row's existing
+        // ETA field (shown whenever the progress section is; no layout change).
+        if line.contains("Waiting for"), line.contains("rate limit") {
+            if let r = line.range(of: "[info] ") {
+                item.lastToolWarning = String(line[r.upperBound...]).trimmingCharacters(in: .whitespaces)
+            } else {
+                item.lastToolWarning = line
+            }
+            if let start = line.range(of: "Waiting for "),
+                let end = line.range(of: " until "),
+                start.upperBound < end.lowerBound
+            {
+                item.eta = "\(line[start.upperBound..<end.lowerBound]) (rate limit)"
+            }
+            return
+        }
+
         // "[twitter][info] No results for <url>": X's TweetDetail API returned
         // an empty conversation for an existing tweet — seen when X temporarily
         // limits a (typically spam-flagged) account's visibility. The state can
@@ -245,14 +355,15 @@ enum GalleryDlService {
         // so replace it with the fix.
         if line.contains("[instagram][error]"), line.lowercased().contains("login") {
             if case .failed = item.status { return }
-            item.status = .failed(
-                "Instagram requires login — sign in to Instagram in the browser selected in Settings → Cookies, then Retry.")
+            item.status = .failed(Self.instagramLoginMessage)
             return
         }
 
         if line.lowercased().contains("error") {
             if case .failed = item.status { return }
-            item.status = .failed(line)
+            // Known raw errors get app-native copy naming the true cause and
+            // the in-app fix; everything else stays verbatim.
+            item.status = .failed(Self.mappedErrorMessage(for: line) ?? line)
         }
     }
 

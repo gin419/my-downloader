@@ -107,7 +107,9 @@ struct MenuBarMenuView: View {
     private func failureLine(_ state: MenuBarState) -> String {
         var line = "⚠ \(state.failedCount) failed"
         if let message = state.firstFailureMessage {
-            line += " — \(String(message.prefix(40)))"
+            // Full message, no prefix cap: the mapped failure copy puts the
+            // actionable fix in the tail, which a 40-char cut always lost.
+            line += " — \(message)"
         }
         return line
     }
