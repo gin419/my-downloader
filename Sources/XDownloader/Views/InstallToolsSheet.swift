@@ -1,6 +1,17 @@
 import AppKit
 import SwiftUI
 
+/// Pure copy/derivation helpers for the install sheet, split out so the
+/// footer's adaptive primary-button label is testable without a view.
+enum InstallSheetModel {
+    /// Footer primary button: only missing → "Install Missing Tools"; only
+    /// outdated → "Update Outdated Tools"; both → "Install Missing + Update
+    /// Outdated"; neither → nil (Close is the only button).
+    static func primaryActionLabel(missingCount: Int, outdatedCount: Int) -> String? {
+        nil  // stub — implemented in the follow-up commit
+    }
+}
+
 struct InstallToolsSheet: View {
     @EnvironmentObject var manager: DownloadManager
     @Environment(\.dismiss) private var dismiss
