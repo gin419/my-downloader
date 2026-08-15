@@ -76,8 +76,14 @@ jobs:
         # Needs the macOS 15.4 SDK (NSPasteboard.accessBehavior) → Xcode 16.3+.
         run: sudo xcode-select -s /Applications/Xcode_16.4.app
 
-      - name: Build release binary
-        run: swift build -c release
+      - name: Build release binary (universal)
+        # arm64 + x86_64: macos-15 runners are Apple Silicon, and a host-arch
+        # build shipped v1.9.2 unable to launch on Intel Macs. Two --triple
+        # builds (build.sh merges them with lipo) instead of --arch, which
+        # delegates to XCBuild and fails on CLT-only machines without Xcode.
+        run: |
+          swift build -c release --triple arm64-apple-macosx
+          swift build -c release --triple x86_64-apple-macosx
 
       # Assemble the bundle. No Developer ID cert is in the keychain yet, so
       # build.sh takes its ad-hoc path here; the authoritative Developer ID sign
@@ -86,6 +92,10 @@ jobs:
       # it matches the appcast's sparkle:version.
       - name: Create app bundle
         run: ./build.sh release
+
+      # Regression guard: a non-universal bundle must never reach signing.
+      - name: Verify universal bundle (arm64 + x86_64)
+        run: scripts/verify-universal.sh build/XDownloader.app
 
       # Import the Developer ID Application cert into a throwaway keychain so
       # codesign can use its private key non-interactively. The keychain is
