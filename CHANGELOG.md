@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Entries before _Unreleased_ were back-filled from git history.
 
+## [Unreleased]
+
+### Fixed
+- **Universal binaries — Intel Macs can run releases again** — published builds
+  were arm64-only because CI's `swift build -c release` compiled only the Apple
+  Silicon runner's host architecture, so the app could not launch on Intel Macs
+  at all. Release builds (CI and `./build.sh release`) are now universal
+  (arm64 + x86_64), and CI fails any bundle whose app binary or embedded Sparkle
+  framework is missing either slice. The macOS 14.0 support floor is unchanged.
+
 ## [1.9.2] — 2026-08-09
 
 ### Fixed

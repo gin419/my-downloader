@@ -27,16 +27,19 @@ jobs:
       - name: Test
         run: swift test
 
-      - name: Build (release)
-        run: swift build -c release
+      - name: Build (release, universal)
+        # Two --triple builds (build.sh merges them with lipo); --arch would
+        # need full Xcode's XCBuild, which CLT-only dev machines lack.
+        run: |
+          swift build -c release --triple arm64-apple-macosx
+          swift build -c release --triple x86_64-apple-macosx
 
       # Exercise build.sh end-to-end (bundling + tag version-stamping) without publishing.
       - name: Bundle smoke test
         run: |
           ./build.sh release
-          test -x build/XDownloader.app/Contents/MacOS/XDownloader
-          # Sparkle must ship inside the bundle with the rpath pointing at it.
-          test -d build/XDownloader.app/Contents/Frameworks/Sparkle.framework
-          otool -l build/XDownloader.app/Contents/MacOS/XDownloader | grep -q "@loader_path/../Frameworks"
+          # Bundle structure + universal (arm64 + x86_64) assertions live in the
+          # shared gate script, also used by release.yml before signing.
+          scripts/verify-universal.sh build/XDownloader.app
           echo "Stamped version: $(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' build/XDownloader.app/Contents/Info.plist)"
           /usr/libexec/PlistBuddy -c "Print :CFBundleVersion" build/XDownloader.app/Contents/Info.plist >/dev/null

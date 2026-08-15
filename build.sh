@@ -7,9 +7,25 @@ BUNDLE_NAME="$BUILD_DIR/$APP_NAME.app"
 CONFIG=${1:-release}   # debug | release (default: release)
 
 echo "🔨 Building $APP_NAME ($CONFIG)..."
-swift build -c "$CONFIG"
-
-BINARY=".build/$CONFIG/$APP_NAME"
+if [ "$CONFIG" = "release" ]; then
+    # Release builds are UNIVERSAL (arm64 + x86_64): CI runners are Apple
+    # Silicon, and a host-arch build shipped v1.9.2 unable to launch on Intel
+    # Macs. Each slice is built separately and merged with lipo, because the
+    # combined `swift build --arch a --arch b` form delegates to XCBuild,
+    # which ships only with full Xcode — Command Line Tools-only machines
+    # (like the maintainer's) lack it.
+    swift build -c "$CONFIG" --triple arm64-apple-macosx
+    swift build -c "$CONFIG" --triple x86_64-apple-macosx
+    ARM64_BIN="$(swift build -c "$CONFIG" --triple arm64-apple-macosx --show-bin-path)/$APP_NAME"
+    X86_64_BIN="$(swift build -c "$CONFIG" --triple x86_64-apple-macosx --show-bin-path)/$APP_NAME"
+    mkdir -p ".build/universal-$CONFIG"
+    BINARY=".build/universal-$CONFIG/$APP_NAME"
+    xcrun lipo -create "$ARM64_BIN" "$X86_64_BIN" -output "$BINARY"
+else
+    # Debug builds stay host-arch for speed.
+    swift build -c "$CONFIG"
+    BINARY="$(swift build -c "$CONFIG" --show-bin-path)/$APP_NAME"
+fi
 
 echo "📦 Creating app bundle..."
 rm -rf "$BUNDLE_NAME"

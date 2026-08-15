@@ -11,7 +11,7 @@ Instagram, and 1,000+ other sites — powered by `yt-dlp` and `gallery-dl`,
 wrapped in a clean SwiftUI front end.
 
 [![Latest release](https://img.shields.io/github/v/release/gin419/my-downloader?style=flat-square&color=000)](https://github.com/gin419/my-downloader/releases/latest)
-[![macOS 14+](https://img.shields.io/badge/macOS-14%2B-000?style=flat-square&logo=apple)](#requirements)
+[![macOS 14+ Universal](https://img.shields.io/badge/macOS-14%2B%20Universal-000?style=flat-square&logo=apple)](#requirements)
 [![Swift 5.9](https://img.shields.io/badge/Swift-5.9-F05138?style=flat-square&logo=swift&logoColor=white)](Package.swift)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-000?style=flat-square)](#license)
 
@@ -94,7 +94,7 @@ brew install yt-dlp gallery-dl ffmpeg
 
 | Tool | Why | Install |
 | --- | --- | --- |
-| macOS 14+ | SwiftUI features used by the UI | — |
+| macOS 14+ (Apple Silicon or Intel) | SwiftUI features used by the UI; the app ships as a universal binary | — |
 | [`yt-dlp`](https://github.com/yt-dlp/yt-dlp) | Video downloads (X, YouTube, 1,000+ sites) | `brew install yt-dlp` |
 | [`gallery-dl`](https://github.com/mikf/gallery-dl) | Image downloads (multi-image tweets) | `brew install gallery-dl` |
 | [`ffmpeg`](https://ffmpeg.org) | Merges separate video + audio streams | `brew install ffmpeg` |
