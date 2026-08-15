@@ -1311,6 +1311,38 @@ class DownloadManager: ObservableObject {
         return false
     }
 
+    // MARK: - Cookies-file truth
+
+    /// Persistent status line shown when the configured cookies.txt can't back
+    /// a download — the security-scoped bookmark won't resolve, the stored
+    /// plain path no longer exists, or bookmark creation failed at selection
+    /// time. Shared by all three surfaces so the user reads one consistent
+    /// instruction instead of a silent downgrade to browser cookies.
+    static let cookiesFileInaccessibleFeedbackMessage =
+        "Your cookies.txt could not be accessed — re-select it in Settings → Cookies."
+
+    /// Persistent status line for the cookie-save rescue: the media itself is
+    /// on disk; only yt-dlp's write-back of cookies at exit failed.
+    static let cookieSaveFailedFeedbackMessage =
+        "Downloaded, but your cookies.txt couldn't be updated — it's missing or not writable. Re-select it in Settings → Cookies."
+
+    /// Replaces the raw Python traceback when the cookie save failed AND no
+    /// media landed on disk — the traceback names the mechanics, this names
+    /// the fix.
+    static let cookiesFileMissingFailureMessage =
+        "Your cookies.txt file is missing or unreadable — re-select it in Settings → Cookies, then Retry."
+
+    /// True when `message` is yt-dlp's cookie-save traceback for the run's own
+    /// cookies file. yt-dlp saves cookies BACK to the `--cookies` file at exit;
+    /// a deleted/moved (FileNotFoundError) or read-only (PermissionError) file
+    /// ends the run with a raw Python traceback AFTER the media downloaded, and
+    /// "filenotfounderror:" contains "error:", so parseLine fails the item on
+    /// it. Requiring the cookies file's own name keeps unrelated tracebacks
+    /// failing truthfully.
+    static func isCookieSaveTraceback(message: String, cookiesFilePath: String?) -> Bool {
+        false  // declared red — implemented together with the rescue
+    }
+
     private func runDownload(_ item: DownloadItem) async {
         guard stillInList(item) else { return }
         item.status = .fetching
