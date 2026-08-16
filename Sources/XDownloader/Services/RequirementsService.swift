@@ -65,6 +65,7 @@ enum RequirementsService {
                 "/usr/bin/yt-dlp",
                 "\(home)/.local/bin/yt-dlp",
                 "/opt/local/bin/yt-dlp",
+                AppPaths.appManagedToolPath("yt-dlp", home: home),
             ]
         )
     }()
@@ -86,6 +87,7 @@ enum RequirementsService {
                 "\(home)/Library/Python/3.13/bin/gallery-dl",
                 "\(home)/.local/bin/gallery-dl",
                 "/opt/local/bin/gallery-dl",
+                AppPaths.appManagedToolPath("gallery-dl", home: home),
             ]
         )
     }()
@@ -103,6 +105,7 @@ enum RequirementsService {
                 "/usr/bin/ffmpeg",
                 "\(home)/.local/bin/ffmpeg",
                 "/opt/local/bin/ffmpeg",
+                AppPaths.appManagedToolPath("ffmpeg", home: home),
             ],
             // ffmpeg has no `--version`: it exits 8 with the banner on stderr
             // and NOTHING on stdout. `-version` prints
@@ -127,6 +130,7 @@ enum RequirementsService {
                 "\(home)/.deno/bin/deno",
                 "\(home)/.local/bin/deno",
                 "/opt/local/bin/deno",
+                AppPaths.appManagedToolPath("deno", home: home),
             ]
         )
     }()
@@ -280,6 +284,23 @@ enum RequirementsService {
         path.hasPrefix("/opt/homebrew/") || path.hasPrefix("/usr/local/")
     }
 
+    /// True when `path` lives under the app-managed tools directory
+    /// (`~/Library/Application Support/XDownloader/tools`).
+    static func isAppManagedPath(
+        _ path: String,
+        home: String = FileManager.default.homeDirectoryForCurrentUser.path
+    ) -> Bool {
+        let root = URL(fileURLWithPath: AppPaths.toolsDirectory(home: home)).standardizedFileURL.path
+        let standardized = URL(fileURLWithPath: path).standardizedFileURL.path
+        return standardized == root || standardized.hasPrefix(root + "/")
+    }
+
+    /// Where `brew install <id>` puts the public symlink, derived from the
+    /// resolved brew executable (Apple Silicon vs Intel prefix).
+    static func brewBinDestination(toolID: String, brewPath: String) -> String {
+        (brewPath as NSString).deletingLastPathComponent + "/" + toolID
+    }
+
     /// `brew outdated --quiet <names>` against the LOCAL formula index — no
     /// forced network. Names not managed by brew make it exit non-zero;
     /// failures are tolerated silently (whatever names it printed still
@@ -316,6 +337,10 @@ enum RequirementsService {
     /// Surfaced above the log when a brew run failed on a network error.
     static let brewNetworkFailureMessage =
         "Homebrew couldn't reach the network — check your connection and try again."
+
+    /// Post-rollback copy — a failed confirmed run never claims "All done".
+    static let repairRolledBackMessage =
+        "Install failed — previous tools were restored."
 
     /// brew's "already installed and up-to-date" warnings are noise in a
     /// repair log — the interesting lines are the ones that change something.

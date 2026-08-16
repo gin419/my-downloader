@@ -9,51 +9,133 @@ no format questions. Everything below works backwards from that.
 
 Four pillars, in the order they'll land:
 
-1. **Close the loop** — the app tells you when it's done; many links queue as
-   easily as one.
-2. **Always within reach** — a URL never needs the main window: menu bar,
-   automation hooks, zero-click capture.
-3. **Zero setup** — the app manages its own downloader tools and updates
-   itself; a signed bundle you download once.
-4. **A library, not a log** — what you downloaded is browsable: thumbnails,
-   preview, search, one-click re-download.
+1. **Close the loop** — *shipped v1.5* — the app tells you when it's done;
+   many links queue as easily as one.
+2. **Always within reach** — *shipped v1.6* — a URL never needs the main
+   window: menu bar, automation hooks, zero-click capture.
+3. **Zero setup** — *shipped v1.7–v1.11* — the app updates itself and can
+   install or upgrade its downloader tools from the UI, with or without
+   Homebrew. The primed hero button is the remaining gap on this pillar.
+4. **A library, not a log** — *next* — what you downloaded is browsable:
+   thumbnails, preview, search, one-click re-download.
 
----
-
-## Shipped (current: v1.7.0)
-
-All core features are live. Pillars 1 and 2 have landed (v1.5 closed the loop;
-v1.6 put the app within reach via the menu bar, `xdownloader://`, and file
-import — plus Instagram support), and pillar 3 is underway: **v1.7 shipped
-auto-update** (Sparkle 2 — the app now checks, verifies, and installs new
-releases itself). See [FEATURES.md](FEATURES.md) for the full list and
+See [FEATURES.md](FEATURES.md) for the live feature list and
 [CHANGELOG.md](../CHANGELOG.md) for release history.
 
 ---
 
-## v1.7 — Zero setup
+## Shipped (current: v1.11.0)
 
-- **Auto-update** *(shipped v1.7.0)* — the app checks for, verifies (EdDSA), and
-  installs new releases itself via Sparkle 2, replacing the manual trip to the
-  Releases page. Feed is a cumulative appcast on GitHub Pages.
-- **Signed & notarized releases** — no more right-click-Open on first launch;
-  also gives updates a second trust anchor (Apple Developer ID alongside the
-  Sparkle EdDSA signature) and unlocks Sparkle signing-key rotation
-- **Primed hero button** *(carried from v1.6; design signed off)* — when the
-  window gains focus (e.g. hovered via a focus-follows-mouse utility such as
-  [AutoRaise](https://github.com/sbmpost/AutoRaise)), the hero button primes
-  itself with a fresh clipboard URL, so a single click — no paste, no Enter —
-  starts the download
-- **Self-managed tools** — install and update `yt-dlp`/`gallery-dl` from
-  inside the app; Homebrew becomes optional
+Pillars 1 and 2 are live. Pillar 3 is live except the primed hero button:
+v1.11 added a brew-free first launch (standalone downloads, two-step
+confirm, rollback). Several items that were never on the original lists
+also shipped and are recorded below so this file stays the plan, not a
+fossil.
+
+### Pillar 1 — Close the loop (v1.5.0)
+
+- **Finish notifications** — a macOS notification for each completed or
+  failed download while the app is in the background.
+- **Batch input** — paste, drop, or ⌘D text containing any number of links
+  and they all queue at once.
+
+### Pillar 2 — Always within reach (v1.6.0)
+
+- **Menu bar extra** — live unfinished count (capped at "9+"), failure
+  triangle, Paste and Download, activity summary, up to five live rows,
+  Retry All Failed, Open / Settings / Quit. Optional: hide in Settings or
+  ⌘-drag the icon out.
+- **`xdownloader://` URL scheme** — `xdownloader://download?url=…` (repeat
+  `url=`, or `urls=`) for Shortcuts, Raycast, and scripts. Quiet background
+  queue; the window rises only when something needs attention. No clipboard
+  verb — webpages can fire scheme URLs.
+- **Import from file (`⌘O`)** — File → Import Links… reads a plain-text
+  file through the same capture flow.
+- **Quiet Funnel hero button** — one click reads the clipboard and
+  downloads; with text in the field the same slot becomes **Download**.
+  Status-line feedback answers every capture without shifting the layout.
+
+Also landed in v1.6 (not originally pillar work): **Instagram** (Reels,
+videos, carousels via yt-dlp; images / mixed posts via gallery-dl).
+
+### Pillar 3 — Zero setup (v1.7.0 – v1.11.0)
+
+- **Auto-update** *(shipped v1.7.0)* — Sparkle 2 daily background check
+  against the cumulative GitHub Pages appcast. Standard update window
+  (Install / Remind Me Later / Skip This Version). Settings → Updates has
+  current version, Check Now, and an automatic-check toggle. A quiet
+  "Update Available" menu bar row exists only while an update is pending.
+  Updates are EdDSA-signed. Development builds (`0.0.0` or bare `swift run`)
+  disable checking. Updates are never installed without a click.
+- **Signed & notarized releases** *(shipped v1.8.0)* — Developer ID + Apple
+  notarization (stapled). Double-click opens; no right-click → Open. Sparkle
+  nested helpers are re-signed under the same team. The notarized zip is
+  the exact GitHub Release artifact.
+- **Universal binaries** *(shipped v1.9.3)* — arm64 + x86_64. Intel Macs
+  run official releases again; CI fails a bundle missing either slice.
+- **Honest Toolbox** *(shipped v1.10.0)* — this is the in-app half of
+  "self-managed tools". At launch and on return to the app, it probes
+  yt-dlp, gallery-dl, ffmpeg, and deno. Amber banner = outdated (yt-dlp
+  older than ~90 days, or Homebrew's index says behind). Red = missing or
+  broken. The Set Up sheet is a per-tool health table; one button installs
+  the missing and upgrades the outdated via Homebrew. deno is a first-class
+  requirement. Banner and download engine share one path list, so "looks
+  healthy" and "actually runs" cannot disagree.
+- **Homebrew-optional / standalone tools** *(shipped v1.11.0)* — a machine
+  with no Homebrew can finish first-run from Set Up: official standalone
+  downloads of yt-dlp, ffmpeg, deno, and gallery-dl into Application
+  Support. The user picks tools and installer, then confirms the plan
+  (destination, source, rollback notice) before anything runs. A failed
+  run restores the previous binaries or deletes files this run created.
+  Homebrew stays the default when present; unmanaged pipx / MacPorts
+  copies are not overwritten.
+
+### Shipped off the original plan
+
+These were not on the v1.7 / v2.0 lists. They are live and stay out of the
+"next" column.
+
+- **X / Twitter Likes sync** *(v1.9.0–v1.9.2)* — one `@handle`, reuse the
+  selected browser session (or `cookies.txt`), manually sync accessible
+  liked images / videos / GIFs. One aggregate task with durable counts and
+  an expandable failure list. Chrome / Edge profile picker so the
+  authenticated session is the one that actually runs.
+- **Truthful outcomes** *(v1.10.0)* — failure copy names the real cause
+  (stale tool, missing deno/ffmpeg, private / age-gated, cookies, Instagram
+  checkpoint) instead of a generic hiccup. Partial multi-file posts say
+  "Saved N files — Retry fetches the rest". Rate-limit sleeps show
+  "resuming in …" instead of looking hung.
+
+---
+
+## Still open on pillar 3
+
+- **Primed hero button** *(design signed off in the v1.6 cycle; not built)*
+  — when the window gains focus (e.g. hovered via a focus-follows-mouse
+  utility such as [AutoRaise](https://github.com/sbmpost/AutoRaise)), the
+  hero button would prime itself with a fresh clipboard URL so a single
+  click — no paste, no Enter — starts the download.
+
+  Constraint: clipboard reads are deliberately gesture-only (Paste &
+  Download, ⌘D, menu bar) and never run on a timer or focus change, so the
+  macOS 15.4+ pasteboard-privacy prompt stays tied to a click the user just
+  made. Any implementation has to keep that invariant — priming the *label*
+  without a silent `NSPasteboard` read, or finding another consent-safe
+  moment.
+
+---
 
 ## v2.0 — A library, not a log
 
+Nothing below has shipped. History is still a SQLite log with dedup, not a
+browsable library.
+
 - **Thumbnails & in-app preview** for completed downloads
-- **List density / view switcher** — compact vs. comfortable rows (and a gallery
-  view) as a view control next to the filter bar, Finder-style — a view mode,
-  not another Settings toggle
-- **Per-download format override** — pick format/quality per URL, not globally
+- **List density / view switcher** — compact vs. comfortable rows (and a
+  gallery view) as a view control next to the filter bar, Finder-style — a
+  view mode, not another Settings toggle
+- **Per-download format override** — pick format/quality per URL, not
+  globally
 - **Search & re-download** across the full download history
 - **Share Sheet / browser extension** — send URLs straight from Safari or
   Chrome

@@ -42,12 +42,20 @@ final class ToolHealthMonitor: ObservableObject {
     @Published private(set) var repairState: RepairState = .idle
     @Published private(set) var repairLog: [String] = []
 
+    /// Choice/confirm live here so tests can drive the two-step gate without
+    /// a view. Dismissing the sheet while in choose/confirm returns to `.health`.
+    @Published private(set) var setupStep: ToolSetupStep = .health
+
     private let tools: [ToolRequirement]
     private let pathResolver: (ToolRequirement) -> String?
     private let versionLineProvider: (String, [String]) async -> String?
     private let brewOutdatedProvider: ([String]) async -> Set<String>
     private let now: () -> Date
     private let cacheInterval: TimeInterval
+    private let brewPathProvider: () -> String?
+    private let toolsDirectory: URL
+    private let executePlan: ((ToolSetupPlan, @escaping @MainActor @Sendable (String) -> Void) async -> ToolRepairResult)?
+    private var lastDraft: ToolSetupDraft?
 
     private var activated = false
     private var lastProbeAt: Date?
@@ -68,7 +76,12 @@ final class ToolHealthMonitor: ObservableObject {
         versionLineProvider: ((String, [String]) async -> String?)? = nil,
         brewOutdatedProvider: (([String]) async -> Set<String>)? = nil,
         now: @escaping () -> Date = Date.init,
-        cacheInterval: TimeInterval = 60
+        cacheInterval: TimeInterval = 60,
+        brewPathProvider: @escaping () -> String? = { RequirementsService.brewPath },
+        toolsDirectory: URL = URL(fileURLWithPath: AppPaths.toolsDirectory()),
+        executePlan: (
+            (ToolSetupPlan, @escaping @MainActor @Sendable (String) -> Void) async -> ToolRepairResult
+        )? = nil
     ) {
         self.tools = tools
         self.pathResolver = pathResolver
@@ -78,6 +91,9 @@ final class ToolHealthMonitor: ObservableObject {
         self.brewOutdatedProvider = brewOutdatedProvider ?? { await RequirementsService.brewOutdatedNames(packages: $0) }
         self.now = now
         self.cacheInterval = cacheInterval
+        self.brewPathProvider = brewPathProvider
+        self.toolsDirectory = toolsDirectory
+        self.executePlan = executePlan
         // Seed from existence alone so the missing/ok split is right the
         // instant the banner first renders; versions arrive with the probe.
         healths = tools.map { tool in
@@ -183,6 +199,7 @@ final class ToolHealthMonitor: ObservableObject {
         if case .done = repairState, judgedProblems != problems {
             repairState = .idle
             judgedProblems = nil
+            if case .result = setupStep { setupStep = .health }
         }
     }
 
@@ -236,48 +253,133 @@ final class ToolHealthMonitor: ObservableObject {
         return (missing, broken, outdated, unmanaged)
     }
 
-    /// Runs the combined brew repair (install missing → reinstall broken →
-    /// upgrade outdated), then force-re-probes and judges the outcome against
-    /// the POST-repair statuses — never "All done" while a problem stands.
     /// The problem set a finished repair's outcome was judged against. When a
     /// later probe derives a DIFFERENT problem set, the stale `.done` verdict
     /// must not keep rendering ("All done" against new problems) — the state
     /// returns to `.idle`.
     private var judgedProblems: [ToolHealth]?
 
+    /// Current problems that the wizard can actually act on (not unmanaged).
+    var hasActionableSetup: Bool {
+        currentDraft().hasAnyActionable
+    }
+
+    func currentDraft() -> ToolSetupDraft {
+        ToolSetupPlanner.makeDraft(
+            problems: problems,
+            resolvedPath: pathResolver,
+            brewPath: brewPathProvider(),
+            toolsDirectory: toolsDirectory.path)
+    }
+
+    /// Opens the choice step. No installer is invoked.
+    func beginChoice() {
+        guard repairState != .running else { return }
+        let draft = currentDraft()
+        lastDraft = draft
+        setupStep = .choose(draft)
+    }
+
+    func setChoiceSelected(toolID: String, selected: Bool) {
+        guard case .choose(var draft) = setupStep else { return }
+        draft.setSelected(toolID: toolID, selected: selected)
+        lastDraft = draft
+        setupStep = .choose(draft)
+    }
+
+    func setChoiceInstaller(toolID: String, installer: ToolInstallerKind) {
+        guard case .choose(var draft) = setupStep else { return }
+        draft.setInstaller(toolID: toolID, installer: installer)
+        lastDraft = draft
+        setupStep = .choose(draft)
+    }
+
+    /// Choice → confirm. No-op unless at least one actionable tool is checked.
+    func reviewPlan() {
+        guard case .choose(let draft) = setupStep, let plan = ToolSetupPlanner.freeze(draft) else {
+            return
+        }
+        lastDraft = draft
+        setupStep = .confirm(plan)
+    }
+
+    func backToChoice() {
+        guard case .confirm = setupStep else { return }
+        setupStep = .choose(lastDraft ?? currentDraft())
+    }
+
+    /// Dismiss / cancel on choose or confirm: drop the wizard, start nothing.
+    /// A run already in flight is left alone.
+    func cancelSetup() {
+        switch setupStep {
+        case .choose, .confirm:
+            setupStep = .health
+        default:
+            break
+        }
+    }
+
+    func confirmAndStart() {
+        guard case .confirm(let plan) = setupStep else { return }
+        startRepair(plan: plan)
+    }
+
+    /// No-plan entry: never installs. Clears a stale verdict (used by tests
+    /// and as a safe idle reset). The sheet no longer calls this to repair.
     func startRepair() {
         guard repairState != .running else { return }
-        let plan = Self.repairPlan(problems: problems, resolvedPath: pathResolver)
-        guard !(plan.missing.isEmpty && plan.broken.isEmpty && plan.outdated.isEmpty) else {
-            // Nothing brew can act on (fixed since the sheet rendered, or
-            // only non-brew installs remain): clear any stale verdict and
-            // re-probe — a leftover "All done" must not render against the
-            // current problem set.
-            repairState = .idle
-            judgedProblems = nil
-            refresh(force: true)
+        repairState = .idle
+        judgedProblems = nil
+        setupStep = .health
+        refresh(force: true)
+    }
+
+    /// The only entry that downloads or invokes brew. `plan` is the frozen
+    /// confirmation — callers must not invent work outside `ToolSetupPlanner.freeze`.
+    func startRepair(plan: ToolSetupPlan) {
+        guard repairState != .running else { return }
+        guard !plan.items.isEmpty else {
+            startRepair()
             return
         }
         repairLog = []
         repairState = .running
+        setupStep = .running
         repairTask = Task { [weak self] in
-            let code = await RequirementsService.repairWithBrew(
-                missing: plan.missing, broken: plan.broken, outdated: plan.outdated
-            ) { [weak self] line in
-                // The full stream, "already up-to-date" included — the log
-                // must never be empty after a run. Noise is filtered only
-                // from failure DETECTION, not from the log.
-                self?.repairLog.append(line)
-            }
             guard let self else { return }
+            let result = await self.execute(plan)
             self.refresh(force: true)
             await self.awaitProbesSettled()
-            self.repairState = .done(
-                RequirementsService.repairOutcome(
-                    exitCode: code, remainingProblems: self.problems, log: self.repairLog))
+            let outcome: RequirementsService.RepairOutcome
+            if result.rolledBack {
+                outcome = .failed(
+                    result.failureMessage ?? RequirementsService.repairRolledBackMessage)
+            } else {
+                outcome = RequirementsService.repairOutcome(
+                    exitCode: result.processExitCode,
+                    remainingProblems: self.problems,
+                    log: self.repairLog)
+            }
+            self.repairState = .done(outcome)
+            self.setupStep = .result(outcome)
             self.judgedProblems = self.problems
             self.repairTask = nil
         }
+    }
+
+    func awaitRepairSettled() async {
+        while let task = repairTask { _ = await task.value }
+    }
+
+    private func execute(_ plan: ToolSetupPlan) async -> ToolRepairResult {
+        let sink: @MainActor @Sendable (String) -> Void = { [weak self] line in
+            self?.repairLog.append(line)
+        }
+        if let executePlan {
+            return await executePlan(plan, sink)
+        }
+        let runner = ToolRepairRunner(seams: .production(toolsDirectory: toolsDirectory))
+        return await runner.run(plan: plan, onLine: sink)
     }
 
     /// Test seam: `repairState` is private(set); the reset-to-idle rules need

@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Entries before _Unreleased_ were back-filled from git history.
 
+## [1.11.0] — 2026-08-17
+
+### Added
+- **Homebrew-optional tool setup** — first-run no longer requires brew.sh.
+  When Homebrew is missing, Set Up can install and update yt-dlp, gallery-dl,
+  ffmpeg, and deno from official standalone downloads into Application
+  Support. Homebrew stays the default installer when it is already on the
+  machine; pipx / MacPorts / `~/.local` copies are never overwritten.
+- **Two-step confirmation** — Set Up now opens a wizard: pick which tools
+  to act on and which installer (Homebrew or standalone), then review the
+  plan (action, destination, current version, official source, rollback
+  notice). Nothing is downloaded or brew-installed until **Confirm and
+  start**.
+- **Transactional rollback** — a failed confirmed run restores the previous
+  binaries (or deletes files this run created) and cleans leftover
+  `.partial` / `.pre-repair` staging. The sheet says the previous tools
+  were restored; it never claims "All done" after a rolled-back failure.
+
 ## [1.10.0] — 2026-08-16
 
 ### Added

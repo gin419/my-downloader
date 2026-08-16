@@ -73,3 +73,10 @@
 - **Max concurrent downloads** — stepper from 1–5
 - **Show download date & time** per row
 - **Open completed file as** — prefer Video or Audio when both exist
+
+## Tools
+- **Install without Homebrew** — a machine with no Homebrew can finish first-run setup from inside the app: install and update `yt-dlp`, `gallery-dl`, `ffmpeg`, and `deno`
+- **You choose, then confirm** — Set Up opens a two-step wizard: pick which tools to act on and whether to use Homebrew (when it is already installed) or a standalone download; a second screen restates the plan (action, installer, destination, current version, official source) before anything is downloaded or brew-installed
+- **Failed runs roll back** — if a confirmed run fails, previous binaries are restored (or files this run created are removed); leftover `.partial` / `.pre-repair` staging is cleaned up
+- **Homebrew stays preferred** — when Homebrew is already on the machine, it is the default installer for missing tools and the only in-app installer for brew-managed copies; standalone binaries live last on the search path so brew / pipx / MacPorts still win when present
+- **Unmanaged copies are left alone** — a pipx, MacPorts, or `~/.local` binary is not overwritten; the sheet tells you to update that copy yourself

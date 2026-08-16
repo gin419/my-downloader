@@ -67,6 +67,27 @@ final class ToolHealthTests: XCTestCase {
         }
     }
 
+    func testAppManagedPathIsLastSearchPath() {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        for tool in RequirementsService.all {
+            XCTAssertEqual(
+                tool.searchPaths.last,
+                AppPaths.appManagedToolPath(tool.id, home: home),
+                "\(tool.id) must search the app-managed dir last so brew/pipx still win")
+        }
+    }
+
+    func testIsAppManagedPath() {
+        let dest = AppPaths.appManagedToolPath("yt-dlp")
+        XCTAssertTrue(RequirementsService.isAppManagedPath(dest))
+        XCTAssertTrue(
+            RequirementsService.isAppManagedPath(AppPaths.galleryDlPackageDirectory()))
+        XCTAssertFalse(RequirementsService.isAppManagedPath("/opt/homebrew/bin/yt-dlp"))
+        XCTAssertFalse(
+            RequirementsService.isAppManagedPath(
+                FileManager.default.homeDirectoryForCurrentUser.path + "/.local/bin/yt-dlp"))
+    }
+
     // MARK: - Unified path resolver
 
     func testResolverFirstExistingSearchPathWins() {
