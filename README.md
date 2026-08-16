@@ -177,9 +177,13 @@ See [FEATURES.md](docs/FEATURES.md) for the canonical list.
 ## Roadmap
 
 The end state: an app you could hand to someone who has never heard of
-`yt-dlp` — one gesture in, file out, no Homebrew, no terminal. Next up:
-finish notifications, batch input, then menu bar presence and self-managed
-tools.
+`yt-dlp` — one gesture in, file out, no Homebrew, no terminal.
+
+Pillars 1 and 2 have shipped (notifications, batch input, menu bar,
+`xdownloader://`, file import). Pillar 3 is almost there: auto-update,
+signed/notarized universal releases, and in-app tool install/upgrade via
+Homebrew. Still open: a Homebrew-free first launch, and the primed hero
+button. Next is pillar 4 — a library, not a log.
 
 See [ROADMAP.md](docs/ROADMAP.md) for the full plan — it's the source of truth.
 
