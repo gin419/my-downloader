@@ -47,8 +47,13 @@ final class StaleToolAnnotationTests: XCTestCase {
     }
 
     func testAnnotatedMessageStaysOutsideTheAutoRetryFamily() {
-        let annotated = DownloadManager.annotatedWithInstalledVersion(
-            YtDlpService.staleToolMessage, ytDlpStatus: outdatedStatus)
-        XCTAssertFalse(DownloadManager.isEmptySuccessMessage(annotated))
+        // Structural gate since Phase 4d: annotation happens AFTER the
+        // auto-retry check and never arms `item.emptySuccessFailure`, so the
+        // annotated diagnosis can't re-queue the item on a later finalize.
+        let item = DownloadItem(url: "https://youtube.com/watch?v=abc")
+        item.status = .failed(
+            DownloadManager.annotatedWithInstalledVersion(
+                YtDlpService.staleToolMessage, ytDlpStatus: outdatedStatus))
+        XCTAssertFalse(DownloadManager.shouldAutoRetryEmptySuccess(item))
     }
 }

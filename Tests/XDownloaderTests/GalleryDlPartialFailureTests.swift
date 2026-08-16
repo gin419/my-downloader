@@ -107,3 +107,94 @@ final class GalleryDlPartialFailureMessageTests: XCTestCase {
                 + "Retry fetches the rest.")
     }
 }
+
+/// GalleryDlService.run's exit handling end-to-end against a fake gallery-dl
+/// (a /tmp shell script that replays captured output): a partial failure must
+/// report the saved count and the FIRST error, a no-file failure keeps
+/// today's messages, and the empty-success guard arms the structural
+/// auto-retry flag.
+@MainActor
+final class GalleryDlRunExitTruthTests: XCTestCase {
+
+    private var fixtureDir: URL!
+
+    override func setUpWithError() throws {
+        fixtureDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("gdl-exit-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: fixtureDir, withIntermediateDirectories: true)
+    }
+
+    /// The script `cat`s its recorded output from a side file — no shell
+    /// quoting of the replayed lines to get wrong.
+    private func makeScript(lines: [String], exitCode: Int32) throws -> String {
+        let script = fixtureDir.appendingPathComponent("fake-gallery-dl")
+        let output = fixtureDir.appendingPathComponent("fake-gallery-dl.out")
+        try (lines.map { $0 + "\n" }.joined()).write(to: output, atomically: true, encoding: .utf8)
+        try "#!/bin/sh\ncat \"$0.out\"\nexit \(exitCode)\n"
+            .write(to: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+        return script.path
+    }
+
+    private func run(lines: [String], exitCode: Int32) async throws -> DownloadItem {
+        let item = DownloadItem(url: "https://x.com/a/status/123")
+        let script = try makeScript(lines: lines, exitCode: exitCode)
+        await GalleryDlService.run(
+            item: item, executablePath: script, outputDirectory: fixtureDir,
+            cookieBrowser: .none, register: { _ in }, unregister: {})
+        return item
+    }
+
+    private let errorLine = "[twitter][error] HttpError: 404 Not Found for media 2"
+
+    func testPartialFailureReportsSavedCountAndFirstError() async throws {
+        // One file of a four-image tweet 404s, the rest download: the exit
+        // bitmask's generic guess must not clobber the truth.
+        let item = try await run(
+            lines: [
+                "\(fixtureDir.path)/gin - four photos [123] #1.jpg",
+                errorLine,
+                "\(fixtureDir.path)/gin - four photos [123] #3.jpg",
+                "\(fixtureDir.path)/gin - four photos [123] #4.jpg",
+            ],
+            exitCode: 4)
+
+        XCTAssertEqual(
+            item.status,
+            .failed(GalleryDlService.partialFailureMessage(savedCount: 3, firstError: errorLine)))
+        XCTAssertEqual(item.imageCount, 3)
+        XCTAssertFalse(item.emptySuccessFailure, "files landed — this must not arm the auto-retry")
+    }
+
+    func testNoFileFailureKeepsTheSpecificError() async throws {
+        let item = try await run(lines: [errorLine], exitCode: 4)
+
+        XCTAssertEqual(item.status, .failed(errorLine))
+    }
+
+    func testNoFileFailureWithoutAnErrorLineKeepsTheBitmaskMessage() async throws {
+        let item = try await run(lines: [], exitCode: 4)
+
+        XCTAssertEqual(
+            item.status, .failed(GalleryDlService.exitFailureMessage(code: 4, lastWarning: nil)))
+    }
+
+    func testEmptySuccessArmsTheStructuralFlag() async throws {
+        // exit 0, no files: the guard composes the site-branched message AND
+        // sets the flag the auto-retry gate consumes.
+        let item = try await run(lines: [], exitCode: 0)
+
+        XCTAssertEqual(item.status, .failed(GalleryDlService.noMediaTwitterMessage))
+        XCTAssertTrue(item.emptySuccessFailure)
+    }
+
+    func testEmptySuccessWithWarningArmsTheFlagAndCitesTheWarning() async throws {
+        let item = try await run(
+            lines: ["[twitter][warning] this tweet is age-restricted"], exitCode: 0)
+
+        XCTAssertEqual(
+            item.status,
+            .failed(GalleryDlService.noMediaWarningPrefix + "this tweet is age-restricted"))
+        XCTAssertTrue(item.emptySuccessFailure)
+    }
+}

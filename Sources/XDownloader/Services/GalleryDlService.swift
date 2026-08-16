@@ -6,8 +6,9 @@ enum GalleryDlService {
 
     // Known raw gallery-dl output replaced with app-native copy naming the
     // true cause and the in-app fix. Internal (not private) so tests share
-    // one source of truth. Only the empty-success family further down may
-    // match DownloadManager's empty-success auto-retry predicate.
+    // one source of truth. None of these are empty-success failures: the
+    // paths composing them never set `item.emptySuccessFailure`, so they
+    // never trigger the one-shot auto-retry.
     static let nsfwTweetMessage =
         "This tweet is marked sensitive — export a cookies.txt file in Settings (browser cookies often can't unlock NSFW X media), then Retry."
     static let protectedTweetMessage =
@@ -27,10 +28,10 @@ enum GalleryDlService {
     static let instagramLoginMessage =
         "Instagram requires login — sign in to Instagram in the browser selected in Settings → Cookies, then Retry."
 
-    // Empty-success messages (exit 0, no files): the ONLY messages allowed to
-    // trigger DownloadManager's one-shot empty-success auto-retry — its
-    // predicate matches exactly these (plus the `noMediaWarningPrefix`
-    // dynamic variant), so new failure copy must not reuse this phrasing.
+    // Empty-success messages (exit 0, no files). The guard in run() that
+    // composes them also sets `item.emptySuccessFailure` — the structural
+    // flag DownloadManager's one-shot auto-retry consumes — so this copy can
+    // be reworded freely without gaining or losing retry behavior.
     static let noMediaTwitterMessage =
         "No media found — the tweet may be deleted, or export cookies.txt in Settings (recommended for X sensitive/NSFW content)."
     static let noMediaInstagramMessage =
@@ -101,11 +102,9 @@ enum GalleryDlService {
     /// file errored): name what was saved and the first recorded error
     /// instead of the exit bitmask's generic guess. Retry is dedup-safe —
     /// existing files are skipped — so it only fetches the rest.
-    ///
-    /// Declared red: still returns the bare error; the saved-count
-    /// composition lands with the implementation commit.
     static func partialFailureMessage(savedCount: Int, firstError: String) -> String {
-        firstError
+        "Saved \(savedCount) file\(savedCount == 1 ? "" : "s"), but one or more downloads failed — "
+            + "\(firstError). Retry fetches the rest."
     }
 
     // MARK: - Download
@@ -136,7 +135,20 @@ enum GalleryDlService {
         )
 
         guard result.isSuccess else {
-            if case .failed = item.status {
+            // Partial failure: files DID land (counted by parseLine, skip
+            // lines included) and a specific error was recorded — one file of
+            // a multi-file post errored while the rest downloaded. Whether
+            // the recorded error is still the status or a later file's path
+            // line flipped it back to .downloading, the truthful outcome is
+            // the same: name what was saved and the first error, not the
+            // exit bitmask's generic guess.
+            let savedCount = (item.imageCount ?? 0) + (item.videoCount ?? 0)
+            if !result.wasSignal, item.outputPath != nil, savedCount > 0,
+                let firstError = item.firstToolError
+            {
+                item.status = .failed(
+                    Self.partialFailureMessage(savedCount: savedCount, firstError: firstError))
+            } else if case .failed = item.status {
             } else if result.wasSignal {
                 // Killed by a signal — the exit bitmask only describes real
                 // exits, so decoding a signal number would invent false
@@ -172,7 +184,10 @@ enum GalleryDlService {
         // can't unlock). Without this guard, the row would be marked "Done"
         // with no files, which is misleading. Prefer gallery-dl's own warning
         // (age-restriction, media unavailable, …) over the generic guess.
+        // The structural flag — not the message wording — is what arms
+        // DownloadManager's one-shot empty-success auto-retry.
         guard item.outputPath != nil else {
+            item.emptySuccessFailure = true
             if let warning = item.lastToolWarning {
                 item.status = .failed(Self.noMediaWarningPrefix + warning)
             } else {
@@ -254,10 +269,14 @@ enum GalleryDlService {
     /// Post-success photo pass for profiles that declare `imageSweepArgs`:
     /// collects the photos of a mixed video+photo post without touching the
     /// already-captured video result — the item's status, title, and
-    /// outputPath stay the video's. Failures are deliberately silent: the
-    /// video is the download's outcome, and a sweep that finds nothing is the
-    /// normal case (video-only posts).
+    /// outputPath stay the video's. Per-item failures are deliberately
+    /// silent: the video is the download's outcome, and a sweep that finds
+    /// nothing is the normal case (video-only posts). The exit result is
+    /// returned (nil when the profile declares no sweep) so the caller can
+    /// notice a SYSTEMATICALLY failing sweep — every run exiting non-zero —
+    /// which silently loses all photos from mixed posts.
     @MainActor
+    @discardableResult
     static func runImageSweep(
         item: DownloadItem,
         executablePath: String,
@@ -267,11 +286,11 @@ enum GalleryDlService {
         cookiesFile: String? = nil,
         register: @escaping (Process) -> Void,
         unregister: @escaping () -> Void
-    ) async {
-        guard let sweepArgs = SiteRegistry.profile(for: item.url).imageSweepArgs else { return }
+    ) async -> ProcessResult? {
+        guard let sweepArgs = SiteRegistry.profile(for: item.url).imageSweepArgs else { return nil }
         let beforeFiles = Set((try? FileManager.default.contentsOfDirectory(atPath: outputDirectory.path)) ?? [])
 
-        _ = await ProcessRunner.run(
+        let result = await ProcessRunner.run(
             executablePath: executablePath,
             arguments: arguments(
                 for: item.url, outputDirectory: outputDirectory,
@@ -292,6 +311,7 @@ enum GalleryDlService {
             item.imageCount = (item.imageCount ?? 0) + newImages.count
             item.recomputeMediaCategory()
         }
+        return result
     }
 
     // MARK: - Output parsing
@@ -374,18 +394,30 @@ enum GalleryDlService {
         // redirect to login page (…)" — the raw line doesn't say what to do,
         // so replace it with the fix.
         if line.contains("[instagram][error]"), line.lowercased().contains("login") {
+            recordFirstError(Self.instagramLoginMessage, item: item)
             if case .failed = item.status { return }
             item.status = .failed(Self.instagramLoginMessage)
             return
         }
 
         if line.lowercased().contains("error") {
-            if case .failed = item.status { return }
             // Known raw errors get app-native copy naming the true cause and
             // the in-app fix; everything else stays verbatim.
             let profileID = SiteRegistry.profile(for: item.url).id
-            item.status = .failed(Self.mappedErrorMessage(for: line, profileID: profileID) ?? line)
+            let message = Self.mappedErrorMessage(for: line, profileID: profileID) ?? line
+            recordFirstError(message, item: item)
+            if case .failed = item.status { return }
+            item.status = .failed(message)
         }
+    }
+
+    /// The status alone can't carry a per-file error to the end of the run —
+    /// gallery-dl keeps going and the next successful file's path line flips
+    /// the item back to `.downloading`. Remember the FIRST error so run()'s
+    /// exit handling can report a truthful partial failure.
+    @MainActor
+    private static func recordFirstError(_ message: String, item: DownloadItem) {
+        if item.firstToolError == nil { item.firstToolError = message }
     }
 
     // MARK: - Helpers

@@ -201,67 +201,12 @@ final class FailureMessageCompositionTests: XCTestCase {
     }
 }
 
-/// The empty-success auto-retry predicate, pinned in both directions: it must
-/// keep matching every "exit 0, no files" message (the paths that auto-retry
-/// today) and must NOT match any of the Phase-2 error-mapping copy — the
-/// pre-Phase-2 substring check ("cookies.txt", …) would have silently re-run
-/// broken-tool and auth failures as messages changed.
-@MainActor
-final class EmptySuccessMatcherTests: XCTestCase {
-
-    func testEveryEmptySuccessMessageTriggersAutoRetry() {
-        let matching = [
-            GalleryDlService.noMediaTwitterMessage,
-            GalleryDlService.noMediaInstagramMessage,
-            GalleryDlService.noMediaRedditMessage,
-            GalleryDlService.noMediaGenericMessage,
-            // Dynamic variant: the run's captured warning is appended.
-            GalleryDlService.noMediaWarningPrefix + "this tweet is age-restricted",
-            DownloadManager.ytDlpEmptySuccessMessage,
-            // The gallery-dl-missing hint may be appended in the !ranFallback branch.
-            DownloadManager.ytDlpEmptySuccessMessage + DownloadManager.galleryDlMissingHint,
-        ]
-        for message in matching {
-            XCTAssertTrue(DownloadManager.isEmptySuccessMessage(message), "must auto-retry: \(message)")
-        }
-    }
-
-    func testNoErrorMappingMessageTriggersAutoRetry() {
-        let nonMatching = [
-            YtDlpService.privateVideoMessage,
-            YtDlpService.ageRestrictedMessage,
-            YtDlpService.membersOnlyMessage,
-            YtDlpService.botCheckMessage,
-            YtDlpService.http403Message,
-            YtDlpService.genericHttp403Message,
-            YtDlpService.cookieDatabaseMessage,
-            YtDlpService.ffmpegMissingMessage,
-            YtDlpService.staleToolMessage,
-            YtDlpService.missingJSRuntimeMessage,
-            YtDlpService.transientFormatMessage,
-            GalleryDlService.nsfwTweetMessage,  // mentions cookies.txt — the old matcher's trap
-            GalleryDlService.protectedTweetMessage,
-            GalleryDlService.xAuthMessage,
-            GalleryDlService.signInGenericMessage,
-            GalleryDlService.internalErrorMessage,
-            GalleryDlService.instagramChallengeMessage,
-            GalleryDlService.unsupportedURLMessage,
-            GalleryDlService.instagramLoginMessage,
-            GalleryDlService.exitFailureMessage(code: 16, lastWarning: "AuthRequired"),
-            DownloadManager.ytDlpFailureMessage(code: 2, wasSignal: false, lastWarning: nil),
-            DownloadManager.ytDlpFailureMessage(code: 15, wasSignal: true, lastWarning: nil),
-            // A positively identified external link must never burn the
-            // one-shot auto-retry — with or without a named host.
-            DownloadStatus.externalRedirectMessage(detectedURL: "https://example.com/a"),
-            DownloadStatus.externalRedirectMessage(detectedURL: nil),
-            DownloadStatus.decodedFailureFallbackMessage,
-            DownloadStatus.externalRedirectSentinel,  // the internal sentinel must never re-queue
-        ]
-        for message in nonMatching {
-            XCTAssertFalse(DownloadManager.isEmptySuccessMessage(message), "must NOT auto-retry: \(message)")
-        }
-    }
-}
+// The former EmptySuccessMatcherTests pinned the string predicate
+// (`isEmptySuccessMessage`) in both directions. Phase 4d replaced the
+// predicate with the structural `DownloadItem.emptySuccessFailure` flag —
+// set only where an empty-success failure is composed — so message wording
+// can no longer gain or lose auto-retry behavior. The flag and both of its
+// consumers are pinned in EmptySuccessFlagTests.
 
 /// Diagnostic capture in the line parsers: generic yt-dlp WARNING lines and
 /// gallery-dl's rate-limit info line land in `lastToolWarning` (and the wait

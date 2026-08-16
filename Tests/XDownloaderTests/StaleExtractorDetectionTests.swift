@@ -164,17 +164,21 @@ final class StaleExtractorDetectionTests: XCTestCase {
     // MARK: - Messages must not trip the empty-success auto-retry
 
     func testMessagesDoNotTriggerEmptySuccessAutoRetry() {
-        // DownloadManager's empty-success auto-retry re-runs an item whose
-        // failure message matches its predicate (a substring check before
-        // Phase 2). A broken tool would silently re-run and fail identically,
-        // so the diagnostic messages must never match.
+        // The auto-retry gate is structural since Phase 4d — only the
+        // set-points that compose an empty-success failure arm
+        // `item.emptySuccessFailure`. The diagnosis paths never do, so a
+        // broken tool can't silently re-run and fail identically no matter
+        // how this copy is reworded.
         let messages = [
             YtDlpService.staleToolMessage,
             YtDlpService.missingJSRuntimeMessage,
             YtDlpService.transientFormatMessage,
         ]
         for message in messages {
-            XCTAssertFalse(DownloadManager.isEmptySuccessMessage(message), "\"\(message)\" must not auto-retry")
+            let item = DownloadItem(url: "https://youtube.com/watch?v=abc")
+            item.status = .failed(message)
+            XCTAssertFalse(
+                DownloadManager.shouldAutoRetryEmptySuccess(item), "\"\(message)\" must not auto-retry")
         }
     }
 }

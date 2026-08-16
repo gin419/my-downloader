@@ -108,4 +108,33 @@ final class EmptySuccessFlagTests: XCTestCase {
 
         XCTAssertFalse(DownloadManager.shouldReplaceWithExternalRedirectMessage(item))
     }
+
+    // MARK: - Applying the replacement disarms the retry
+
+    func testApplyingReplacementDisarmsTheAutoRetry() {
+        // Before Phase 4d the replacement copy simply never matched the
+        // string predicate; with the structural flag, disarming must be an
+        // explicit part of the replacement or the gate right after it would
+        // burn the one-shot retry re-running a link-only tweet.
+        let item = item(failedWith: "The post has no media this tool can reach.")
+        item.externalRedirectURL = "https://example.com/article"
+        item.emptySuccessFailure = true
+
+        DownloadManager.applyExternalRedirectReplacementIfNeeded(item)
+
+        XCTAssertEqual(
+            item.status,
+            .failed(DownloadStatus.externalRedirectMessage(detectedURL: "https://example.com/article")))
+        XCTAssertFalse(item.emptySuccessFailure)
+        XCTAssertFalse(DownloadManager.shouldAutoRetryEmptySuccess(item))
+    }
+
+    func testApplyingReplacementLeavesRealFailuresUntouched() {
+        let item = item(failedWith: GalleryDlService.nsfwTweetMessage)
+        item.externalRedirectURL = "https://example.com/article"
+
+        DownloadManager.applyExternalRedirectReplacementIfNeeded(item)
+
+        XCTAssertEqual(item.status, .failed(GalleryDlService.nsfwTweetMessage))
+    }
 }

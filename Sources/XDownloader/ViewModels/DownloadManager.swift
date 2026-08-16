@@ -85,6 +85,12 @@ class DownloadManager: ObservableObject {
     /// every affected download in a batch would otherwise re-post the same
     /// banner. A deliberate re-select in Settings bypasses the guard.
     private var cookieAccessFeedbackShown = false
+    /// Once-per-session guard for the systematic image-sweep failure notice
+    /// (same pattern as `cookieAccessFeedbackShown`).
+    private var imageSweepFeedbackShown = false
+    /// Consecutive image sweeps that exited non-zero — see
+    /// `recordImageSweepOutcome`. Any clean exit resets it.
+    private var consecutiveImageSweepFailures = 0
     private var cookieSaveFeedbackShown = false
     /// IDs of items the user explicitly paused — distinguishes a user-initiated
     /// `terminate()` from a real download failure when the process exits.
@@ -619,6 +625,39 @@ class DownloadManager: ObservableObject {
             CaptureFeedback(
                 kind: .warning,
                 message: Self.cookieSaveFailedFeedbackMessage,
+                isPersistent: true))
+    }
+
+    /// Persistent notice when the post-video photo sweep keeps failing — see
+    /// `recordImageSweepOutcome`.
+    static let imageSweepBrokenFeedbackMessage =
+        "Photo collection is failing repeatedly — gallery-dl may need an update (Settings → Tools)."
+
+    /// Consecutive non-zero sweep exits before the notice shows. A sweep that
+    /// finds nothing but exits 0 is the NORMAL case (video-only posts) and
+    /// never counts.
+    static let imageSweepFailureThreshold = 3
+
+    /// The image sweep's per-item failures are deliberately silent (the video
+    /// is the download's outcome, and video-only posts are normal) — but a
+    /// SYSTEMATICALLY broken gallery-dl fails every sweep and silently loses
+    /// ALL photos from mixed posts under green "Done" rows, forever. Count
+    /// consecutive non-zero sweep exits and surface a once-per-session
+    /// persistent notice at the threshold; any clean exit resets the count.
+    func recordImageSweepOutcome(exitedCleanly: Bool) {
+        guard !exitedCleanly else {
+            consecutiveImageSweepFailures = 0
+            return
+        }
+        consecutiveImageSweepFailures += 1
+        guard consecutiveImageSweepFailures >= Self.imageSweepFailureThreshold,
+            !imageSweepFeedbackShown
+        else { return }
+        imageSweepFeedbackShown = true
+        showFeedback(
+            CaptureFeedback(
+                kind: .warning,
+                message: Self.imageSweepBrokenFeedbackMessage,
                 isPersistent: true))
     }
 
@@ -1308,8 +1347,9 @@ class DownloadManager: ObservableObject {
     // MARK: - Failure messages
 
     /// yt-dlp exit-0-but-no-files message. Part of the empty-success family:
-    /// `isEmptySuccessMessage` matches it by prefix (the gallery-dl-missing
-    /// hint may be appended) so the one-shot auto-retry keeps firing.
+    /// the branch that sets it also sets `item.emptySuccessFailure`, so the
+    /// one-shot auto-retry fires regardless of how this copy is worded (or
+    /// what gets appended to it).
     static let ytDlpEmptySuccessMessage =
         "yt-dlp reported success but found no media to download — the link may be a playlist/channel page, or the post has no video."
 
@@ -1350,9 +1390,10 @@ class DownloadManager: ObservableObject {
     }
 
     /// Shown when yt-dlp exited 0 but left un-merged streams on disk because
-    /// ffmpeg is missing (see `unmergedStreamsFailure`). Must NOT match
-    /// `isEmptySuccessMessage` — files DID land, so the empty-success
-    /// auto-retry would just re-run into the same missing tool.
+    /// ffmpeg is missing (see `unmergedStreamsFailure`). Deliberately NOT an
+    /// empty-success failure (the branch never sets `emptySuccessFailure`) —
+    /// files DID land, so the auto-retry would just re-run into the same
+    /// missing tool.
     static let unmergedStreamsMessage =
         "Video and audio were downloaded but not merged — ffmpeg is missing. Install it (brew install ffmpeg), then Retry."
 
@@ -1373,41 +1414,37 @@ class DownloadManager: ObservableObject {
         return unmergedStreamsMessage
     }
 
-    /// True only for the "empty success" family — a tool exited 0 with no
-    /// files — which is exactly what the one-shot auto-retry re-queues.
-    /// Formerly a substring match ("found no media" / "No media found" /
-    /// "cookies.txt") that new error copy kept tripping (the NSFW mapping
-    /// mentions cookies.txt but must NOT re-run); now pinned to the message
-    /// constants themselves. Prefix matches cover the two dynamic variants:
-    /// "No media found — <captured warning>" and the appended
-    /// `galleryDlMissingHint`.
-    static func isEmptySuccessMessage(_ message: String) -> Bool {
-        if message == GalleryDlService.noMediaGenericMessage { return true }
-        if message.hasPrefix(GalleryDlService.noMediaWarningPrefix) { return true }
-        if message.hasPrefix(ytDlpEmptySuccessMessage) { return true }
-        return false
-    }
-
     /// Decision for the external-link replacement right before finalize: the
     /// sentinel itself always converts; a detected off-site URL plus an
     /// empty-success failure means the tweet's only content IS the link.
-    ///
-    /// Declared red: still classifies by message string; the structural
-    /// `emptySuccessFailure` flag takes over in the implementation commit.
+    /// Structural on purpose — `emptySuccessFailure` is set where the
+    /// failure is composed, never inferred from message wording, so a real
+    /// (non-empty-success) failure can't be eaten by the link explanation.
     static func shouldReplaceWithExternalRedirectMessage(_ item: DownloadItem) -> Bool {
         guard case .failed(let message) = item.status else { return false }
         return message == DownloadStatus.externalRedirectSentinel
-            || (item.externalRedirectURL != nil && isEmptySuccessMessage(message))
+            || (item.externalRedirectURL != nil && item.emptySuccessFailure)
     }
 
-    /// Gate for the one-shot empty-success auto-retry.
-    ///
-    /// Declared red: still classifies by message string, so reworded copy can
-    /// silently gain or lose the retry; the structural `emptySuccessFailure`
-    /// flag takes over in the implementation commit.
+    /// Applies the external-link replacement when warranted. Disarming the
+    /// empty-success flag is part of the replacement: the external link now
+    /// owns the outcome, and a still-armed flag would burn the one-shot
+    /// auto-retry re-running a tweet whose only content IS a link.
+    static func applyExternalRedirectReplacementIfNeeded(_ item: DownloadItem) {
+        guard shouldReplaceWithExternalRedirectMessage(item) else { return }
+        item.emptySuccessFailure = false
+        item.status = .failed(
+            DownloadStatus.externalRedirectMessage(detectedURL: item.externalRedirectURL))
+    }
+
+    /// Gate for the one-shot empty-success auto-retry. Structural on purpose:
+    /// the pre-Phase-4d string predicate (exact/prefix matches on the
+    /// user-facing copy) meant reworded messages silently gained or lost the
+    /// retry — now only the set-points that COMPOSE an empty-success failure
+    /// arm it.
     static func shouldAutoRetryEmptySuccess(_ item: DownloadItem) -> Bool {
-        guard case .failed(let message) = item.status else { return false }
-        return isEmptySuccessMessage(message) && !item.autoRetryAttempted
+        guard case .failed = item.status else { return false }
+        return item.emptySuccessFailure && !item.autoRetryAttempted
     }
 
     // MARK: - Cookies-file truth
@@ -1607,6 +1644,9 @@ class DownloadManager: ObservableObject {
             if case .failed = item.status {
                 // already set by YtDlpService
             } else if ytResult.isSuccess {
+                // Empty-success set-point: the structural flag — not the
+                // message wording — arms the one-shot auto-retry below.
+                item.emptySuccessFailure = true
                 item.status = .failed(Self.ytDlpEmptySuccessMessage)
             } else {
                 item.status = .failed(
@@ -1628,23 +1668,20 @@ class DownloadManager: ObservableObject {
         // survived (fxtwitter restored it as the prior status) or the
         // fallbacks ran and came up empty — the tweet's only content IS the
         // external link, so name the destination instead of guessing "no
-        // media". Placed BEFORE the auto-retry check: the replacement copy
-        // never matches the empty-success predicate, so a positively
+        // media". Placed BEFORE the auto-retry check, and the sentinel
+        // branch never sets `emptySuccessFailure`, so a positively
         // identified external link doesn't burn the one-shot retry. This is
         // still the last moment before the message can reach a renderer
         // (row, menu bar, NotificationService, history write); every earlier
         // consumer — the fallback chain above — saw the sentinel itself.
-        if Self.shouldReplaceWithExternalRedirectMessage(item) {
-            item.status = .failed(
-                DownloadStatus.externalRedirectMessage(detectedURL: item.externalRedirectURL))
-        }
+        Self.applyExternalRedirectReplacementIfNeeded(item)
 
         // Auto-retry once on "empty success" — yt-dlp or gallery-dl exited 0
         // without producing any media. Most often a transient X GraphQL
         // hiccup (token rotation, brief rate-limit, cache miss) that one
         // extra attempt clears. Genuinely-unreachable tweets just hit the
         // same outcome and stay Failed. Real errors (non-zero exit codes)
-        // don't match the predicate below and skip the retry, so we don't
+        // never set the structural flag the gate consumes, so we don't
         // waste time re-running obvious network/auth failures.
         if Self.shouldAutoRetryEmptySuccess(item) {
             item.autoRetryAttempted = true
@@ -1696,8 +1733,9 @@ class DownloadManager: ObservableObject {
             let gdlPath = galleryDlPath
         else { return }
         let cookies = resolveCookiesForDownload()
+        var sweepResult: ProcessResult?
         await cookieAccess.withScope(for: item.id, file: cookies.path, grantedURL: cookies.granted) {
-            await GalleryDlService.runImageSweep(
+            sweepResult = await GalleryDlService.runImageSweep(
                 item: item,
                 executablePath: gdlPath,
                 outputDirectory: outputDirectory,
@@ -1708,7 +1746,13 @@ class DownloadManager: ObservableObject {
                 unregister: { [weak self] in self?.activeProcesses.removeValue(forKey: item.id) }
             )
         }
-        pausedItemIDs.remove(item.id)
+        // A Pause pressed during the sweep terminated it by hand — a user
+        // action, not gallery-dl breaking — so it must not count toward the
+        // systematic-failure notice (the stale request is consumed either way).
+        let userPausedSweep = pausedItemIDs.remove(item.id) != nil
+        if let sweepResult, !userPausedSweep {
+            recordImageSweepOutcome(exitedCleanly: sweepResult.isSuccess)
+        }
     }
 
     /// Resets yt-dlp's partial state, then runs the gallery-dl fallback (a
