@@ -809,7 +809,7 @@ class DownloadManager: ObservableObject {
                     unregister: { [weak self] in self?.likesVerificationProcess = nil },
                     onLine: { line in
                         if line.hasPrefix("likes-verify\t") { sawExtractorOutput = true }
-                        if Self.isUsefulLikesDiagnostic(line) { diagnostics.append(line) }
+                        if LikesSyncEventParser.isUsefulDiagnostic(line) { diagnostics.append(line) }
                     })
             }
             guard case .verifying = self.likesAccessVerification else { return }
@@ -962,7 +962,7 @@ class DownloadManager: ObservableObject {
     private func consumeLikesLine(_ line: String) {
         guard let accountID = likesAccountID, let runID = likesRunID else { return }
         guard let event = LikesSyncEventParser.parse(line) else {
-            if Self.isUsefulLikesDiagnostic(line) {
+            if LikesSyncEventParser.isUsefulDiagnostic(line) {
                 likesDiagnostics.append(line)
                 if likesDiagnostics.count > 20 { likesDiagnostics.removeFirst() }
             }
@@ -1147,21 +1147,6 @@ class DownloadManager: ObservableObject {
             outputDirectory: account.outputDirectory,
             startedAt: run.startedAt,
             finishedAt: run.finishedAt)
-    }
-
-    nonisolated private static func isUsefulLikesDiagnostic(_ line: String) -> Bool {
-        let lower = line.lowercased()
-        if lower.contains("[warning]") && lower.contains("api errors (") { return false }
-        if lower.contains("[cookies][info]") || lower.contains("[cookies][debug]") { return false }
-        let cookieFailure =
-            lower.contains("cookie")
-            && (lower.contains("[warning]") || lower.contains("[error]")
-                || lower.contains("failed") || lower.contains("unable")
-                || lower.contains("could not") || lower.contains("not found"))
-        return lower.contains("[error]") || lower.contains("429") || lower.contains("rate limit")
-            || lower.contains("login") || lower.contains("unauthorized") || cookieFailure
-            || lower.contains("no space") || lower.contains("permission denied")
-            || lower.contains("connection") || lower.contains("timeout")
     }
 
     nonisolated private static func likesFailureMessage(from diagnostic: String?, exitCode: Int32) -> String {

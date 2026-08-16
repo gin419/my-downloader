@@ -70,6 +70,29 @@ struct LikesSyncRunAccumulator: Equatable {
 enum LikesSyncEventParser {
     private static let prefix = "likes-sync\t"
 
+    /// True when a non-event stderr/stdout line is a diagnostic worth keeping
+    /// for failure messages. gallery-dl's info-level lines are routine
+    /// progress — most importantly the rate-limit wait notices ("[twitter][info]
+    /// Waiting until … (rate limit)"), which describe a pause the run already
+    /// survived, not a failure.
+    ///
+    /// Declared red: this still keeps info-level wait lines; the exclusion
+    /// lands with the implementation commit.
+    static func isUsefulDiagnostic(_ line: String) -> Bool {
+        let lower = line.lowercased()
+        if lower.contains("[warning]") && lower.contains("api errors (") { return false }
+        if lower.contains("[cookies][info]") || lower.contains("[cookies][debug]") { return false }
+        let cookieFailure =
+            lower.contains("cookie")
+            && (lower.contains("[warning]") || lower.contains("[error]")
+                || lower.contains("failed") || lower.contains("unable")
+                || lower.contains("could not") || lower.contains("not found"))
+        return lower.contains("[error]") || lower.contains("429") || lower.contains("rate limit")
+            || lower.contains("login") || lower.contains("unauthorized") || cookieFailure
+            || lower.contains("no space") || lower.contains("permission denied")
+            || lower.contains("connection") || lower.contains("timeout")
+    }
+
     static func parse(_ line: String) -> LikesSyncEvent? {
         guard let split = line.firstIndex(of: ":") else { return nil }
         let eventRaw = String(line[..<split])
