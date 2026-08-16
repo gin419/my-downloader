@@ -13,9 +13,9 @@ Four pillars, in the order they'll land:
    many links queue as easily as one.
 2. **Always within reach** — *shipped v1.6* — a URL never needs the main
    window: menu bar, automation hooks, zero-click capture.
-3. **Zero setup** — *mostly shipped v1.7–v1.10* — the app updates itself and
-   can install or upgrade its downloader tools from the UI. Homebrew is still
-   the installer backend; a brew-free first launch is the remaining gap.
+3. **Zero setup** — *shipped v1.7–v1.11* — the app updates itself and can
+   install or upgrade its downloader tools from the UI, with or without
+   Homebrew. The primed hero button is the remaining gap on this pillar.
 4. **A library, not a log** — *next* — what you downloaded is browsable:
    thumbnails, preview, search, one-click re-download.
 
@@ -24,13 +24,13 @@ See [FEATURES.md](FEATURES.md) for the live feature list and
 
 ---
 
-## Shipped (current: v1.10.0)
+## Shipped (current: v1.11.0)
 
-Compared with the last roadmap snapshot (which still said "current: v1.7.0"),
-everything in pillars 1 and 2 is live, and pillar 3 is one step short of the
-end-state wording ("no Homebrew"). Several items that were never on the
-roadmap also shipped and are recorded below so this file stays the plan, not
-a fossil.
+Pillars 1 and 2 are live. Pillar 3 is live except the primed hero button:
+v1.11 added a brew-free first launch (standalone downloads, two-step
+confirm, rollback). Several items that were never on the original lists
+also shipped and are recorded below so this file stays the plan, not a
+fossil.
 
 ### Pillar 1 — Close the loop (v1.5.0)
 
@@ -58,7 +58,7 @@ a fossil.
 Also landed in v1.6 (not originally pillar work): **Instagram** (Reels,
 videos, carousels via yt-dlp; images / mixed posts via gallery-dl).
 
-### Pillar 3 — Zero setup (v1.7.0 – v1.10.0)
+### Pillar 3 — Zero setup (v1.7.0 – v1.11.0)
 
 - **Auto-update** *(shipped v1.7.0)* — Sparkle 2 daily background check
   against the cumulative GitHub Pages appcast. Standard update window
@@ -81,11 +81,14 @@ videos, carousels via yt-dlp; images / mixed posts via gallery-dl).
   the missing and upgrades the outdated via Homebrew. deno is a first-class
   requirement. Banner and download engine share one path list, so "looks
   healthy" and "actually runs" cannot disagree.
-
-Homebrew is **not** optional yet. The app can drive `brew install` /
-`brew upgrade` for you, and it will detect pipx / MacPorts copies without
-trying to overwrite them — but a machine with no Homebrew still cannot
-finish first-run setup from inside the app.
+- **Homebrew-optional / standalone tools** *(shipped v1.11.0)* — a machine
+  with no Homebrew can finish first-run from Set Up: official standalone
+  downloads of yt-dlp, ffmpeg, deno, and gallery-dl into Application
+  Support. The user picks tools and installer, then confirms the plan
+  (destination, source, rollback notice) before anything runs. A failed
+  run restores the previous binaries or deletes files this run created.
+  Homebrew stays the default when present; unmanaged pipx / MacPorts
+  copies are not overwritten.
 
 ### Shipped off the original plan
 
@@ -119,12 +122,6 @@ These were not on the v1.7 / v2.0 lists. They are live and stay out of the
   made. Any implementation has to keep that invariant — priming the *label*
   without a silent `NSPasteboard` read, or finding another consent-safe
   moment.
-
-- **Homebrew-optional / bundled tools** — install and update yt-dlp /
-  gallery-dl / ffmpeg / deno without requiring Homebrew on the machine.
-  Until this lands, first-run still means "install brew, then let the app
-  do the rest" (or install the tools some other way and point the health
-  probe at them).
 
 ---
 
