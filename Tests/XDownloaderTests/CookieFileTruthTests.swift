@@ -55,12 +55,19 @@ final class CookieFileTruthTests: XCTestCase {
     // MARK: - New copy stays out of the empty-success auto-retry family
 
     func testCookieMessagesNeverMatchEmptySuccess() {
-        XCTAssertFalse(
-            DownloadManager.isEmptySuccessMessage(DownloadManager.cookiesFileMissingFailureMessage))
-        XCTAssertFalse(
-            DownloadManager.isEmptySuccessMessage(DownloadManager.cookiesFileInaccessibleFeedbackMessage))
-        XCTAssertFalse(
-            DownloadManager.isEmptySuccessMessage(DownloadManager.cookieSaveFailedFeedbackMessage))
+        // Structural gate since Phase 4d: the cookie-truth branches never arm
+        // `item.emptySuccessFailure`, so their copy can't re-queue an item no
+        // matter how it is worded.
+        for message in [
+            DownloadManager.cookiesFileMissingFailureMessage,
+            DownloadManager.cookiesFileInaccessibleFeedbackMessage,
+            DownloadManager.cookieSaveFailedFeedbackMessage,
+        ] {
+            let item = DownloadItem(url: "https://x.com/gin/status/1")
+            item.status = .failed(message)
+            XCTAssertFalse(
+                DownloadManager.shouldAutoRetryEmptySuccess(item), "\"\(message)\" must not auto-retry")
+        }
     }
 
     // MARK: - isCookieSaveOnlyFailure rescue decision (mirror of subtitleOnlyFailure)

@@ -119,12 +119,12 @@ final class FfmpegMergeGuardTests: XCTestCase {
 
     func testUnmergedMessageDoesNotTriggerEmptySuccessAutoRetry() {
         // Streams DID land on disk, so the one-shot empty-success auto-retry
-        // must not burn itself re-running into the same missing tool.
-        XCTAssertFalse(DownloadManager.isEmptySuccessMessage(DownloadManager.unmergedStreamsMessage))
-        // And none of the empty-success trigger shapes may appear inside it.
-        XCTAssertFalse(DownloadManager.unmergedStreamsMessage.contains(GalleryDlService.noMediaGenericMessage))
-        XCTAssertFalse(DownloadManager.unmergedStreamsMessage.contains(GalleryDlService.noMediaWarningPrefix))
-        XCTAssertFalse(DownloadManager.unmergedStreamsMessage.contains(DownloadManager.ytDlpEmptySuccessMessage))
+        // must not burn itself re-running into the same missing tool. The
+        // gate is structural since Phase 4d, and the unmerged-streams branch
+        // never arms `item.emptySuccessFailure`.
+        let item = DownloadItem(url: "https://youtube.com/watch?v=abc")
+        item.status = .failed(DownloadManager.unmergedStreamsMessage)
+        XCTAssertFalse(DownloadManager.shouldAutoRetryEmptySuccess(item))
     }
 
     // MARK: - End-to-end at parse level

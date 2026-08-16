@@ -201,6 +201,25 @@ class DownloadItem: Identifiable, ObservableObject {
     /// final message can name the destination. Cleared by retryItem() with
     /// the other cross-attempt flags.
     var externalRedirectURL: String?
+    /// In-memory only (NOT persisted). The first fatal error line gallery-dl
+    /// printed this attempt, already mapped to app-native copy where a
+    /// mapping exists. `status` alone can't carry it: gallery-dl keeps going
+    /// after a per-file error, and the next successful file's path line flips
+    /// the item back to `.downloading` — losing the specific cause and
+    /// leaving the exit bitmask's generic guess as the row's message despite
+    /// files on disk. Cleared with the other per-attempt parse state in
+    /// resetForReattempt().
+    var firstToolError: String?
+    /// In-memory only (NOT persisted). True when this attempt's failure is an
+    /// "empty success" — a tool exited 0 with no media — the one shape the
+    /// one-shot auto-retry re-queues. Structural on purpose: the retry gate
+    /// and the external-redirect replacement classified by comparing
+    /// user-facing message STRINGS, so reworded copy could silently gain or
+    /// lose auto-retry behavior. Set at every point that composes an
+    /// empty-success failure; cleared with the other per-attempt state in
+    /// resetForReattempt(), and cleared by FxTwitterService when it takes
+    /// over the outcome with a failure of a different shape.
+    var emptySuccessFailure: Bool = false
 
     init(url: String, addedAt: Date = Date()) {
         self.url = url
@@ -230,6 +249,8 @@ class DownloadItem: Identifiable, ObservableObject {
         videoCount = nil
         mediaCategory = .unknown
         lastToolWarning = nil
+        firstToolError = nil
+        emptySuccessFailure = false
         extractorBreakage = .none
         ffmpegMissingForMerge = false
     }
