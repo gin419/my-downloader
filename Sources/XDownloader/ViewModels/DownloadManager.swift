@@ -1388,6 +1388,28 @@ class DownloadManager: ObservableObject {
         return false
     }
 
+    /// Decision for the external-link replacement right before finalize: the
+    /// sentinel itself always converts; a detected off-site URL plus an
+    /// empty-success failure means the tweet's only content IS the link.
+    ///
+    /// Declared red: still classifies by message string; the structural
+    /// `emptySuccessFailure` flag takes over in the implementation commit.
+    static func shouldReplaceWithExternalRedirectMessage(_ item: DownloadItem) -> Bool {
+        guard case .failed(let message) = item.status else { return false }
+        return message == DownloadStatus.externalRedirectSentinel
+            || (item.externalRedirectURL != nil && isEmptySuccessMessage(message))
+    }
+
+    /// Gate for the one-shot empty-success auto-retry.
+    ///
+    /// Declared red: still classifies by message string, so reworded copy can
+    /// silently gain or lose the retry; the structural `emptySuccessFailure`
+    /// flag takes over in the implementation commit.
+    static func shouldAutoRetryEmptySuccess(_ item: DownloadItem) -> Bool {
+        guard case .failed(let message) = item.status else { return false }
+        return isEmptySuccessMessage(message) && !item.autoRetryAttempted
+    }
+
     // MARK: - Cookies-file truth
 
     /// Persistent status line shown when the configured cookies.txt can't back
@@ -1612,10 +1634,7 @@ class DownloadManager: ObservableObject {
         // still the last moment before the message can reach a renderer
         // (row, menu bar, NotificationService, history write); every earlier
         // consumer — the fallback chain above — saw the sentinel itself.
-        if case .failed(let message) = item.status,
-            message == DownloadStatus.externalRedirectSentinel
-                || (item.externalRedirectURL != nil && Self.isEmptySuccessMessage(message))
-        {
+        if Self.shouldReplaceWithExternalRedirectMessage(item) {
             item.status = .failed(
                 DownloadStatus.externalRedirectMessage(detectedURL: item.externalRedirectURL))
         }
@@ -1627,11 +1646,7 @@ class DownloadManager: ObservableObject {
         // same outcome and stay Failed. Real errors (non-zero exit codes)
         // don't match the predicate below and skip the retry, so we don't
         // waste time re-running obvious network/auth failures.
-        let isEmptySuccess: Bool = {
-            guard case .failed(let msg) = item.status else { return false }
-            return Self.isEmptySuccessMessage(msg)
-        }()
-        if isEmptySuccess && !item.autoRetryAttempted {
+        if Self.shouldAutoRetryEmptySuccess(item) {
             item.autoRetryAttempted = true
             item.status = .fetching
             item.resetForReattempt()

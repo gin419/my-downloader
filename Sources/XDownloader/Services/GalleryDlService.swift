@@ -97,6 +97,17 @@ enum GalleryDlService {
         return message
     }
 
+    /// Non-zero exit after some files DID land (a multi-file post where one
+    /// file errored): name what was saved and the first recorded error
+    /// instead of the exit bitmask's generic guess. Retry is dedup-safe —
+    /// existing files are skipped — so it only fetches the rest.
+    ///
+    /// Declared red: still returns the bare error; the saved-count
+    /// composition lands with the implementation commit.
+    static func partialFailureMessage(savedCount: Int, firstError: String) -> String {
+        firstError
+    }
+
     // MARK: - Download
 
     @MainActor
