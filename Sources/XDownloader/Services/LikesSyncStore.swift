@@ -297,6 +297,26 @@ final class LikesSyncStore {
         }
     }
 
+    /// Resolves run-level failures — rows with NULL tweet_id, e.g.
+    /// "<acct>:authentication" — for an account. `resolveFailures(_:tweetID:)`
+    /// can never reach them (it matches `tweet_id = ?`), so without this a
+    /// stale run-level row would flag every later flawless sync forever. The
+    /// manager calls it when a full scan finishes cleanly without recording a
+    /// new run-level failure; like per-item resolution, it supersedes Ignore.
+    func resolveRunLevelFailures(accountID: Int64, at date: Date = Date()) {
+        let sql = """
+            UPDATE likes_failures
+            SET resolved_at = ?, updated_at = ?
+            WHERE account_id = ? AND tweet_id IS NULL AND resolved_at IS NULL;
+            """
+        withStatement(sql) { stmt in
+            sqlite3_bind_double(stmt, 1, date.timeIntervalSince1970)
+            sqlite3_bind_double(stmt, 2, date.timeIntervalSince1970)
+            sqlite3_bind_int64(stmt, 3, accountID)
+            sqlite3_step(stmt)
+        }
+    }
+
     func count(_ table: String) -> Int {
         guard ["likes_accounts", "likes_runs", "likes_tweets", "likes_media", "likes_failures"].contains(table) else {
             return 0

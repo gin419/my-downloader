@@ -153,7 +153,7 @@ struct LikesSyncCardView: View {
                 .foregroundColor(.orange)
                 .frame(width: 14)
             VStack(alignment: .leading, spacing: 2) {
-                Text(failure.url ?? failure.tweetID.map { "Tweet \($0)" } ?? "X Likes item")
+                Text(failure.displayTitle)
                     .font(.system(size: 11, weight: .medium))
                     .lineLimit(1)
                 Text(failure.message)
@@ -171,7 +171,7 @@ struct LikesSyncCardView: View {
                 }
                 .font(.system(size: 10))
             }
-            Button("Retry") { manager.retryLikesFailure(failure) }
+            Button(failure.retryActionTitle) { manager.retryLikesFailure(failure) }
                 .font(.system(size: 10))
                 .disabled(snapshot.status.isActive)
             Button("Ignore") { manager.ignoreLikesFailure(failure) }

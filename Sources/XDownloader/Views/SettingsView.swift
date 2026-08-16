@@ -122,6 +122,9 @@ struct SettingsView: View {
                     case .verified(let handle):
                         Image(systemName: "checkmark.circle.fill").foregroundColor(.green)
                         Text("Verified access for \(handle.displayName)")
+                    case .noLikesVisible(let handle):
+                        Image(systemName: "questionmark.circle.fill").foregroundColor(.orange)
+                        Text(LikesAccessVerification.noLikesVisibleMessage(for: handle))
                     case .failed(let message):
                         Image(systemName: "exclamationmark.triangle.fill").foregroundColor(.orange)
                         Text(message)

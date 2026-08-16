@@ -8,6 +8,9 @@ private final class FakeLikesSyncProcessRunner: LikesSyncProcessRunning {
         var lines: [String]
         var exitCode: Int32
         var waitsForCancellation = false
+        /// Runs after the lines are emitted, before the process "exits" —
+        /// simulates user actions (Ignore/Restore) landing mid-run.
+        var afterLines: (@MainActor () -> Void)?
     }
 
     private(set) var invocations: [[String]] = []
@@ -34,6 +37,7 @@ private final class FakeLikesSyncProcessRunner: LikesSyncProcessRunning {
             onLine(line)
             await Task.yield()
         }
+        run.afterLines?()
         return run.exitCode
     }
 }
@@ -117,7 +121,9 @@ final class DownloadManagerLikesSyncTests: XCTestCase {
 
     func testCookieExtractionInfoDoesNotFailSuccessfulVerification() async throws {
         let (manager, runner, _, _) = makeManager(runs: [
-            .init(lines: ["[cookies][info] Extracted 863 cookies from Chrome"], exitCode: 0)
+            .init(
+                lines: ["[cookies][info] Extracted 863 cookies from Chrome", "likes-verify\t123"],
+                exitCode: 0)
         ])
 
         manager.verifyLikesAccess()
@@ -125,6 +131,39 @@ final class DownloadManagerLikesSyncTests: XCTestCase {
 
         XCTAssertEqual(manager.likesAccessVerification, .verified(try LikesSyncHandle("@gin")))
         XCTAssertEqual(runner.invocations.count, 1)
+    }
+
+    /// Exit 0 with ZERO likes-verify output is what the wrong account's
+    /// session (likes are private) or an empty account looks like — a distinct
+    /// third state, neither "Verified" nor a diagnostic failure. Info-level
+    /// lines don't change that.
+    func testVerificationWithZeroLikesVisibleIsThirdStateNotVerified() async throws {
+        let handle = try LikesSyncHandle("@gin")
+        let (manager, _, _, _) = makeManager(runs: [
+            .init(lines: ["[cookies][info] Extracted 863 cookies from Chrome"], exitCode: 0)
+        ])
+
+        manager.verifyLikesAccess()
+        await waitForVerification(manager)
+
+        XCTAssertEqual(manager.likesAccessVerification, .noLikesVisible(handle))
+        XCTAssertTrue(
+            LikesAccessVerification.noLikesVisibleMessage(for: handle)
+                .hasPrefix("Could not see any likes for @gin."))
+    }
+
+    func testVerificationFailureStillNamesTheDiagnostic() async throws {
+        let (manager, _, _, _) = makeManager(runs: [
+            .init(lines: ["[twitter][error] Login required"], exitCode: 1)
+        ])
+
+        manager.verifyLikesAccess()
+        await waitForVerification(manager)
+
+        guard case .failed(let message) = manager.likesAccessVerification else {
+            return XCTFail("expected .failed, got \(manager.likesAccessVerification)")
+        }
+        XCTAssertTrue(message.contains("X login could not be verified"))
     }
 
     func testCookieExtractionInfoDoesNotCreateSuccessfulSyncFailure() async {
@@ -194,5 +233,175 @@ final class DownloadManagerLikesSyncTests: XCTestCase {
         XCTAssertEqual(manager.likesSyncSnapshot.counts.ignored, 1)
         let accountID = try XCTUnwrap(store.account(for: LikesSyncHandle("gin"))?.id)
         XCTAssertEqual(store.latestRun(accountID: accountID)?.status, .completed)
+    }
+
+    // MARK: - Run-level failures stop being sticky (fix 1)
+
+    /// A run-level failure (here: sign-in) must not flag every later flawless
+    /// sync forever — a clean full scan resolves it and the card returns to
+    /// "Likes sync completed."
+    func testFlawlessFullScanAfterRunLevelFailureClearsTheCard() async throws {
+        let post = event("post", #"{"tweet_id":"123","url":"https://x.com/gin/status/123"}"#)
+        let after = event("after", #"{"tweet_id":"123","media_id":"m1","_path":"/tmp/a.jpg"}"#)
+        let postAfter = event("post-after", #"{"tweet_id":"123"}"#)
+        let (manager, _, store, _) = makeManager(runs: [
+            .init(lines: ["[twitter][error] Login required"], exitCode: 1),
+            .init(lines: [post, after, postAfter], exitCode: 0),
+        ])
+
+        manager.startLikesSync()
+        await waitForLikesRun(manager)
+        let failure = try XCTUnwrap(manager.likesSyncSnapshot.failures.first)
+        XCTAssertEqual(manager.likesSyncSnapshot.status, .failed)
+        XCTAssertTrue(failure.isRunLevel)
+        XCTAssertEqual(failure.category, .authentication)
+
+        manager.startLikesSync()
+        await waitForLikesRun(manager)
+        XCTAssertEqual(manager.likesSyncSnapshot.status, .completed)
+        XCTAssertTrue(manager.likesSyncSnapshot.failures.isEmpty)
+        XCTAssertEqual(manager.likesSyncSnapshot.message, "Likes sync completed.")
+        let accountID = try XCTUnwrap(store.account(for: LikesSyncHandle("gin"))?.id)
+        XCTAssertTrue(store.pendingFailures(accountID: accountID).isEmpty)
+    }
+
+    /// Retrying a run-level failure re-runs the full scan; when that re-run
+    /// succeeds, the failure is resolved instead of lingering.
+    func testRetryingRunLevelFailureRunsFullScanAndResolvesItOnSuccess() async throws {
+        let post = event("post", #"{"tweet_id":"123","url":"https://x.com/gin/status/123"}"#)
+        let after = event("after", #"{"tweet_id":"123","media_id":"m1","_path":"/tmp/a.jpg"}"#)
+        let postAfter = event("post-after", #"{"tweet_id":"123"}"#)
+        let (manager, runner, _, _) = makeManager(runs: [
+            .init(lines: ["[twitter][error] Login required"], exitCode: 1),
+            .init(lines: [post, after, postAfter], exitCode: 0),
+        ])
+
+        manager.startLikesSync()
+        await waitForLikesRun(manager)
+        let failure = try XCTUnwrap(manager.likesSyncSnapshot.failures.first)
+        XCTAssertTrue(failure.isRunLevel)
+
+        manager.retryLikesFailure(failure)
+        await waitForLikesRun(manager)
+        XCTAssertEqual(runner.invocations.last?.last, "https://x.com/gin/likes")
+        XCTAssertEqual(manager.likesSyncSnapshot.status, .completed)
+        XCTAssertTrue(manager.likesSyncSnapshot.failures.isEmpty)
+    }
+
+    /// A run-level failure recorded by the CURRENT run blocks the resolution —
+    /// exit 0 alone is not proof when the run itself just failed at zero items.
+    func testRunLevelFailureRecordedThisRunIsNotResolvedByItsOwnExitZero() async throws {
+        let (manager, _, _, _) = makeManager(runs: [
+            .init(lines: ["[twitter][warning] 429 Too Many Requests"], exitCode: 0)
+        ])
+
+        manager.startLikesSync()
+        await waitForLikesRun(manager)
+
+        XCTAssertEqual(manager.likesSyncSnapshot.status, .failed)
+        XCTAssertEqual(manager.likesSyncSnapshot.failures.count, 1)
+        XCTAssertEqual(
+            manager.likesSyncSnapshot.message, "X rate-limited this sync. Wait a while, then retry.")
+        let failure = try XCTUnwrap(manager.likesSyncSnapshot.failures.first)
+        XCTAssertEqual(failure.category, .rateLimited)
+        XCTAssertEqual(failure.displayTitle, "Whole sync failed — rate limit")
+        XCTAssertEqual(failure.retryActionTitle, "Retry Sync")
+    }
+
+    // MARK: - Rate-limit waits are not failures (fix 2)
+
+    /// gallery-dl's info-level wait notice as the LAST line of a flawless run
+    /// must not turn the run into "needs attention".
+    func testInfoWaitLineOnFlawlessRunDoesNotRecordFailure() async throws {
+        let post = event("post", #"{"tweet_id":"123","url":"https://x.com/gin/status/123"}"#)
+        let after = event("after", #"{"tweet_id":"123","media_id":"m1","_path":"/tmp/a.jpg"}"#)
+        let postAfter = event("post-after", #"{"tweet_id":"123"}"#)
+        let wait = "[twitter][info] Waiting until 09:20:00 (rate limit)"
+        let (manager, _, _, _) = makeManager(runs: [
+            .init(lines: [post, after, postAfter, wait], exitCode: 0)
+        ])
+
+        manager.startLikesSync()
+        await waitForLikesRun(manager)
+
+        XCTAssertEqual(manager.likesSyncSnapshot.status, .completed)
+        XCTAssertTrue(manager.likesSyncSnapshot.failures.isEmpty)
+        XCTAssertEqual(manager.likesSyncSnapshot.message, "Likes sync completed.")
+    }
+
+    /// A warning-level rate-limit line at exit 0 escalates only when the run
+    /// made no progress; with items downloaded it was just a survived pause.
+    func testWarningRateLimitAtExitZeroWithProgressCompletes() async throws {
+        let post = event("post", #"{"tweet_id":"123","url":"https://x.com/gin/status/123"}"#)
+        let after = event("after", #"{"tweet_id":"123","media_id":"m1","_path":"/tmp/a.jpg"}"#)
+        let postAfter = event("post-after", #"{"tweet_id":"123"}"#)
+        let warn = "[twitter][warning] 429 Too Many Requests"
+        let (manager, _, _, _) = makeManager(runs: [
+            .init(lines: [post, after, postAfter, warn], exitCode: 0)
+        ])
+
+        manager.startLikesSync()
+        await waitForLikesRun(manager)
+
+        XCTAssertEqual(manager.likesSyncSnapshot.status, .completed)
+        XCTAssertTrue(manager.likesSyncSnapshot.failures.isEmpty)
+    }
+
+    // MARK: - Zero visible tweets is not "up to date" (fix 4)
+
+    func testCompletedRunWithZeroTweetsSaysNoLikesVisible() async throws {
+        let (manager, _, _, _) = makeManager(runs: [
+            .init(lines: [], exitCode: 0)
+        ])
+
+        manager.startLikesSync()
+        await waitForLikesRun(manager)
+
+        XCTAssertEqual(manager.likesSyncSnapshot.status, .completed)
+        let message = try XCTUnwrap(manager.likesSyncSnapshot.message)
+        XCTAssertTrue(message.hasPrefix("No likes were visible for @gin."), message)
+    }
+
+    func testCompletedRunWithOnlySkipsStillSaysUpToDate() async throws {
+        let post = event("post", #"{"tweet_id":"123","url":"https://x.com/gin/status/123"}"#)
+        let skip = event("skip", #"{"tweet_id":"123","media_id":"m1","_path":"/tmp/a.jpg"}"#)
+        let postAfter = event("post-after", #"{"tweet_id":"123"}"#)
+        let (manager, _, _, _) = makeManager(runs: [
+            .init(lines: [post, skip, postAfter], exitCode: 0)
+        ])
+
+        manager.startLikesSync()
+        await waitForLikesRun(manager)
+
+        XCTAssertEqual(manager.likesSyncSnapshot.status, .completed)
+        XCTAssertEqual(manager.likesSyncSnapshot.message, "Up to date — no new media.")
+    }
+
+    // MARK: - Failed-run headline names the newest cause (fix 6)
+
+    /// Restoring an ignored stale failure mid-run bumps its updated_at past
+    /// the new failure's — the headline must still cite the current run's
+    /// cause, not the resurrected old row.
+    func testMidRunRestoreOfStaleFailureCannotMaskNewCause() async throws {
+        let oldError = event("error", #"{"tweet_id":"111","message":"login required"}"#)
+        let newError = event("error", #"{"tweet_id":"222","message":"no space left on device"}"#)
+        var second = FakeLikesSyncProcessRunner.Run(lines: [newError], exitCode: 1)
+        let (manager, runner, _, _) = makeManager(runs: [
+            .init(lines: [oldError], exitCode: 1)
+        ])
+        second.afterLines = { [weak manager] in manager?.restoreIgnoredLikesFailures() }
+
+        manager.startLikesSync()
+        await waitForLikesRun(manager)
+        let stale = try XCTUnwrap(manager.likesSyncSnapshot.failures.first)
+        manager.ignoreLikesFailure(stale)
+
+        runner.runs.append(second)
+        manager.startLikesSync()
+        await waitForLikesRun(manager)
+
+        XCTAssertEqual(manager.likesSyncSnapshot.status, .failed)
+        XCTAssertEqual(manager.likesSyncSnapshot.failures.count, 2)
+        XCTAssertEqual(manager.likesSyncSnapshot.message, "no space left on device")
     }
 }

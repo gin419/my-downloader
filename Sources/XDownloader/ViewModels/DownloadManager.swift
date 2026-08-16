@@ -66,6 +66,12 @@ class DownloadManager: ObservableObject {
     private var likesAccumulator = LikesSyncRunAccumulator()
     private var likesDiagnostics: [String] = []
     private var likesCancelRequested = false
+    /// True while the active run is a full scan (no input URLs) — only a full
+    /// scan's clean finish proves run-level failure causes are gone.
+    private var likesRunIsFullScan = false
+    /// True once the active run records a run-level failure (nil tweet id),
+    /// which blocks auto-resolving the account's prior run-level rows.
+    private var likesRunRecordedRunLevelFailure = false
     /// In-flight FxTwitterService fallbacks — URLSession Tasks, so they need
     /// Task.cancel() rather than Process.terminate() when the user hits Stop.
     private var activeFxTasks: [UUID: Task<Bool, Never>] = [:]
@@ -809,13 +815,19 @@ class DownloadManager: ObservableObject {
                     unregister: { [weak self] in self?.likesVerificationProcess = nil },
                     onLine: { line in
                         if line.hasPrefix("likes-verify\t") { sawExtractorOutput = true }
-                        if Self.isUsefulLikesDiagnostic(line) { diagnostics.append(line) }
+                        if LikesSyncEventParser.isUsefulDiagnostic(line) { diagnostics.append(line) }
                     })
             }
             guard case .verifying = self.likesAccessVerification else { return }
-            if exitCode == 0, diagnostics.isEmpty || sawExtractorOutput {
+            switch LikesAccessVerification.outcome(
+                exitCode: exitCode, sawLikes: sawExtractorOutput,
+                hasDiagnostics: !diagnostics.isEmpty)
+            {
+            case .verified:
                 self.likesAccessVerification = .verified(handle)
-            } else {
+            case .noLikesVisible:
+                self.likesAccessVerification = .noLikesVisible(handle)
+            case .failed:
                 self.likesAccessVerification = .failed(
                     Self.likesFailureMessage(from: diagnostics.last, exitCode: exitCode))
             }
@@ -870,6 +882,8 @@ class DownloadManager: ObservableObject {
         likesAccumulator = LikesSyncRunAccumulator()
         likesDiagnostics = []
         likesCancelRequested = false
+        likesRunIsFullScan = inputURLs == nil
+        likesRunRecordedRunLevelFailure = false
         likesSyncSnapshot = LikesSyncSnapshot(
             handle: handle,
             status: .running,
@@ -962,7 +976,7 @@ class DownloadManager: ObservableObject {
     private func consumeLikesLine(_ line: String) {
         guard let accountID = likesAccountID, let runID = likesRunID else { return }
         guard let event = LikesSyncEventParser.parse(line) else {
-            if Self.isUsefulLikesDiagnostic(line) {
+            if LikesSyncEventParser.isUsefulDiagnostic(line) {
                 likesDiagnostics.append(line)
                 if likesDiagnostics.count > 20 { likesDiagnostics.removeFirst() }
             }
@@ -1009,6 +1023,7 @@ class DownloadManager: ObservableObject {
         url: String? = nil
     ) {
         guard let accountID = likesAccountID else { return }
+        if tweetID == nil { likesRunRecordedRunLevelFailure = true }
         let classified = category ?? LikesSyncFailureCategory.classify(message)
         let identity = tweetID ?? url ?? classified.rawValue
         let failure = LikesSyncFailure(
@@ -1027,15 +1042,31 @@ class DownloadManager: ObservableObject {
 
     private func finishLikesSync(exitCode: Int32) {
         guard let runID = likesRunID, let accountID = likesAccountID else { return }
+        let sawProgress =
+            likesAccumulator.downloadedCount > 0 || likesAccumulator.skippedCount > 0
         let diagnosticCategory = likesDiagnostics.last.map(LikesSyncFailureCategory.classify)
+        // At exit 0, a leftover rate-limit diagnostic on a run that made
+        // progress is a pause the run survived, not a failure.
         let diagnosticIsFatalAtZero =
-            diagnosticCategory == .authentication
-            || diagnosticCategory == .rateLimited || diagnosticCategory == .disk
+            diagnosticCategory == .authentication || diagnosticCategory == .disk
+            || (diagnosticCategory == .rateLimited && !sawProgress)
         if (exitCode != 0 || diagnosticIsFatalAtZero), likesAccumulator.failureCount == 0,
             !likesCancelRequested
         {
             let message = Self.likesFailureMessage(from: likesDiagnostics.last, exitCode: exitCode)
-            recordLikesFailure(message: message)
+            // Classify from the raw diagnostic, not the polished copy — the
+            // rewritten message may no longer contain the classifier's tokens.
+            recordLikesFailure(message: message, category: diagnosticCategory)
+        }
+
+        // A full scan that finishes cleanly without recording a new run-level
+        // failure proves the run-level causes (sign-in, rate limit, disk…) are
+        // gone — resolve their stale rows so the card can return to
+        // "Likes sync completed." instead of flagging them forever.
+        if exitCode == 0, likesRunIsFullScan, !likesRunRecordedRunLevelFailure,
+            !likesCancelRequested
+        {
+            likesSyncStore.resolveRunLevelFailures(accountID: accountID)
         }
 
         let pending = likesSyncStore.pendingFailures(accountID: accountID)
@@ -1062,15 +1093,27 @@ class DownloadManager: ObservableObject {
         likesSyncSnapshot.finishedAt = finishedAt
         switch status {
         case .completed:
-            likesSyncSnapshot.message =
-                likesAccumulator.downloadedCount == 0
-                ? "Up to date — no new media." : "Likes sync completed."
+            if likesAccumulator.tweetCount == 0 {
+                // Zero tweets at exit 0 is NOT proof of being up to date — it
+                // is also what wrong-account cookies, hidden likes, or a stale
+                // extractor yielding nothing look like.
+                let name = likesSyncSnapshot.handle?.displayName ?? "this account"
+                likesSyncSnapshot.message =
+                    "No likes were visible for \(name). Verify the X session in Settings; "
+                    + "if you are signed in, update gallery-dl."
+            } else {
+                likesSyncSnapshot.message =
+                    likesAccumulator.downloadedCount == 0
+                    ? "Up to date — no new media." : "Likes sync completed."
+            }
         case .partial:
             likesSyncSnapshot.message = "Sync completed with items that need attention."
         case .cancelled:
             likesSyncSnapshot.message = "Sync cancelled. Saved files are kept; the next sync resumes safely."
         case .failed:
-            likesSyncSnapshot.message = pending.first?.message ?? "Likes sync failed."
+            likesSyncSnapshot.message =
+                LikesSyncFailure.headline(from: pending, currentRunID: runID)?.message
+                ?? "Likes sync failed."
         default:
             break
         }
@@ -1147,21 +1190,6 @@ class DownloadManager: ObservableObject {
             outputDirectory: account.outputDirectory,
             startedAt: run.startedAt,
             finishedAt: run.finishedAt)
-    }
-
-    nonisolated private static func isUsefulLikesDiagnostic(_ line: String) -> Bool {
-        let lower = line.lowercased()
-        if lower.contains("[warning]") && lower.contains("api errors (") { return false }
-        if lower.contains("[cookies][info]") || lower.contains("[cookies][debug]") { return false }
-        let cookieFailure =
-            lower.contains("cookie")
-            && (lower.contains("[warning]") || lower.contains("[error]")
-                || lower.contains("failed") || lower.contains("unable")
-                || lower.contains("could not") || lower.contains("not found"))
-        return lower.contains("[error]") || lower.contains("429") || lower.contains("rate limit")
-            || lower.contains("login") || lower.contains("unauthorized") || cookieFailure
-            || lower.contains("no space") || lower.contains("permission denied")
-            || lower.contains("connection") || lower.contains("timeout")
     }
 
     nonisolated private static func likesFailureMessage(from diagnostic: String?, exitCode: Int32) -> String {

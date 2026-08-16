@@ -76,4 +76,52 @@ final class LikesSyncEventParserTests: XCTestCase {
         XCTAssertEqual(event?.failureCategory, .parse)
         XCTAssertEqual(event?.message, "Could not parse gallery-dl event JSON")
     }
+
+    // MARK: - Diagnostics capture (isUsefulDiagnostic)
+
+    /// gallery-dl announces rate-limit pauses at info level and then WAITS —
+    /// the run survives them. They must never enter the diagnostics buffer,
+    /// where a flawless exit-0 run would turn them into a recorded failure.
+    func testInfoLevelRateLimitWaitLinesAreNotDiagnostics() {
+        XCTAssertFalse(
+            LikesSyncEventParser.isUsefulDiagnostic(
+                "[twitter][info] Waiting for 60 seconds (rate limit)"))
+        XCTAssertFalse(
+            LikesSyncEventParser.isUsefulDiagnostic(
+                "[twitter][info] Waiting until 09:20:00 (429 Too Many Requests)"))
+    }
+
+    /// Some wait notices arrive without a bracketed level; the leading
+    /// "Waiting" still marks them as progress, not failure.
+    func testBareWaitingLinesAreNotDiagnostics() {
+        XCTAssertFalse(
+            LikesSyncEventParser.isUsefulDiagnostic("Waiting until 09:20:00 (rate limit)"))
+        XCTAssertFalse(
+            LikesSyncEventParser.isUsefulDiagnostic("  waiting for rate limit reset"))
+    }
+
+    /// Info/debug level lines are routine progress whatever they mention.
+    func testInfoAndDebugLevelLinesAreNotDiagnostics() {
+        XCTAssertFalse(
+            LikesSyncEventParser.isUsefulDiagnostic("[twitter][info] Login with cookies"))
+        XCTAssertFalse(
+            LikesSyncEventParser.isUsefulDiagnostic(
+                "[urllib3][debug] Starting new HTTPS connection"))
+        XCTAssertFalse(
+            LikesSyncEventParser.isUsefulDiagnostic(
+                "[cookies][info] Extracted 863 cookies from Chrome"))
+    }
+
+    /// Real warning/error-level rate-limit and auth lines must stay captured —
+    /// they are the message source when the run genuinely fails.
+    func testWarningAndErrorLevelDiagnosticsAreRetained() {
+        XCTAssertTrue(
+            LikesSyncEventParser.isUsefulDiagnostic("[twitter][error] 429 Too Many Requests"))
+        XCTAssertTrue(
+            LikesSyncEventParser.isUsefulDiagnostic("[twitter][warning] rate limit exceeded"))
+        XCTAssertTrue(
+            LikesSyncEventParser.isUsefulDiagnostic("[twitter][error] Login required"))
+        XCTAssertTrue(
+            LikesSyncEventParser.isUsefulDiagnostic("[downloader.http][warning] cookies not found"))
+    }
 }
