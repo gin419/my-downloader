@@ -93,6 +93,16 @@ final class LikesSyncModelsTests: XCTestCase {
         XCTAssertEqual(unknown.displayTitle, "Whole sync failed")
     }
 
+    /// With the real stale-tool signatures now routed into .tool, its
+    /// run-level row title must name the outdated tool — "gallery-dl" alone
+    /// named the messenger, not the cause.
+    func testToolRunLevelRowTitleNamesOutdatedTool() {
+        let tool = failure(tweetID: nil, url: nil, category: .tool)
+        XCTAssertTrue(tool.isRunLevel)
+        XCTAssertEqual(tool.displayTitle, "Whole sync failed — outdated tool")
+        XCTAssertEqual(tool.retryActionTitle, "Retry Sync")
+    }
+
     // MARK: - classify() keyword truth (4e: stale-tool and auth blind spots)
 
     /// X's primary real-world auth failure wordings must land in the

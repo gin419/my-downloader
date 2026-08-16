@@ -71,14 +71,34 @@ enum LikesSyncFailureCategory: String, Codable, CaseIterable {
 
     static func classify(_ message: String) -> LikesSyncFailureCategory {
         let lower = message.lowercased()
-        if lower.contains("login") || lower.contains("unauthorized") || lower.contains("cookie") {
+        // Stale-tool signatures outrank the keyword buckets: argparse
+        // rejections and crash tails echo arbitrary text (option names,
+        // dict keys) that could stray into other buckets, and they are the
+        // output real staleness actually produces — the one case whose fix
+        // ("update gallery-dl") the .tool copy names.
+        if lower.contains("unrecognized arguments") || lower.contains("usage: gallery-dl")
+            || lower.contains("unexpected error occurred") || lower.contains("keyerror")
+            || lower.contains("typeerror") || lower.contains("unable to retrieve tweets")
+        {
+            return .tool
+        }
+        if lower.contains("login") || lower.contains("unauthorized") || lower.contains("cookie")
+            || lower.contains("could not authenticate") || lower.contains("authorization")
+            || lower.contains("auth_token") || lower.contains("account is temporarily locked")
+            || lower.contains("blocked your account")
+        {
             return .authentication
         }
         if lower.contains("rate limit") || lower.contains("too many requests") || lower.contains("429") {
             return .rateLimited
         }
+        // Before the "not found" bucket: an API-endpoint 404 is the tool
+        // speaking a retired dialect, not deleted content.
+        if isEndpointNotFound(message) {
+            return .tool
+        }
         if lower.contains("not found") || lower.contains("unavailable") || lower.contains("no results")
-            || lower.contains("deleted")
+            || lower.contains("deleted") || lower.contains("protected")
         {
             return .unavailable
         }
@@ -93,7 +113,7 @@ enum LikesSyncFailureCategory: String, Codable, CaseIterable {
             return .disk
         }
         if lower.contains("not installed") || lower.contains("unsupported url")
-            || lower.contains("no suitable extractor") || lower.contains("process")
+            || lower.contains("no suitable extractor") || lower.contains("[process][error]")
         {
             return .tool
         }
@@ -110,12 +130,11 @@ enum LikesSyncFailureCategory: String, Codable, CaseIterable {
     /// retired dialect (the historically documented way stale gallery-dl
     /// breaks), not deleted content. Per-item 404s (twimg media, status
     /// URLs) stay `.unavailable`.
-    ///
-    /// Declared red: always false for now; the URL inspection lands with the
-    /// implementation commit.
     static func isEndpointNotFound(_ message: String) -> Bool {
-        _ = message
-        return false
+        let lower = message.lowercased()
+        guard lower.contains("404") || lower.contains("not found") else { return false }
+        return lower.contains("x.com/i/api") || lower.contains("twitter.com/i/api")
+            || lower.contains("/graphql/")
     }
 }
 
@@ -257,7 +276,7 @@ extension LikesSyncFailure {
         case .network: return "Whole sync failed — network"
         case .disk: return "Whole sync failed — disk"
         case .unavailable: return "Whole sync failed — content unavailable"
-        case .tool: return "Whole sync failed — gallery-dl"
+        case .tool: return "Whole sync failed — outdated tool"
         case .parse: return "Whole sync failed — output parsing"
         case .unknown: return "Whole sync failed"
         }

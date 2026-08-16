@@ -81,6 +81,20 @@ enum LikesSyncEventParser {
         if lower.contains("[info]") || lower.contains("[debug]") { return false }
         if lower.trimmingCharacters(in: .whitespaces).hasPrefix("waiting") { return false }
         if lower.contains("[warning]") && lower.contains("api errors (") { return false }
+        // Stale-tool output carries no bracketed level: argparse rejections
+        // (a gallery-dl too old for this app's CLI options exits 2 printing
+        // "usage:" / "gallery-dl: error: unrecognized arguments…") and
+        // Python traceback tails ("KeyError: 'data'"). Dropped, the failure
+        // card falls back to a bare exit code and blames the user's login
+        // for an outdated binary. Indented usage-continuation and traceback
+        // frame lines stay excluded — only the head/tail names the cause.
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        if lower.contains("unrecognized arguments") || trimmed.hasPrefix("usage: gallery-dl")
+            || trimmed.hasPrefix("gallery-dl: error:")
+            || trimmed.range(of: #"^\w+Error: "#, options: .regularExpression) != nil
+        {
+            return true
+        }
         let cookieFailure =
             lower.contains("cookie")
             && (lower.contains("[warning]") || lower.contains("[error]")

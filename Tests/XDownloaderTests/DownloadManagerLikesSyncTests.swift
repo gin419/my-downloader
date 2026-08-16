@@ -377,6 +377,107 @@ final class DownloadManagerLikesSyncTests: XCTestCase {
         XCTAssertEqual(manager.likesSyncSnapshot.message, "Up to date — no new media.")
     }
 
+    // MARK: - Stale gallery-dl stops masquerading as other failures (4e)
+
+    /// A gallery-dl too old for this app's CLI options exits 2 printing
+    /// argparse lines. The card must blame the outdated binary — the
+    /// constant copy, category .tool, the outdated-tool title — never the
+    /// user's login, and never headline the raw argparse line.
+    func testArgparseExitTwoIsReportedAsOutdatedToolNotLogin() async throws {
+        let (manager, _, _, _) = makeManager(runs: [
+            .init(
+                lines: [
+                    "usage: gallery-dl [OPTION]... URL...",
+                    "gallery-dl: error: unrecognized arguments: --Print post:likes-sync",
+                ],
+                exitCode: 2)
+        ])
+
+        manager.startLikesSync()
+        await waitForLikesRun(manager)
+
+        XCTAssertEqual(manager.likesSyncSnapshot.status, .failed)
+        XCTAssertEqual(manager.likesSyncSnapshot.message, DownloadManager.likesStaleToolExitTwoMessage)
+        let failure = try XCTUnwrap(manager.likesSyncSnapshot.failures.first)
+        XCTAssertEqual(failure.category, .tool)
+        XCTAssertEqual(failure.displayTitle, "Whole sync failed — outdated tool")
+        XCTAssertFalse(failure.message.contains("Verify the selected X login"))
+    }
+
+    /// The Settings Verify flow hits the same argparse wall — its status row
+    /// must give the same update-gallery-dl guidance, not a login hint.
+    func testVerificationExitTwoNamesTheOutdatedTool() async throws {
+        let (manager, _, _, _) = makeManager(runs: [
+            .init(
+                lines: ["gallery-dl: error: unrecognized arguments: --Print post:likes-sync"],
+                exitCode: 2)
+        ])
+
+        manager.verifyLikesAccess()
+        await waitForVerification(manager)
+
+        guard case .failed(let message) = manager.likesAccessVerification else {
+            return XCTFail("expected .failed, got \(manager.likesAccessVerification)")
+        }
+        XCTAssertEqual(message, DownloadManager.likesStaleToolExitTwoMessage)
+    }
+
+    /// A whole-run 404 on X's GraphQL API is a retired endpoint — the
+    /// historically documented stale-tool failure — not deleted content.
+    func testEndpointNotFoundRunHeadlinesRetiredAPINotDeletedContent() async throws {
+        let endpoint404 =
+            "[twitter][error] '404 Not Found' for 'https://x.com/i/api/graphql/AbCdEf/Likes'"
+        let (manager, _, _, _) = makeManager(runs: [.init(lines: [endpoint404], exitCode: 4)])
+
+        manager.startLikesSync()
+        await waitForLikesRun(manager)
+
+        XCTAssertEqual(manager.likesSyncSnapshot.status, .failed)
+        XCTAssertEqual(manager.likesSyncSnapshot.message, DownloadManager.likesRetiredEndpointMessage)
+        let failure = try XCTUnwrap(manager.likesSyncSnapshot.failures.first)
+        XCTAssertEqual(failure.category, .tool)
+        XCTAssertEqual(failure.displayTitle, "Whole sync failed — outdated tool")
+    }
+
+    /// A stale-extractor crash (Python traceback tail) headlines the
+    /// polished update-gallery-dl copy; the raw diagnostic stays visible in
+    /// the same row message as secondary detail — never AS the headline.
+    func testStaleCrashHeadlinesPolishedCopyAndKeepsRawAsDetail() async throws {
+        let (manager, _, _, _) = makeManager(runs: [
+            .init(
+                lines: ["Traceback (most recent call last):", "KeyError: 'legacy'"],
+                exitCode: 1)
+        ])
+
+        manager.startLikesSync()
+        await waitForLikesRun(manager)
+
+        XCTAssertEqual(manager.likesSyncSnapshot.status, .failed)
+        let message = try XCTUnwrap(manager.likesSyncSnapshot.message)
+        XCTAssertTrue(message.hasPrefix("This gallery-dl version cannot sync X Likes."), message)
+        let failure = try XCTUnwrap(manager.likesSyncSnapshot.failures.first)
+        XCTAssertEqual(failure.category, .tool)
+        XCTAssertTrue(failure.message.contains("KeyError: 'legacy'"), "raw diagnostic must stay as detail")
+    }
+
+    /// X's primary real-world auth wording now reaches the auth bucket, so
+    /// the card shows the app's sign-in guidance instead of the raw line.
+    func testCouldNotAuthenticateHeadlinesTheAuthGuidance() async throws {
+        let (manager, _, _, _) = makeManager(runs: [
+            .init(lines: ["[twitter][error] 'Could not authenticate you'"], exitCode: 1)
+        ])
+
+        manager.startLikesSync()
+        await waitForLikesRun(manager)
+
+        XCTAssertEqual(manager.likesSyncSnapshot.status, .failed)
+        let message = try XCTUnwrap(manager.likesSyncSnapshot.message)
+        XCTAssertTrue(message.hasPrefix("X login could not be verified."), message)
+        let failure = try XCTUnwrap(manager.likesSyncSnapshot.failures.first)
+        XCTAssertEqual(failure.category, .authentication)
+        XCTAssertEqual(failure.displayTitle, "Whole sync failed — sign-in")
+    }
+
     // MARK: - Failed-run headline names the newest cause (fix 6)
 
     /// Restoring an ignored stale failure mid-run bumps its updated_at past

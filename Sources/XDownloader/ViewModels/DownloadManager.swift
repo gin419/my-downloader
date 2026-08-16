@@ -1083,7 +1083,12 @@ class DownloadManager: ObservableObject {
         guard let runID = likesRunID, let accountID = likesAccountID else { return }
         let sawProgress =
             likesAccumulator.downloadedCount > 0 || likesAccumulator.skippedCount > 0
-        let diagnosticCategory = likesDiagnostics.last.map(LikesSyncFailureCategory.classify)
+        // argparse exits 2 before any extractor runs — the installed
+        // gallery-dl predates this app's CLI options. Pin the category in
+        // code: the usage lines may not survive capture, and the polished
+        // exit-2 copy carries none of the classifier's tokens.
+        let diagnosticCategory: LikesSyncFailureCategory? =
+            exitCode == 2 ? .tool : likesDiagnostics.last.map(LikesSyncFailureCategory.classify)
         // At exit 0, a leftover rate-limit diagnostic on a run that made
         // progress is a pause the run survived, not a failure.
         let diagnosticIsFatalAtZero =
@@ -1231,7 +1236,20 @@ class DownloadManager: ObservableObject {
             finishedAt: run.finishedAt)
     }
 
+    /// gallery-dl's exit code 2 is argparse rejecting this app's CLI options
+    /// before any extractor ran — the installed binary predates them. Nothing
+    /// about the user's login is implicated.
+    nonisolated static let likesStaleToolExitTwoMessage =
+        "Your gallery-dl is too old for this app's options — update gallery-dl (brew upgrade gallery-dl), then retry."
+
+    /// Every call 404ing on an x.com/i/api / GraphQL endpoint is the
+    /// historically documented way stale gallery-dl breaks: X retired the
+    /// endpoint the installed version still speaks.
+    nonisolated static let likesRetiredEndpointMessage =
+        "X changed its API and the installed gallery-dl no longer speaks it — update gallery-dl, then retry."
+
     nonisolated private static func likesFailureMessage(from diagnostic: String?, exitCode: Int32) -> String {
+        if exitCode == 2 { return likesStaleToolExitTwoMessage }
         guard let diagnostic, !diagnostic.isEmpty else {
             return "gallery-dl exited with code \(exitCode). Verify the selected X login and try again."
         }
@@ -1248,7 +1266,14 @@ class DownloadManager: ObservableObject {
         case .unavailable:
             return "X did not return this item; it may be deleted, protected, or unavailable."
         case .tool:
+            if LikesSyncFailureCategory.isEndpointNotFound(diagnostic) {
+                return likesRetiredEndpointMessage
+            }
+            // Polished copy headlines; the raw diagnostic stays visible as
+            // the failure row's secondary detail (the row renders this same
+            // message under its category title).
             return "This gallery-dl version cannot sync X Likes. Update gallery-dl, then try again."
+                + " (last output: \(diagnostic))"
         default:
             return diagnostic
         }
