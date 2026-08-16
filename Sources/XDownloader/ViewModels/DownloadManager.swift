@@ -75,6 +75,11 @@ class DownloadManager: ObservableObject {
     private var duplicateBatchQueue: [DuplicateBatch] = []
     private var activeCount: Int = 0
     private var feedbackTask: Task<Void, Never>?
+    /// Once-per-session guards for the persistent cookies-file feedback —
+    /// every affected download in a batch would otherwise re-post the same
+    /// banner. A deliberate re-select in Settings bypasses the guard.
+    private var cookieAccessFeedbackShown = false
+    private var cookieSaveFeedbackShown = false
     /// IDs of items the user explicitly paused — distinguishes a user-initiated
     /// `terminate()` from a real download failure when the process exits.
     private var pausedItemIDs: Set<UUID> = []
@@ -583,6 +588,34 @@ class DownloadManager: ObservableObject {
         }
     }
 
+    /// Tells the user their cookies.txt no longer backs downloads (stale
+    /// bookmark, vanished plain path, or failed bookmark creation) instead of
+    /// silently downgrading to browser cookies — later NSFW/X failures advise
+    /// "export cookies.txt in Settings", which the user already did. `force`
+    /// is for the deliberate re-select in Settings, which always deserves
+    /// fresh feedback.
+    private func surfaceCookieAccessFeedback(force: Bool = false) {
+        guard force || !cookieAccessFeedbackShown else { return }
+        cookieAccessFeedbackShown = true
+        showFeedback(
+            CaptureFeedback(
+                kind: .warning,
+                message: Self.cookiesFileInaccessibleFeedbackMessage,
+                isPersistent: true))
+    }
+
+    /// Companion to the cookie-save rescue: the download completed, but yt-dlp
+    /// couldn't write cookies back to the file at exit — say so once.
+    private func surfaceCookieSaveFeedback() {
+        guard !cookieSaveFeedbackShown else { return }
+        cookieSaveFeedbackShown = true
+        showFeedback(
+            CaptureFeedback(
+                kind: .warning,
+                message: Self.cookieSaveFailedFeedbackMessage,
+                isPersistent: true))
+    }
+
     private func showFeedback(_ feedback: CaptureFeedback) {
         withAnimation(.easeInOut(duration: 0.2)) { captureFeedback = feedback }
         feedbackTask?.cancel()
@@ -681,19 +714,35 @@ class DownloadManager: ObservableObject {
     func resolveCookiesForDownload() -> (path: String?, granted: URL?) {
         switch cookieAccess.resolveForDownload() {
         case .none:
-            return (cookiesFilePath, nil)  // no bookmark: plain display path (or nil), no grant
+            // No bookmark: plain display path (or nil), no grant. A stored
+            // path whose file has vanished behaves exactly like
+            // .bookmarkFailed — fall back to browser cookies, and say so.
+            guard let path = cookiesFilePath else { return (nil, nil) }
+            guard FileManager.default.fileExists(atPath: path) else {
+                surfaceCookieAccessFeedback()
+                return (nil, nil)
+            }
+            return (path, nil)
         case .resolved(let path, let granted):
             cookiesFilePath = path  // keep the display path in sync with the resolved location
             return (path, granted)
         case .bookmarkFailed:
             // Stale/moved cookies.txt: don't hand yt-dlp an ungranted --cookies path that would
-            // override and break browser cookies — fall back to --cookies-from-browser.
+            // override and break browser cookies — fall back to --cookies-from-browser. Tell the
+            // user: silently downgrading primes "export cookies.txt" advice they already followed.
+            surfaceCookieAccessFeedback()
             return (nil, nil)
         }
     }
 
     func setCookiesFile(from url: URL) {
-        cookieAccess.setFile(url)  // stores a security-scoped bookmark, or clears it (plain-path fallback)
+        // Keep the plain path even when the bookmark can't be created —
+        // downloads may still work while the app stays open — but say
+        // immediately that persistence is broken instead of priming a silent
+        // browser-cookie downgrade on the next launch.
+        if !cookieAccess.setFile(url) {
+            surfaceCookieAccessFeedback(force: true)
+        }
         cookiesFilePath = url.path
         saveSettings()
     }
@@ -1311,6 +1360,57 @@ class DownloadManager: ObservableObject {
         return false
     }
 
+    // MARK: - Cookies-file truth
+
+    /// Persistent status line shown when the configured cookies.txt can't back
+    /// a download — the security-scoped bookmark won't resolve, the stored
+    /// plain path no longer exists, or bookmark creation failed at selection
+    /// time. Shared by all three surfaces so the user reads one consistent
+    /// instruction instead of a silent downgrade to browser cookies.
+    static let cookiesFileInaccessibleFeedbackMessage =
+        "Your cookies.txt could not be accessed — re-select it in Settings → Cookies."
+
+    /// Persistent status line for the cookie-save rescue: the media itself is
+    /// on disk; only yt-dlp's write-back of cookies at exit failed.
+    static let cookieSaveFailedFeedbackMessage =
+        "Downloaded, but your cookies.txt couldn't be updated — it's missing or not writable. Re-select it in Settings → Cookies."
+
+    /// Replaces the raw Python traceback when the cookie save failed AND no
+    /// media landed on disk — the traceback names the mechanics, this names
+    /// the fix.
+    static let cookiesFileMissingFailureMessage =
+        "Your cookies.txt file is missing or unreadable — re-select it in Settings → Cookies, then Retry."
+
+    /// True when `message` is yt-dlp's cookie-save traceback for the run's own
+    /// cookies file. yt-dlp saves cookies BACK to the `--cookies` file at exit;
+    /// a deleted/moved (FileNotFoundError) or read-only (PermissionError) file
+    /// ends the run with a raw Python traceback AFTER the media downloaded, and
+    /// "filenotfounderror:" contains "error:", so parseLine fails the item on
+    /// it. Requiring the cookies file's own name keeps unrelated tracebacks
+    /// failing truthfully.
+    static func isCookieSaveTraceback(message: String, cookiesFilePath: String?) -> Bool {
+        guard let cookiesFilePath else { return false }
+        let fileName = (cookiesFilePath as NSString).lastPathComponent.lowercased()
+        guard !fileName.isEmpty else { return false }
+        let lower = message.lowercased()
+        guard lower.contains("filenotfounderror") || lower.contains("permissionerror") else {
+            return false
+        }
+        return lower.contains(fileName)
+    }
+
+    /// The cookie-save mirror of `subtitleOnlyFailure`: media reached disk and
+    /// the non-zero exit's only failure evidence is the cookie-save traceback
+    /// for the run's own cookies file — keep the download (the user's media IS
+    /// there) and let the caller surface feedback instead of failing the item.
+    static func isCookieSaveOnlyFailure(
+        item: DownloadItem, exitedCleanly: Bool, cookiesFilePath: String?
+    ) -> Bool {
+        guard !exitedCleanly, item.outputPath != nil else { return false }
+        guard case .failed(let message) = item.status else { return false }
+        return isCookieSaveTraceback(message: message, cookiesFilePath: cookiesFilePath)
+    }
+
     private func runDownload(_ item: DownloadItem) async {
         guard stillInList(item) else { return }
         item.status = .fetching
@@ -1369,7 +1469,15 @@ class DownloadManager: ObservableObject {
         // subtitle case so other non-zero exits (e.g. a Twitter multi-video tweet
         // that partially downloaded) still fall through to the fallback below.
         let subtitleOnlyFailure = item.subtitleDownloadFailed && !hasFatalError
-        if mediaCaptured && (ytResult.isSuccess || subtitleOnlyFailure) {
+        // Cookie write-back is best-effort too: yt-dlp saves cookies BACK to
+        // the --cookies file at exit, so a deleted/moved or read-only
+        // cookies.txt ends the run with a non-zero exit and a raw Python
+        // traceback AFTER the media fully downloaded ("filenotfounderror:"
+        // contains "error:", so parseLine set .failed). The media is the
+        // user's actual target — keep it and surface feedback instead.
+        let cookieSaveOnlyFailure = Self.isCookieSaveOnlyFailure(
+            item: item, exitedCleanly: ytResult.isSuccess, cookiesFilePath: cookies.path)
+        if mediaCaptured && (ytResult.isSuccess || subtitleOnlyFailure || cookieSaveOnlyFailure) {
             // ffmpeg was missing at merge time: the exit code says success,
             // but the deliverable is still a pre-merge intermediate — a
             // video without its audio. Fail truthfully (normal failure
@@ -1385,6 +1493,7 @@ class DownloadManager: ObservableObject {
             // intermediates were seen (or refresh the title off the final path).
             YtDlpService.ensureFinalMediaCounts(item)
             await runImageSweepIfNeeded(item)
+            if cookieSaveOnlyFailure { surfaceCookieSaveFeedback() }
             item.markCompleted()
             finalize(item)
             return
@@ -1511,6 +1620,18 @@ class DownloadManager: ObservableObject {
             let annotated = Self.annotatedWithInstalledVersion(
                 message, ytDlpStatus: toolHealth.health(for: RequirementsService.ytdlp.id)?.status)
             if annotated != message { item.status = .failed(annotated) }
+        }
+
+        // A cookie-save traceback with NOTHING on disk (yt-dlp can abort on
+        // the write-back before any media when the file check fires early, and
+        // no fallback rescued it): the raw Python traceback would be the row's
+        // failure message. Replace it with copy that names the fix. The
+        // media-on-disk variant completed above via cookieSaveOnlyFailure.
+        if case .failed(let message) = item.status,
+            item.outputPath == nil,
+            Self.isCookieSaveTraceback(message: message, cookiesFilePath: cookies.path)
+        {
+            item.status = .failed(Self.cookiesFileMissingFailureMessage)
         }
 
         finalize(item)
