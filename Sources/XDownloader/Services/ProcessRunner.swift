@@ -26,6 +26,17 @@ private final class LineBuffer: @unchecked Sendable {
     }
 }
 
+/// Outcome of a finished download process. `code` is the raw
+/// `terminationStatus`: an exit code normally, the **signal number** when
+/// `wasSignal` is set (`terminationReason == .uncaughtSignal` — our own
+/// pause/cancel `terminate()`, or a crash). User-facing messages must not
+/// present a signal number as if the tool chose to exit with it.
+struct ProcessResult {
+    let code: Int32
+    let wasSignal: Bool
+    var isSuccess: Bool { code == 0 && !wasSignal }
+}
+
 enum ProcessRunner {
 
     /// Generic cancellable streaming process used by long-running work that
@@ -123,7 +134,8 @@ enum ProcessRunner {
 
     /// Runs an external process and streams its stdout/stderr through `lineParser`.
     /// `register` is called with the live Process before launch (for cancellation support).
-    /// `unregister` is called after the process exits.
+    /// `unregister` is called after the process exits. A launch failure sets the
+    /// item failed and returns `code` -1 (not a signal).
     @MainActor
     @discardableResult
     static func run(
@@ -133,7 +145,7 @@ enum ProcessRunner {
         register: @escaping (Process) -> Void,
         unregister: @escaping () -> Void,
         lineParser: @escaping (String, DownloadItem) -> Void
-    ) async -> Int32 {
+    ) async -> ProcessResult {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executablePath)
         process.arguments = arguments
@@ -157,46 +169,41 @@ enum ProcessRunner {
 
         register(process)
 
-        let stdoutBuffer = LineBuffer()
-        let stderrBuffer = LineBuffer()
-        func makeHandler(_ buffer: LineBuffer) -> @Sendable (FileHandle) -> Void {
-            return { @Sendable handle in
-                let lines = buffer.take(handle.availableData)
-                guard !lines.isEmpty else { return }
-                Task { @MainActor in
-                    for line in lines {
-                        lineParser(line.trimmingCharacters(in: .whitespaces), item)
-                    }
-                }
-            }
-        }
-
-        stdout.fileHandleForReading.readabilityHandler = makeHandler(stdoutBuffer)
-        stderr.fileHandleForReading.readabilityHandler = makeHandler(stderrBuffer)
-
         do {
             try process.run()
         } catch {
             item.status = .failed(error.localizedDescription)
             unregister()
-            return -1
+            return ProcessResult(code: -1, wasSignal: false)
         }
+
+        // Same reader pattern as runStreaming: blocking availableData loops
+        // (trailing partial line included) that are awaited below.
+        let stdoutTask = makeStreamingReader(
+            handle: stdout.fileHandleForReading,
+            buffer: LineBuffer(),
+            onLine: { line in lineParser(line, item) })
+        let stderrTask = makeStreamingReader(
+            handle: stderr.fileHandleForReading,
+            buffer: LineBuffer(),
+            onLine: { line in lineParser(line, item) })
 
         await withCheckedContinuation { continuation in
             process.terminationHandler = { _ in continuation.resume() }
         }
 
-        stdout.fileHandleForReading.readabilityHandler = nil
-        stderr.fileHandleForReading.readabilityHandler = nil
-        // Flush any trailing partial line (final output without a newline).
-        for tail in [stdoutBuffer.flush(), stderrBuffer.flush()] {
-            if let trimmed = tail?.trimmingCharacters(in: .whitespaces), !trimmed.isEmpty {
-                lineParser(trimmed, item)
-            }
-        }
+        // The process can terminate before its pipes have delivered the final
+        // bytes. Await both readers so a last ERROR line always reaches
+        // lineParser before the caller composes a generic exit message —
+        // the detach-a-readabilityHandler approach used here before could
+        // drop it on short-lived processes.
+        await stdoutTask.value
+        await stderrTask.value
         unregister()
 
-        return process.terminationStatus
+        return ProcessResult(
+            code: process.terminationStatus,
+            wasSignal: process.terminationReason == .uncaughtSignal)
     }
 
     /// Minimal variant: no DownloadItem coupling, no register/unregister.

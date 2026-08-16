@@ -85,7 +85,9 @@ struct MenuBarState: Equatable {
                 state.pausedCount += 1
             case .failed(let message):
                 state.failedCount += 1
-                if state.firstFailureMessage == nil, !message.isEmpty, message != "external_redirect" {
+                if state.firstFailureMessage == nil, !message.isEmpty,
+                    message != DownloadStatus.externalRedirectSentinel
+                {
                     state.firstFailureMessage = message
                 }
             case .completed:

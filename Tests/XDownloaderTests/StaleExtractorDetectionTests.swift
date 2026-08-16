@@ -140,9 +140,10 @@ final class StaleExtractorDetectionTests: XCTestCase {
     func testUnrelatedErrorAfterTellKeepsRawErrorLine() {
         // A recorded tell must not hijack unrelated failures — only the
         // "Requested format is not available" error gets the diagnosis.
+        // (The 403 line used here before Phase 2 now has its own mapping.)
         let item = DownloadItem(url: "https://youtube.com/shorts/pzBazEzxqaI")
         parse(signatureTell, into: item)
-        let unrelated = "ERROR: unable to download video data: HTTP Error 403: Forbidden"
+        let unrelated = "ERROR: [youtube] pzBazEzxqaI: Video unavailable"
         parse(unrelated, into: item)
 
         XCTAssertEqual(failureMessage(item), unrelated)
@@ -153,7 +154,7 @@ final class StaleExtractorDetectionTests: XCTestCase {
         // keeps its raw line even when the format error follows a tell.
         let item = DownloadItem(url: "https://youtube.com/shorts/pzBazEzxqaI")
         parse(signatureTell, into: item)
-        let unrelated = "ERROR: unable to download video data: HTTP Error 403: Forbidden"
+        let unrelated = "ERROR: [youtube] pzBazEzxqaI: Video unavailable"
         parse(unrelated, into: item)
         parse(formatErrorLine, into: item)
 
@@ -162,21 +163,18 @@ final class StaleExtractorDetectionTests: XCTestCase {
 
     // MARK: - Messages must not trip the empty-success auto-retry
 
-    func testMessagesDoNotContainAutoRetryTriggerSubstrings() {
+    func testMessagesDoNotTriggerEmptySuccessAutoRetry() {
         // DownloadManager's empty-success auto-retry re-runs an item whose
-        // failure message matches these substrings. A broken tool would
-        // silently re-run and fail identically, so the diagnostic messages
-        // must never match.
-        let autoRetryTriggers = ["found no media", "No media found", "cookies.txt"]
+        // failure message matches its predicate (a substring check before
+        // Phase 2). A broken tool would silently re-run and fail identically,
+        // so the diagnostic messages must never match.
         let messages = [
             YtDlpService.staleToolMessage,
             YtDlpService.missingJSRuntimeMessage,
             YtDlpService.transientFormatMessage,
         ]
         for message in messages {
-            for trigger in autoRetryTriggers {
-                XCTAssertFalse(message.contains(trigger), "\"\(message)\" must not contain \"\(trigger)\"")
-            }
+            XCTAssertFalse(DownloadManager.isEmptySuccessMessage(message), "\"\(message)\" must not auto-retry")
         }
     }
 }

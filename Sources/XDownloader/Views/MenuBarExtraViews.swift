@@ -107,9 +107,16 @@ struct MenuBarMenuView: View {
     private func failureLine(_ state: MenuBarState) -> String {
         var line = "⚠ \(state.failedCount) failed"
         if let message = state.firstFailureMessage {
-            line += " — \(String(message.prefix(40)))"
+            // Wide enough that mapped copy keeps its actionable tail (the old
+            // 40-char cut always lost it), but still capped: an unbounded
+            // item widens the whole native menu to the longest line.
+            line += " — \(shortMessage(message))"
         }
         return line
+    }
+
+    private func shortMessage(_ message: String) -> String {
+        message.count > 100 ? String(message.prefix(100)) + "…" : message
     }
 
     private func badgeText(_ row: MenuBarState.Row) -> String {

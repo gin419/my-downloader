@@ -100,3 +100,49 @@ final class ProcessRunnerStreamingTests: XCTestCase {
         XCTAssertTrue(lines.contains { $0.hasPrefix("[process][error]") })
     }
 }
+
+/// `ProcessRunner.run` (the DownloadItem-coupled variant the downloads use).
+@MainActor
+final class ProcessRunnerRunTests: XCTestCase {
+
+    /// A short-lived process's final ERROR line must reach lineParser before
+    /// run() returns, every time — the caller composes its generic
+    /// exit-code message right after the await, and the pre-fix
+    /// readabilityHandler teardown could race the last pipe delivery and
+    /// drop the one line that named the real cause. Repeated iterations
+    /// because the race was timing-dependent.
+    func testFinalErrorLineAlwaysReachesParserBeforeReturn() async {
+        for iteration in 0..<30 {
+            let item = DownloadItem(url: "https://x.com/a/status/1")
+            var lines: [String] = []
+            let result = await ProcessRunner.run(
+                executablePath: "/bin/sh",
+                arguments: ["-c", "echo 'ERROR: the real cause' >&2; exit 3"],
+                item: item,
+                register: { _ in },
+                unregister: {},
+                lineParser: { line, _ in lines.append(line) })
+
+            XCTAssertEqual(result.code, 3, "iteration \(iteration)")
+            XCTAssertFalse(result.wasSignal, "iteration \(iteration)")
+            XCTAssertTrue(
+                lines.contains("ERROR: the real cause"),
+                "iteration \(iteration): final line lost — got \(lines)")
+        }
+    }
+
+    func testSignalDeathIsReportedAsSignalNotExitCode() async {
+        let item = DownloadItem(url: "https://x.com/a/status/1")
+        let result = await ProcessRunner.run(
+            executablePath: "/bin/sh",
+            arguments: ["-c", "kill -TERM $$"],
+            item: item,
+            register: { _ in },
+            unregister: {},
+            lineParser: { _, _ in })
+
+        XCTAssertTrue(result.wasSignal)
+        XCTAssertEqual(result.code, 15)
+        XCTAssertFalse(result.isSuccess)
+    }
+}
