@@ -39,7 +39,6 @@ struct ContentView: View {
     @State private var urlInput: String = ""
     @State private var isHoveringDrop = false
     @State private var showInstallSheet = false
-    @State private var bannerDismissed = false
     @State private var statusFilter: DownloadFilter = .all
     /// "Already in your list": the row to scroll to and pulse.
     @State private var scrollTarget: UUID?
@@ -48,17 +47,22 @@ struct ContentView: View {
     @State private var pulseTask: Task<Void, Never>?
     @FocusState private var isInputFocused: Bool
 
-    private var showBanner: Bool {
-        !manager.missingTools.isEmpty && !bannerDismissed
+    /// Dismissal lives on the manager (session-scoped), so closing and
+    /// reopening the window cannot resurrect a dismissed banner for an
+    /// unchanged problem set.
+    private var bannerModel: RequirementsBannerModel? {
+        RequirementsBannerModel.visibleModel(
+            problems: manager.toolProblems,
+            dismissedSignature: manager.dismissedBannerSignature)
     }
 
     var body: some View {
         VStack(spacing: 0) {
-            if showBanner {
+            if let model = bannerModel {
                 RequirementsBannerView(
-                    tools: manager.missingTools,
-                    onSetup: { showInstallSheet = true },
-                    onDismiss: { bannerDismissed = true }
+                    model: model,
+                    onAction: { showInstallSheet = true },
+                    onDismiss: { manager.dismissedBannerSignature = model.signature }
                 )
                 .transition(.move(edge: .top).combined(with: .opacity))
             }
@@ -89,6 +93,9 @@ struct ContentView: View {
                     openWindow(id: "main")
                     NSApp.activate(ignoringOtherApps: true)
                 })
+            // Launch-time probe + the didBecomeActive cadence. Idempotent, so
+            // a window reopen doesn't restart anything.
+            manager.toolHealth.activate()
         }
         // initial: true — a capture can land while the window is closed
         // (URL scheme, import); when the window then opens, its side effects
@@ -106,9 +113,12 @@ struct ContentView: View {
             }
             AccessibilityNotification.Announcement(feedback.message).post()
         }
-        .sheet(isPresented: $showInstallSheet, onDismiss: { bannerDismissed = manager.missingTools.isEmpty }) {
-            InstallToolsSheet(tools: manager.missingTools)
-                .environmentObject(manager)
+        .sheet(isPresented: $showInstallSheet) {
+            // Signature-keyed dismissal makes a post-repair reset unnecessary:
+            // fixed problems hide the banner, changed ones bring it back. The
+            // sheet observes the monitor directly — a running repair survives
+            // dismissal and re-presentation.
+            InstallToolsSheet(monitor: manager.toolHealth)
         }
         .onDrop(of: [.plainText, .url], isTargeted: $isHoveringDrop) { providers in
             // Collect every provider first so one drop gesture is ONE capture —
