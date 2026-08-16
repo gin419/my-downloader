@@ -81,11 +81,25 @@ final class InstallSheetLabelTests: XCTestCase {
             "brew install deno")
         XCTAssertEqual(
             InstallSheetModel.manualCommand(
-                for: health("yt-dlp", path: "/x/yt-dlp", .broken(detail: "can't run"))),
+                for: health("yt-dlp", path: "/opt/homebrew/bin/yt-dlp", .broken(detail: "can't run"))),
             "brew reinstall yt-dlp")
         XCTAssertEqual(
             InstallSheetModel.manualCommand(
-                for: health("ffmpeg", path: "/x/ffmpeg", .outdated(installed: "9.0.1", detail: nil))),
+                for: health(
+                    "ffmpeg", path: "/usr/local/bin/ffmpeg",
+                    .outdated(installed: "9.0.1", detail: nil))),
             "brew upgrade ffmpeg")
+    }
+
+    /// A tool resolved OUTSIDE a Homebrew prefix must not be handed a brew
+    /// command — brew only touches its own cellar, so "brew reinstall" would
+    /// succeed while the pipx/MacPorts copy the app actually runs stays
+    /// broken.
+    func testManualCommandForNonBrewInstallNamesTheRealChannel() {
+        let command = InstallSheetModel.manualCommand(
+            for: health("gallery-dl", path: "/opt/local/bin/gallery-dl", .broken(detail: "can't run")))
+        XCTAssertFalse(command.hasPrefix("brew "), command)
+        XCTAssertTrue(command.contains("/opt/local/bin/gallery-dl"), command)
+        XCTAssertTrue(command.contains("not managed by Homebrew"), command)
     }
 }

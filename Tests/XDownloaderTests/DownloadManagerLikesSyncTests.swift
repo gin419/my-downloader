@@ -7,6 +7,9 @@ private final class FakeLikesSyncProcessRunner: LikesSyncProcessRunning {
     struct Run {
         var lines: [String]
         var exitCode: Int32
+        /// Real signal deaths report `wasSignal` with the SIGNAL number in
+        /// `exitCode` — mirroring ProcessRunner's ProcessResult.
+        var wasSignal = false
         var waitsForCancellation = false
         /// Runs after the lines are emitted, before the process "exits" —
         /// simulates user actions (Ignore/Restore) landing mid-run.
@@ -26,19 +29,21 @@ private final class FakeLikesSyncProcessRunner: LikesSyncProcessRunning {
         register _: @escaping (Process) -> Void,
         unregister _: @escaping () -> Void,
         onLine: @escaping @MainActor @Sendable (String) -> Void
-    ) async -> Int32 {
+    ) async -> ProcessResult {
         invocations.append(arguments)
         let run = runs.removeFirst()
         if run.waitsForCancellation {
             while !Task.isCancelled { await Task.yield() }
-            return 15
+            // A cancelled run dies of SIGTERM — the real runner reports that
+            // as a signal, never as a tool-chosen exit code.
+            return ProcessResult(code: 15, wasSignal: true)
         }
         for line in run.lines {
             onLine(line)
             await Task.yield()
         }
         run.afterLines?()
-        return run.exitCode
+        return ProcessResult(code: run.exitCode, wasSignal: run.wasSignal)
     }
 }
 
@@ -84,8 +89,13 @@ final class DownloadManagerLikesSyncTests: XCTestCase {
         XCTFail("Likes verification did not finish")
     }
 
+    /// The REAL wire form. gallery-dl's PrintAction partitions the --Print
+    /// argument at the first ":" and consumes the "<event>:" selector, so a
+    /// real run emits "likes-sync\t<event>:{json}" — the fake must emit what
+    /// the real tool emits, or the whole pipeline passes tests against a
+    /// format production never produces.
     private func event(_ name: String, _ json: String) -> String {
-        "\(name):likes-sync\t\(json)"
+        "likes-sync\t\(name):\(json)"
     }
 
     func testFirstRunDownloadsAndSecondRunArchiveSkipsWithoutDuplicates() async throws {
@@ -476,6 +486,182 @@ final class DownloadManagerLikesSyncTests: XCTestCase {
         let failure = try XCTUnwrap(manager.likesSyncSnapshot.failures.first)
         XCTAssertEqual(failure.category, .authentication)
         XCTAssertEqual(failure.displayTitle, "Whole sync failed — sign-in")
+    }
+
+    // MARK: - Post-review fixes (P4 batch)
+
+    /// A SIGINT death reports terminationStatus 2 with wasSignal — it must
+    /// never be read as argparse's exit 2 and blamed on an outdated
+    /// gallery-dl.
+    func testSignalDeathWithStatusTwoIsNotReportedAsOutdatedTool() async throws {
+        let (manager, _, _, _) = makeManager(runs: [
+            .init(lines: [], exitCode: 2, wasSignal: true)
+        ])
+
+        manager.startLikesSync()
+        await waitForLikesRun(manager)
+
+        XCTAssertEqual(manager.likesSyncSnapshot.status, .failed)
+        let failure = try XCTUnwrap(manager.likesSyncSnapshot.failures.first)
+        XCTAssertNotEqual(failure.message, DownloadManager.likesStaleToolExitTwoMessage)
+        XCTAssertEqual(failure.category, .unknown)
+        XCTAssertTrue(failure.message.contains("signal 2"), failure.message)
+    }
+
+    /// The polished no-diagnostic fallback mentions "login" — it must carry
+    /// an explicit .unknown, never keyword-classify ITSELF into the
+    /// authentication bucket.
+    func testDiagnosticlessFailureIsUnknownNotAuthentication() async throws {
+        let (manager, _, _, _) = makeManager(runs: [
+            .init(lines: [], exitCode: 4)
+        ])
+
+        manager.startLikesSync()
+        await waitForLikesRun(manager)
+
+        XCTAssertEqual(manager.likesSyncSnapshot.status, .failed)
+        let failure = try XCTUnwrap(manager.likesSyncSnapshot.failures.first)
+        XCTAssertEqual(failure.category, .unknown)
+        XCTAssertTrue(failure.message.contains("exited with code 4"), failure.message)
+    }
+
+    /// Exit 0 with downloads AND a warning-level rate-limit diagnostic means
+    /// X cut the listing short: no failure, but the headline must not claim
+    /// "Up to date" / plain completion.
+    func testRateLimitTruncationAtExitZeroWithProgressHeadlinesTheTruncation() async throws {
+        let post = event("post", #"{"tweet_id":"123","url":"https://x.com/gin/status/123"}"#)
+        let after = event("after", #"{"tweet_id":"123","media_id":"m1","_path":"/tmp/a.jpg"}"#)
+        let postAfter = event("post-after", #"{"tweet_id":"123"}"#)
+        let warn = "[twitter][warning] 429 Too Many Requests"
+        let (manager, _, _, _) = makeManager(runs: [
+            .init(lines: [post, after, postAfter, warn], exitCode: 0)
+        ])
+
+        manager.startLikesSync()
+        await waitForLikesRun(manager)
+
+        XCTAssertEqual(manager.likesSyncSnapshot.status, .completed)
+        XCTAssertTrue(manager.likesSyncSnapshot.failures.isEmpty)
+        XCTAssertEqual(
+            manager.likesSyncSnapshot.message, DownloadManager.likesRateLimitTruncatedMessage)
+    }
+
+    /// A truncated run is NOT the clean full scan that may resolve prior
+    /// run-level rows — the earlier rate-limit failure must survive it.
+    func testRateLimitTruncationDoesNotResolvePriorRunLevelRows() async throws {
+        let post = event("post", #"{"tweet_id":"123","url":"https://x.com/gin/status/123"}"#)
+        let after = event("after", #"{"tweet_id":"123","media_id":"m1","_path":"/tmp/a.jpg"}"#)
+        let postAfter = event("post-after", #"{"tweet_id":"123"}"#)
+        let warn = "[twitter][warning] 429 Too Many Requests"
+        let (manager, _, store, _) = makeManager(runs: [
+            .init(lines: [warn], exitCode: 0),
+            .init(lines: [post, after, postAfter, warn], exitCode: 0),
+        ])
+
+        manager.startLikesSync()
+        await waitForLikesRun(manager)
+        XCTAssertEqual(manager.likesSyncSnapshot.status, .failed)
+        XCTAssertEqual(manager.likesSyncSnapshot.failures.count, 1)
+
+        manager.startLikesSync()
+        await waitForLikesRun(manager)
+
+        let accountID = try XCTUnwrap(store.account(for: LikesSyncHandle("gin"))?.id)
+        XCTAssertEqual(
+            store.pendingFailures(accountID: accountID).count, 1,
+            "the truncated run must not resolve the prior rate-limit row")
+        XCTAssertEqual(manager.likesSyncSnapshot.status, .partial)
+    }
+
+    /// A failure row with a URL but NO tweet id used to be unreachable by
+    /// both resolution paths (per-item resolution matches the event's tweet
+    /// id, run-level resolution matches tweet_id IS NULL — but its retry ran
+    /// a single-URL scan). It is run-level now: retry re-runs the full scan,
+    /// and a clean scan resolves it.
+    func testUrlOnlyFailureRowIsRunLevelAndResolvableByFullScan() async throws {
+        let error = event(
+            "error", #"{"url":"https://x.com/gin/status/999","message":"connection timeout"}"#)
+        let post = event("post", #"{"tweet_id":"999","url":"https://x.com/gin/status/999"}"#)
+        let after = event("after", #"{"tweet_id":"999","media_id":"m9","_path":"/tmp/r.jpg"}"#)
+        let postAfter = event("post-after", #"{"tweet_id":"999"}"#)
+        let (manager, runner, store, _) = makeManager(runs: [
+            .init(lines: [error], exitCode: 1),
+            .init(lines: [post, after, postAfter], exitCode: 0),
+        ])
+
+        manager.startLikesSync()
+        await waitForLikesRun(manager)
+        let failure = try XCTUnwrap(manager.likesSyncSnapshot.failures.first)
+        XCTAssertNil(failure.tweetID)
+        XCTAssertNotNil(failure.url)
+        XCTAssertTrue(failure.isRunLevel)
+        XCTAssertEqual(failure.retryActionTitle, "Retry Sync")
+
+        manager.retryLikesFailure(failure)
+        await waitForLikesRun(manager)
+
+        XCTAssertEqual(
+            runner.invocations.last?.last, "https://x.com/gin/likes",
+            "a run-level row's retry must re-run the full scan, not a single URL")
+        XCTAssertEqual(manager.likesSyncSnapshot.status, .completed)
+        let accountID = try XCTUnwrap(store.account(for: LikesSyncHandle("gin"))?.id)
+        XCTAssertTrue(store.pendingFailures(accountID: accountID).isEmpty)
+    }
+
+    /// Swapping the cookies file (set or clear) invalidates a "Verified"
+    /// badge earned with the old cookies — same reset the handle/browser/
+    /// profile changes already perform.
+    func testCookieFileChangesResetVerificationToIdle() async throws {
+        let verified = LikesAccessVerification.verified(try LikesSyncHandle("@gin"))
+        let (manager, _, _, directory) = makeManager(runs: [
+            .init(lines: ["likes-verify\t123"], exitCode: 0),
+            .init(lines: ["likes-verify\t123"], exitCode: 0),
+        ])
+        manager.verifyLikesAccess()
+        await waitForVerification(manager)
+        XCTAssertEqual(manager.likesAccessVerification, verified)
+
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let cookies = directory.appendingPathComponent("cookies.txt")
+        try "# Netscape HTTP Cookie File\n".write(to: cookies, atomically: true, encoding: .utf8)
+        manager.setCookiesFile(from: cookies)
+        XCTAssertEqual(manager.likesAccessVerification, .idle)
+
+        manager.verifyLikesAccess()
+        await waitForVerification(manager)
+        XCTAssertEqual(manager.likesAccessVerification, verified)
+        manager.clearCookiesFile()
+        XCTAssertEqual(manager.likesAccessVerification, .idle)
+    }
+
+    /// The once-per-session cookie-trouble notice must re-arm when the user
+    /// deliberately re-selects a cookies file: a SECOND breakage in the same
+    /// session has to speak again.
+    func testSuccessfulCookieReselectRearmsTheAccessNotice() async throws {
+        let (manager, _, _, directory) = makeManager(runs: [])
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+
+        // First breakage: a configured path whose file vanished.
+        manager.cookiesFilePath = directory.appendingPathComponent("gone.txt").path
+        _ = manager.resolveCookiesForDownload()
+        XCTAssertEqual(
+            manager.captureFeedback?.message, DownloadManager.cookiesFileInaccessibleFeedbackMessage)
+
+        manager.captureFeedback = nil
+        _ = manager.resolveCookiesForDownload()
+        XCTAssertNil(manager.captureFeedback, "the latch keeps the notice once-per-session")
+
+        // A successful re-select re-arms the latch…
+        let cookies = directory.appendingPathComponent("cookies.txt")
+        try "# Netscape HTTP Cookie File\n".write(to: cookies, atomically: true, encoding: .utf8)
+        manager.setCookiesFile(from: cookies)
+
+        // …so a second breakage (the new file vanishes; its bookmark stops
+        // resolving) speaks again.
+        try FileManager.default.removeItem(at: cookies)
+        _ = manager.resolveCookiesForDownload()
+        XCTAssertEqual(
+            manager.captureFeedback?.message, DownloadManager.cookiesFileInaccessibleFeedbackMessage)
     }
 
     // MARK: - Failed-run headline names the newest cause (fix 6)

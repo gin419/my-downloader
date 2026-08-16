@@ -77,24 +77,34 @@ enum LikesSyncEventParser {
     /// survived, not a failure — so only warning/error-level (or unleveled)
     /// lines qualify.
     static func isUsefulDiagnostic(_ line: String) -> Bool {
-        let lower = line.lowercased()
-        if lower.contains("[info]") || lower.contains("[debug]") { return false }
-        if lower.trimmingCharacters(in: .whitespaces).hasPrefix("waiting") { return false }
-        if lower.contains("[warning]") && lower.contains("api errors (") { return false }
-        // Stale-tool output carries no bracketed level: argparse rejections
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        // SHAPE before keywords. Keyword-matching arbitrary stdout let
+        // downloaded-file PATH lines (filenames embed tweet text — which can
+        // contain "login", "auth_token", "no space"…) and unparsed
+        // likes-sync event JSON classify a flawless run as a failure.
+        // Event lines are data, path lines ("/…" and the "# …" dedupe-skip
+        // form) are progress — neither is ever a diagnostic.
+        if trimmed.hasPrefix("likes-sync\t") { return false }
+        if trimmed.hasPrefix("/") || trimmed.hasPrefix("~") || trimmed.hasPrefix("# ") { return false }
+        // Stale-tool shapes carry no bracketed level: argparse rejections
         // (a gallery-dl too old for this app's CLI options exits 2 printing
         // "usage:" / "gallery-dl: error: unrecognized arguments…") and
         // Python traceback tails ("KeyError: 'data'"). Dropped, the failure
         // card falls back to a bare exit code and blames the user's login
         // for an outdated binary. Indented usage-continuation and traceback
         // frame lines stay excluded — only the head/tail names the cause.
-        let trimmed = line.trimmingCharacters(in: .whitespaces)
-        if lower.contains("unrecognized arguments") || trimmed.hasPrefix("usage: gallery-dl")
+        let lower = line.lowercased()
+        if lower.trimmingCharacters(in: .whitespaces).hasPrefix("usage: gallery-dl")
             || trimmed.hasPrefix("gallery-dl: error:")
             || trimmed.range(of: #"^\w+Error: "#, options: .regularExpression) != nil
         {
             return true
         }
+        // Everything else must look like a logger line ("[module][level] …")
+        // before any keyword may match.
+        guard trimmed.hasPrefix("[") else { return false }
+        if lower.contains("[info]") || lower.contains("[debug]") { return false }
+        if lower.contains("[warning]") && lower.contains("api errors (") { return false }
         let cookieFailure =
             lower.contains("cookie")
             && (lower.contains("[warning]") || lower.contains("[error]")
@@ -107,14 +117,31 @@ enum LikesSyncEventParser {
     }
 
     static func parse(_ line: String) -> LikesSyncEvent? {
-        guard let split = line.firstIndex(of: ":") else { return nil }
-        let eventRaw = String(line[..<split])
+        // gallery-dl's PrintAction (option.py) partitions its --Print argument
+        // at the first ":" and CONSUMES the "<event>:" selector as the hook
+        // name — the format string it prints is everything AFTER that colon.
+        // Real runs therefore emit the STRIPPED form
+        //     likes-sync\t<event>:{json}
+        // (the argument builder re-embeds the event name inside the surviving
+        // format string). The prefixed form "<event>:likes-sync\t{json}" —
+        // what the pre-partition argument literally reads as — stays accepted
+        // as belt-and-braces.
+        let eventRaw: String
+        let jsonText: String
+        if line.hasPrefix(prefix) {
+            let rest = line.dropFirst(prefix.count)
+            guard let split = rest.firstIndex(of: ":") else { return nil }
+            eventRaw = String(rest[..<split])
+            jsonText = String(rest[rest.index(after: split)...])
+        } else {
+            guard let split = line.firstIndex(of: ":") else { return nil }
+            eventRaw = String(line[..<split])
+            let payloadStart = line.index(after: split)
+            let payload = String(line[payloadStart...])
+            guard payload.hasPrefix(prefix) else { return nil }
+            jsonText = String(payload.dropFirst(prefix.count))
+        }
         guard let eventName = LikesSyncEventName(rawValue: eventRaw) else { return nil }
-
-        let payloadStart = line.index(after: split)
-        let payload = String(line[payloadStart...])
-        guard payload.hasPrefix(prefix) else { return nil }
-        let jsonText = String(payload.dropFirst(prefix.count))
         guard let data = jsonText.data(using: .utf8),
             let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else {

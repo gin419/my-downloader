@@ -60,7 +60,14 @@ enum LikesSyncArgumentBuilder {
         for event in eventNames {
             // Capital-P --Print emits metadata AND still downloads. Lowercase
             // --print switches gallery-dl into metadata-only mode.
-            args += ["--Print", "\(event):likes-sync\t{_json}"]
+            //
+            // gallery-dl's PrintAction (option.py) partitions this argument at
+            // the first ":" and CONSUMES the "<event>:" selector as the hook
+            // name — only what follows the colon is the printed format string.
+            // The event name must therefore be re-embedded INSIDE the format
+            // string, or every real emission arrives as an anonymous
+            // "likes-sync\t{json}" line no parser can attribute to an event.
+            args += ["--Print", "\(event):likes-sync\t\(event):{_json}"]
         }
 
         let urls = inputURLs.flatMap { $0.isEmpty ? nil : $0 } ?? [plan.url.absoluteString]

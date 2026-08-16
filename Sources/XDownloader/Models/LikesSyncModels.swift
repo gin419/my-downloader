@@ -260,9 +260,13 @@ struct LikesSyncFailure: Equatable, Identifiable {
 
 extension LikesSyncFailure {
     /// A run-level failure describes the whole sync (authentication, rate
-    /// limit, disk…), not one liked tweet — it has neither a tweet id nor a
-    /// URL, and retrying it re-runs the full scan.
-    var isRunLevel: Bool { tweetID == nil && url == nil }
+    /// limit, disk…), not one liked tweet. The definition is tweet_id alone —
+    /// a row with no tweet id but a URL (an error event that carried only a
+    /// URL) must not fall between the two resolution paths: per-item
+    /// resolution matches by tweet id (never NULL) and run-level resolution
+    /// matches tweet_id IS NULL, so such a row is run-level and its retry
+    /// re-runs the full scan.
+    var isRunLevel: Bool { tweetID == nil }
 
     /// Row title for the failure list. Per-item rows show the tweet URL or id;
     /// run-level rows say the whole sync failed and why, instead of

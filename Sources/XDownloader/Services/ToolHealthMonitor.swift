@@ -44,7 +44,7 @@ final class ToolHealthMonitor: ObservableObject {
 
     private let tools: [ToolRequirement]
     private let pathResolver: (ToolRequirement) -> String?
-    private let versionLineProvider: (String) async -> String?
+    private let versionLineProvider: (String, [String]) async -> String?
     private let brewOutdatedProvider: ([String]) async -> Set<String>
     private let now: () -> Date
     private let cacheInterval: TimeInterval
@@ -65,7 +65,7 @@ final class ToolHealthMonitor: ObservableObject {
     init(
         tools: [ToolRequirement] = RequirementsService.all,
         pathResolver: @escaping (ToolRequirement) -> String? = { RequirementsService.resolvedPath(for: $0) },
-        versionLineProvider: ((String) async -> String?)? = nil,
+        versionLineProvider: ((String, [String]) async -> String?)? = nil,
         brewOutdatedProvider: (([String]) async -> Set<String>)? = nil,
         now: @escaping () -> Date = Date.init,
         cacheInterval: TimeInterval = 60
@@ -74,7 +74,7 @@ final class ToolHealthMonitor: ObservableObject {
         self.pathResolver = pathResolver
         self.versionLineProvider =
             versionLineProvider
-            ?? { await Self.probeVersionLine(executablePath: $0, timeout: Self.probeTimeout) }
+            ?? { await Self.probeVersionLine(executablePath: $0, arguments: $1, timeout: Self.probeTimeout) }
         self.brewOutdatedProvider = brewOutdatedProvider ?? { await RequirementsService.brewOutdatedNames(packages: $0) }
         self.now = now
         self.cacheInterval = cacheInterval
@@ -162,7 +162,7 @@ final class ToolHealthMonitor: ObservableObject {
         var next: [ToolHealth] = []
         for (tool, path) in resolved {
             var versionLine: String?
-            if let path { versionLine = await versionLineProvider(path) }
+            if let path { versionLine = await versionLineProvider(path, tool.versionArguments) }
             let status = RequirementsService.deriveStatus(
                 toolID: tool.id,
                 brewPackage: tool.brewPackage,
@@ -176,6 +176,14 @@ final class ToolHealthMonitor: ObservableObject {
                     docsURL: tool.docsURL, path: path, status: status))
         }
         if next != healths { healths = next }
+        // A finished repair's verdict only describes the problem set it was
+        // judged against — when the probe finds a different one, the sheet
+        // must return to its neutral state instead of rendering a stale
+        // "All done" (or failure) over new problems.
+        if case .done = repairState, judgedProblems != problems {
+            repairState = .idle
+            judgedProblems = nil
+        }
     }
 
     // MARK: - Repair flow (shared state)
@@ -183,38 +191,70 @@ final class ToolHealthMonitor: ObservableObject {
     /// The click-time brew plan: statuses drive the verb, but a fresh
     /// existence re-resolve drops "missing" tools that appeared on disk since
     /// the sheet rendered (e.g. a pipx install done in Terminal) — they must
-    /// not trigger a duplicate brew install. Pure for tests.
+    /// not trigger a duplicate brew install. Broken/outdated tools whose
+    /// resolved binary is NOT under a Homebrew prefix go to `unmanaged`
+    /// instead of a brew bucket: brew only touches its own cellar, so a
+    /// reinstall/upgrade would "succeed" while the actually-resolved pipx or
+    /// MacPorts copy stays broken — those tools are served by the sheet's
+    /// manual-command line. Pure for tests.
     static func repairPlan(
         problems: [ToolHealth],
         resolvedPath: (ToolRequirement) -> String?
-    ) -> (missing: [ToolRequirement], broken: [ToolRequirement], outdated: [ToolRequirement]) {
+    ) -> (
+        missing: [ToolRequirement], broken: [ToolRequirement],
+        outdated: [ToolRequirement], unmanaged: [ToolRequirement]
+    ) {
         var missing: [ToolRequirement] = []
         var broken: [ToolRequirement] = []
         var outdated: [ToolRequirement] = []
+        var unmanaged: [ToolRequirement] = []
         for problem in problems {
             guard let tool = RequirementsService.tool(withID: problem.id) else { continue }
             switch problem.status {
             case .missing:
                 if resolvedPath(tool) == nil { missing.append(tool) }
-            case .broken:
-                broken.append(tool)
-            case .outdated:
-                outdated.append(tool)
+            case .broken, .outdated:
+                guard let path = resolvedPath(tool) else {
+                    // The binary vanished since the probe — install is the
+                    // honest verb now.
+                    missing.append(tool)
+                    continue
+                }
+                guard RequirementsService.isBrewManagedPath(path) else {
+                    unmanaged.append(tool)
+                    continue
+                }
+                if case .broken = problem.status {
+                    broken.append(tool)
+                } else {
+                    outdated.append(tool)
+                }
             case .ok:
                 break
             }
         }
-        return (missing, broken, outdated)
+        return (missing, broken, outdated, unmanaged)
     }
 
     /// Runs the combined brew repair (install missing → reinstall broken →
     /// upgrade outdated), then force-re-probes and judges the outcome against
     /// the POST-repair statuses — never "All done" while a problem stands.
+    /// The problem set a finished repair's outcome was judged against. When a
+    /// later probe derives a DIFFERENT problem set, the stale `.done` verdict
+    /// must not keep rendering ("All done" against new problems) — the state
+    /// returns to `.idle`.
+    private var judgedProblems: [ToolHealth]?
+
     func startRepair() {
         guard repairState != .running else { return }
         let plan = Self.repairPlan(problems: problems, resolvedPath: pathResolver)
         guard !(plan.missing.isEmpty && plan.broken.isEmpty && plan.outdated.isEmpty) else {
-            // Everything fixed itself since the sheet rendered — just re-probe.
+            // Nothing brew can act on (fixed since the sheet rendered, or
+            // only non-brew installs remain): clear any stale verdict and
+            // re-probe — a leftover "All done" must not render against the
+            // current problem set.
+            repairState = .idle
+            judgedProblems = nil
             refresh(force: true)
             return
         }
@@ -235,21 +275,35 @@ final class ToolHealthMonitor: ObservableObject {
             self.repairState = .done(
                 RequirementsService.repairOutcome(
                     exitCode: code, remainingProblems: self.problems, log: self.repairLog))
+            self.judgedProblems = self.problems
             self.repairTask = nil
         }
     }
 
+    /// Test seam: `repairState` is private(set); the reset-to-idle rules need
+    /// a planted finished verdict to be exercisable without running brew.
+    func plantRepairOutcomeForTesting(
+        _ outcome: RequirementsService.RepairOutcome, judgedAgainst: [ToolHealth]
+    ) {
+        repairState = .done(outcome)
+        judgedProblems = judgedAgainst
+    }
+
     // MARK: - Live probe
 
-    /// First stdout line of `<tool> --version`. Stderr is drained but IGNORED
-    /// for version parsing — Python deprecation warnings must never become
-    /// the "version". Nil on exec failure, non-zero exit, empty stdout, or
-    /// timeout (the process is killed so a hung binary can't wedge health).
-    /// Internal (not private) so tests can drive it with fake tools.
-    nonisolated static func probeVersionLine(executablePath: String, timeout: TimeInterval) async -> String? {
+    /// First stdout line of `<tool> <versionArguments>` (per-tool: ffmpeg
+    /// only accepts `-version`; the GNU-style default covers the rest).
+    /// Stderr is drained but IGNORED for version parsing — Python deprecation
+    /// warnings must never become the "version". Nil on exec failure,
+    /// non-zero exit, empty stdout, or timeout (the process is killed so a
+    /// hung binary can't wedge health). Internal (not private) so tests can
+    /// drive it with fake tools.
+    nonisolated static func probeVersionLine(
+        executablePath: String, arguments: [String] = ["--version"], timeout: TimeInterval
+    ) async -> String? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executablePath)
-        process.arguments = ["--version"]
+        process.arguments = arguments
         var env = ProcessInfo.processInfo.environment
         env["PATH"] = Homebrew.fullPATH
         process.environment = env

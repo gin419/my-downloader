@@ -84,6 +84,24 @@ final class GalleryDlFirstErrorRecordTests: XCTestCase {
 
         XCTAssertNil(item.firstToolError)
     }
+
+    /// `imageCount`/`videoCount` include dedupe skips by design (they
+    /// describe what's on disk) — `newToolFileCount` answers the different
+    /// question "did THIS run land anything?" and must ignore "# " skip
+    /// lines.
+    func testNewToolFileCountIgnoresDedupeSkipLines() {
+        let item = DownloadItem(url: "https://x.com/a/status/123")
+        GalleryDlService.parseLine("# /tmp/out/gin - four photos [123] #1.jpg", item: item)
+        XCTAssertEqual(item.imageCount, 1)
+        XCTAssertEqual(item.newToolFileCount, 0)
+
+        GalleryDlService.parseLine(fileLine, item: item)
+        XCTAssertEqual(item.imageCount, 2)
+        XCTAssertEqual(item.newToolFileCount, 1)
+
+        item.resetForReattempt()
+        XCTAssertEqual(item.newToolFileCount, 0)
+    }
 }
 
 /// The truthful partial message a non-zero exit composes once files DID land
@@ -170,6 +188,39 @@ final class GalleryDlRunExitTruthTests: XCTestCase {
         let item = try await run(lines: [errorLine], exitCode: 4)
 
         XCTAssertEqual(item.status, .failed(errorLine))
+    }
+
+    /// A retry where EVERY file dedupe-skips ("# /path") downloaded nothing:
+    /// the mapped fatal error must stay the headline instead of being
+    /// demoted into "Saved N files… Retry fetches the rest." — a retry
+    /// cannot fetch what NSFW/auth blocks.
+    func testAllSkipsWithMappedFatalErrorKeepsTheErrorHeadline() async throws {
+        let item = try await run(
+            lines: [
+                "# \(fixtureDir.path)/gin - four photos [123] #1.jpg",
+                "# \(fixtureDir.path)/gin - four photos [123] #2.jpg",
+                "[twitter][error] AuthorizationError: NSFW Tweet",
+            ],
+            exitCode: 4)
+
+        XCTAssertEqual(item.status, .failed(GalleryDlService.nsfwTweetMessage))
+    }
+
+    /// With at least one file genuinely landed THIS run, the partial message
+    /// (which counts everything on disk, skips included) stays the truthful
+    /// outcome.
+    func testSkipsPlusNewFileStillComposesThePartialMessage() async throws {
+        let item = try await run(
+            lines: [
+                "# \(fixtureDir.path)/gin - four photos [123] #1.jpg",
+                errorLine,
+                "\(fixtureDir.path)/gin - four photos [123] #3.jpg",
+            ],
+            exitCode: 4)
+
+        XCTAssertEqual(
+            item.status,
+            .failed(GalleryDlService.partialFailureMessage(savedCount: 2, firstError: errorLine)))
     }
 
     func testNoFileFailureWithoutAnErrorLineKeepsTheBitmaskMessage() async throws {

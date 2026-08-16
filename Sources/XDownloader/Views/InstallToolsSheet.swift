@@ -45,8 +45,14 @@ enum InstallSheetModel {
         }
     }
 
-    /// The manual fix-it command per problem kind.
+    /// The manual fix-it command per problem kind. A tool resolved OUTSIDE a
+    /// Homebrew prefix gets an honest pointer instead of a brew command —
+    /// brew only touches its own cellar, so "brew reinstall" would succeed
+    /// while the pipx/MacPorts copy the app actually runs stays broken.
     static func manualCommand(for health: ToolHealth) -> String {
+        if let path = health.path, !RequirementsService.isBrewManagedPath(path) {
+            return "update \(health.name) with the tool that installed \(path) (not managed by Homebrew)"
+        }
         switch health.status {
         case .broken: return "brew reinstall \(health.brewPackage)"
         case .outdated: return "brew upgrade \(health.brewPackage)"

@@ -57,6 +57,11 @@ enum FxTwitterService {
         var savedPaths: [String] = []
         var imageCount = 0
         var videoCount = 0
+        // Pre-existing files (dedupe skips) and files THIS run downloaded are
+        // different claims — a retry that skipped everything must never be
+        // reported with download wording.
+        var newDownloads = 0
+        var alreadySaved = 0
         // A per-file failure must not silently shrink the file count under a
         // green "Done" — remember the last one so the final message can name
         // a concrete reason.
@@ -77,7 +82,8 @@ enum FxTwitterService {
             let name = "\(stemBase) #\(index + 1).\(ext)"
             let dest = outputDirectory.appendingPathComponent(name)
 
-            if !FileManager.default.fileExists(atPath: dest.path) {
+            let existedBefore = FileManager.default.fileExists(atPath: dest.path)
+            if !existedBefore {
                 item.status = .downloading
                 let tmp: URL
                 do {
@@ -106,6 +112,7 @@ enum FxTwitterService {
                 }
             }
             savedPaths.append(dest.path)
+            if existedBefore { alreadySaved += 1 } else { newDownloads += 1 }
             if entry.isVideo { videoCount += 1 } else { imageCount += 1 }
         }
 
@@ -139,9 +146,13 @@ enum FxTwitterService {
             // empty-success flag must not arm the auto-retry — its reset
             // would wipe the saved counts off the row.
             item.emptySuccessFailure = false
+            // On-disk total = this run's downloads + dedupe-skipped files
+            // from earlier runs; the message says "Saved", never
+            // "Downloaded" — a retry may have skipped every existing file.
             item.status = .failed(
                 Self.partialFailureMessage(
-                    saved: savedPaths.count, attempted: urls.count, lastFailure: lastFailure))
+                    saved: newDownloads + alreadySaved, attempted: urls.count,
+                    lastFailure: lastFailure))
             return false
         }
         item.markCompleted()
@@ -202,10 +213,14 @@ enum FxTwitterService {
         }
     }
 
-    /// Some files landed, some didn't. Retry is dedup-safe — existing files
-    /// are skipped — so it only fetches the rest.
+    /// Some of the tweet's files are on disk, some aren't. `saved` counts
+    /// what is ON DISK (this run's downloads AND dedupe-skipped files from
+    /// earlier runs) — so the verb is "Saved", never "Downloaded": a retry
+    /// that skipped 3 existing files and failed the 4th downloaded nothing.
+    /// Retry is dedup-safe — existing files are skipped — so it only fetches
+    /// the rest.
     static func partialFailureMessage(saved: Int, attempted: Int, lastFailure: FileFailure) -> String {
-        "Downloaded \(saved) of \(attempted) files — \(shortReason(for: lastFailure)). Retry fetches the rest."
+        "Saved \(saved) of \(attempted) files — \(shortReason(for: lastFailure)). Retry fetches the rest."
     }
 
     /// Zero files saved: only a disk write error is a LOCAL cause that must

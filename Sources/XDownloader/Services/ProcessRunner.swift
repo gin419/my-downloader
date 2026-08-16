@@ -52,7 +52,7 @@ enum ProcessRunner {
         register: @escaping (Process) -> Void,
         unregister: @escaping () -> Void,
         onLine: @escaping @MainActor @Sendable (String) -> Void
-    ) async -> Int32 {
+    ) async -> ProcessResult {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executablePath)
         process.arguments = arguments
@@ -72,18 +72,20 @@ enum ProcessRunner {
         process.standardOutput = stdout
         process.standardError = stderr
 
-        guard !Task.isCancelled else { return 15 }
+        // Pre-launch cancellation is morally a SIGTERM: report it as one so
+        // no caller mistakes the pseudo-code 15 for a real tool exit code.
+        guard !Task.isCancelled else { return ProcessResult(code: 15, wasSignal: true) }
         register(process)
         guard !Task.isCancelled else {
             unregister()
-            return 15
+            return ProcessResult(code: 15, wasSignal: true)
         }
         do {
             try process.run()
         } catch {
             unregister()
             onLine("[process][error] \(error.localizedDescription)")
-            return -1
+            return ProcessResult(code: -1, wasSignal: false)
         }
 
         let stdoutTask = makeStreamingReader(
@@ -105,7 +107,12 @@ enum ProcessRunner {
         await stdoutTask.value
         await stderrTask.value
         unregister()
-        return process.terminationStatus
+        // Mirror run(): terminationStatus is the SIGNAL NUMBER when the
+        // process died of one — callers must never decode it as an exit code
+        // (a SIGINT death would otherwise read as argparse's exit 2).
+        return ProcessResult(
+            code: process.terminationStatus,
+            wasSignal: process.terminationReason == .uncaughtSignal)
     }
 
     private static func makeStreamingReader(
@@ -213,7 +220,7 @@ enum ProcessRunner {
         executablePath: String,
         arguments: [String],
         environment: [String: String],
-        onLine: @escaping @MainActor (String) -> Void
+        onLine: @escaping @MainActor @Sendable (String) -> Void
     ) async -> Int32 {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executablePath)
@@ -225,36 +232,28 @@ enum ProcessRunner {
         process.standardOutput = stdout
         process.standardError = stderr
 
-        let stdoutBuffer = LineBuffer()
-        let stderrBuffer = LineBuffer()
-        func makeHandler(_ buffer: LineBuffer) -> @Sendable (FileHandle) -> Void {
-            return { @Sendable handle in
-                let lines = buffer.take(handle.availableData)
-                guard !lines.isEmpty else { return }
-                Task { @MainActor in
-                    for line in lines {
-                        let t = line.trimmingCharacters(in: .whitespaces)
-                        if !t.isEmpty { onLine(t) }
-                    }
-                }
-            }
-        }
-        stdout.fileHandleForReading.readabilityHandler = makeHandler(stdoutBuffer)
-        stderr.fileHandleForReading.readabilityHandler = makeHandler(stderrBuffer)
-
         do { try process.run() } catch { return -1 }
+
+        // Same awaited-reader pattern as run()/runStreaming: detaching a
+        // readabilityHandler at termination raced the pipes' final bytes, so
+        // a short-lived `brew outdated` could have its tail truncated — an
+        // incomplete outdated set nondeterministically showed a green pill on
+        // a stale tool.
+        let stdoutTask = makeStreamingReader(
+            handle: stdout.fileHandleForReading,
+            buffer: LineBuffer(),
+            onLine: onLine)
+        let stderrTask = makeStreamingReader(
+            handle: stderr.fileHandleForReading,
+            buffer: LineBuffer(),
+            onLine: onLine)
 
         await withCheckedContinuation { continuation in
             process.terminationHandler = { _ in continuation.resume() }
         }
 
-        stdout.fileHandleForReading.readabilityHandler = nil
-        stderr.fileHandleForReading.readabilityHandler = nil
-        for tail in [stdoutBuffer.flush(), stderrBuffer.flush()] {
-            if let t = tail?.trimmingCharacters(in: .whitespaces), !t.isEmpty {
-                await MainActor.run { onLine(t) }
-            }
-        }
+        await stdoutTask.value
+        await stderrTask.value
         return process.terminationStatus
     }
 }

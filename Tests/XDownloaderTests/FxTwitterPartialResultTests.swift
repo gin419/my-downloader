@@ -53,7 +53,7 @@ final class FxTwitterPartialResultTests: XCTestCase {
     func testPartialMessageNamesCountsAndHTTPStatus() {
         XCTAssertEqual(
             FxTwitterService.partialFailureMessage(saved: 3, attempted: 4, lastFailure: .httpStatus(404)),
-            "Downloaded 3 of 4 files — the server returned HTTP 404. Retry fetches the rest.")
+            "Saved 3 of 4 files — the server returned HTTP 404. Retry fetches the rest.")
     }
 
     func testPartialMessageNamesTransportCauses() {
@@ -66,7 +66,7 @@ final class FxTwitterPartialResultTests: XCTestCase {
             XCTAssertEqual(
                 FxTwitterService.partialFailureMessage(
                     saved: 1, attempted: 2, lastFailure: .transport(URLError(code))),
-                "Downloaded 1 of 2 files — \(reason). Retry fetches the rest.")
+                "Saved 1 of 2 files — \(reason). Retry fetches the rest.")
         }
     }
 
@@ -83,7 +83,7 @@ final class FxTwitterPartialResultTests: XCTestCase {
         XCTAssertEqual(
             FxTwitterService.partialFailureMessage(
                 saved: 2, attempted: 4, lastFailure: .move(CocoaError(.fileWriteOutOfSpace))),
-            "Downloaded 2 of 4 files — the download folder's disk is full or not writable. "
+            "Saved 2 of 4 files — the download folder's disk is full or not writable. "
                 + "Retry fetches the rest.")
         XCTAssertEqual(
             FxTwitterService.shortReason(for: .move(CocoaError(.fileNoSuchFile))),

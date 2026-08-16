@@ -146,8 +146,16 @@ enum GalleryDlService {
             if !result.wasSignal, item.outputPath != nil, savedCount > 0,
                 let firstError = item.firstToolError
             {
+                // "Saved N… Retry fetches the rest" is only truthful when
+                // this run actually landed files. On a retry where every
+                // file dedupe-SKIPPED ("# /path" lines count into
+                // imageCount/videoCount by design), the mapped fatal error
+                // (NSFW, auth…) IS the outcome — the partial copy would
+                // demote it into a fetchable leftover.
                 item.status = .failed(
-                    Self.partialFailureMessage(savedCount: savedCount, firstError: firstError))
+                    item.newToolFileCount == 0
+                        ? firstError
+                        : Self.partialFailureMessage(savedCount: savedCount, firstError: firstError))
             } else if case .failed = item.status {
             } else if result.wasSignal {
                 // Killed by a signal — the exit bitmask only describes real
@@ -334,6 +342,7 @@ enum GalleryDlService {
 
             let isImage = MediaExtensions.image.contains(ext)
             let isVideo = MediaExtensions.video.contains(ext)
+            if !isSkipLine { item.newToolFileCount += 1 }
             item.status = .downloading
             // A file landing means any backoff wait is over — a stale
             // "14 minutes (rate limited)" ETA must not outlive the wait.

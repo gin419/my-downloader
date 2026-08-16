@@ -629,9 +629,10 @@ class DownloadManager: ObservableObject {
     }
 
     /// Persistent notice when the post-video photo sweep keeps failing — see
-    /// `recordImageSweepOutcome`.
+    /// `recordImageSweepOutcome`. (The former copy pointed to a
+    /// "Settings → Tools" pane that does not exist.)
     static let imageSweepBrokenFeedbackMessage =
-        "Photo collection is failing repeatedly — gallery-dl may need an update (Settings → Tools)."
+        "Photo collection is failing repeatedly — updating gallery-dl usually fixes this (brew upgrade gallery-dl)."
 
     /// Consecutive non-zero sweep exits before the notice shows. A sweep that
     /// finds nothing but exits 0 is the NORMAL case (video-only posts) and
@@ -642,10 +643,14 @@ class DownloadManager: ObservableObject {
     /// is the download's outcome, and video-only posts are normal) — but a
     /// SYSTEMATICALLY broken gallery-dl fails every sweep and silently loses
     /// ALL photos from mixed posts under green "Done" rows, forever. Count
-    /// consecutive non-zero sweep exits and surface a once-per-session
-    /// persistent notice at the threshold; any clean exit resets the count.
-    func recordImageSweepOutcome(exitedCleanly: Bool) {
-        guard !exitedCleanly else {
+    /// consecutive NON-SIGNAL non-zero sweep exits and surface a
+    /// once-per-session persistent notice at the threshold; any clean exit
+    /// resets the count. Signal deaths (removeItem's SIGTERM on a running
+    /// sweep, a crash, a kill) neither count nor reset — they say nothing
+    /// about whether gallery-dl works.
+    func recordImageSweepOutcome(result: ProcessResult) {
+        guard !result.wasSignal else { return }
+        guard result.code != 0 else {
             consecutiveImageSweepFailures = 0
             return
         }
@@ -787,14 +792,29 @@ class DownloadManager: ObservableObject {
         // browser-cookie downgrade on the next launch.
         if !cookieAccess.setFile(url) {
             surfaceCookieAccessFeedback(force: true)
+        } else {
+            // A successful re-select is a fresh cookie setup: re-arm the
+            // once-per-session notices so a SECOND breakage this session
+            // speaks again instead of being swallowed by the spent latch.
+            cookieAccessFeedbackShown = false
+            cookieSaveFeedbackShown = false
         }
         cookiesFilePath = url.path
+        // The cookie source changed — a "Verified" badge earned with the OLD
+        // cookies would overclaim (same reset the handle/browser/profile
+        // changes already perform).
+        likesAccessVerification = .idle
         saveSettings()
     }
 
     func clearCookiesFile() {
         cookieAccess.clear()
         cookiesFilePath = nil
+        // Removing the file is a deliberate cookie-source change too: re-arm
+        // the notices and drop the stale verification badge.
+        cookieAccessFeedbackShown = false
+        cookieSaveFeedbackShown = false
+        likesAccessVerification = .idle
         saveSettings()
     }
 
@@ -838,11 +858,11 @@ class DownloadManager: ObservableObject {
             var diagnostics: [String] = []
             var sawExtractorOutput = false
             let scopeID = UUID()
-            var exitCode: Int32 = -1
+            var result = ProcessResult(code: -1, wasSignal: false)
             await self.cookieAccess.withScope(
                 for: scopeID, file: cookies.path, grantedURL: cookies.granted
             ) {
-                exitCode = await self.likesProcessRunner.run(
+                result = await self.likesProcessRunner.run(
                     executablePath: executable,
                     arguments: LikesSyncArgumentBuilder.makeVerification(
                         handle: handle,
@@ -859,7 +879,7 @@ class DownloadManager: ObservableObject {
             }
             guard case .verifying = self.likesAccessVerification else { return }
             switch LikesAccessVerification.outcome(
-                exitCode: exitCode, sawLikes: sawExtractorOutput,
+                exitCode: result.code, sawLikes: sawExtractorOutput,
                 hasDiagnostics: !diagnostics.isEmpty)
             {
             case .verified:
@@ -868,7 +888,10 @@ class DownloadManager: ObservableObject {
                 self.likesAccessVerification = .noLikesVisible(handle)
             case .failed:
                 self.likesAccessVerification = .failed(
-                    Self.likesFailureMessage(from: diagnostics.last, exitCode: exitCode))
+                    Self.likesFailureDescriptor(
+                        from: diagnostics.last, exitCode: result.code,
+                        wasSignal: result.wasSignal
+                    ).message)
             }
         }
     }
@@ -944,12 +967,12 @@ class DownloadManager: ObservableObject {
         let scopeID = UUID()
         likesSyncTask = Task { @MainActor [weak self] in
             guard let self else { return }
-            var exitCode: Int32 = -1
+            var result = ProcessResult(code: -1, wasSignal: false)
             await withTaskCancellationHandler {
                 await self.cookieAccess.withScope(
                     for: scopeID, file: cookies.path, grantedURL: cookies.granted
                 ) {
-                    exitCode = await self.likesProcessRunner.run(
+                    result = await self.likesProcessRunner.run(
                         executablePath: executable,
                         arguments: args,
                         register: { [weak self] in self?.likesSyncProcess = $0 },
@@ -959,7 +982,7 @@ class DownloadManager: ObservableObject {
             } onCancel: { [weak self] in
                 Task { @MainActor in self?.likesSyncProcess?.terminate() }
             }
-            self.finishLikesSync(exitCode: exitCode)
+            self.finishLikesSync(result: result)
         }
     }
 
@@ -977,7 +1000,11 @@ class DownloadManager: ObservableObject {
         guard !likesSyncSnapshot.status.isActive else { return }
         likesSyncStore.restoreFailure(id: failure.id)
         likesSyncStore.markFailureRetried(id: failure.id)
-        startLikesSync(inputURLs: failure.url.map { [$0] })
+        // A run-level row (tweet_id NULL — even when a URL was captured) can
+        // only be resolved by the full-scan path: a single-URL run resolves
+        // rows by the event's tweet id, which never matches NULL, so the row
+        // would stay pending forever after its retry succeeded.
+        startLikesSync(inputURLs: failure.isRunLevel ? nil : failure.url.map { [$0] })
     }
 
     func retryAllLikesFailures() {
@@ -987,7 +1014,9 @@ class DownloadManager: ObservableObject {
             ?? likesSyncSnapshot.failures.filter { $0.ignoredAt == nil }
         let urls = Array(Set(failures.compactMap(\.url))).sorted()
         for failure in failures { likesSyncStore.markFailureRetried(id: failure.id) }
-        let needsFullRescan = failures.contains { $0.url == nil }
+        // Any run-level row (tweet_id NULL, URL or not) needs the full scan —
+        // see retryLikesFailure.
+        let needsFullRescan = failures.contains(where: \.isRunLevel)
         startLikesSync(inputURLs: needsFullRescan || urls.isEmpty ? nil : urls)
     }
 
@@ -1046,24 +1075,31 @@ class DownloadManager: ObservableObject {
         }
 
         if event.name == .error {
+            // The parser classifies raw event messages itself; the app's own
+            // fallback copy carries an explicit .unknown — it must never be
+            // keyword-classified.
             recordLikesFailure(
                 message: event.message ?? "gallery-dl could not process this item.",
-                category: event.failureCategory,
+                category: event.failureCategory ?? .unknown,
                 tweetID: event.tweetID,
                 url: event.tweetURL)
         }
         updateLikesSnapshotCounts()
     }
 
+    /// `category` is required on purpose: every caller composes or parses the
+    /// message and KNOWS its category. A keyword-classify fallback here would
+    /// run on app-composed copy — the polished "…Verify the selected X
+    /// login…" fallback self-classified as an authentication failure.
     private func recordLikesFailure(
         message: String,
-        category: LikesSyncFailureCategory? = nil,
+        category: LikesSyncFailureCategory,
         tweetID: String? = nil,
         url: String? = nil
     ) {
         guard let accountID = likesAccountID else { return }
         if tweetID == nil { likesRunRecordedRunLevelFailure = true }
-        let classified = category ?? LikesSyncFailureCategory.classify(message)
+        let classified = category
         let identity = tweetID ?? url ?? classified.rawValue
         let failure = LikesSyncFailure(
             id: "\(accountID):\(identity)",
@@ -1079,36 +1115,45 @@ class DownloadManager: ObservableObject {
         likesSyncStore.recordFailure(failure)
     }
 
-    private func finishLikesSync(exitCode: Int32) {
+    private func finishLikesSync(result: ProcessResult) {
         guard let runID = likesRunID, let accountID = likesAccountID else { return }
+        let exitCode = result.code
         let sawProgress =
             likesAccumulator.downloadedCount > 0 || likesAccumulator.skippedCount > 0
-        // argparse exits 2 before any extractor runs — the installed
-        // gallery-dl predates this app's CLI options. Pin the category in
-        // code: the usage lines may not survive capture, and the polished
-        // exit-2 copy carries none of the classifier's tokens.
-        let diagnosticCategory: LikesSyncFailureCategory? =
-            exitCode == 2 ? .tool : likesDiagnostics.last.map(LikesSyncFailureCategory.classify)
+        let rawDiagnostic = likesDiagnostics.last
+        // One composition site owns message AND category — app-composed copy
+        // is never re-classified by keyword (the polished fallback mentions
+        // "login" without being an auth failure).
+        let descriptor = Self.likesFailureDescriptor(
+            from: rawDiagnostic, exitCode: exitCode, wasSignal: result.wasSignal)
         // At exit 0, a leftover rate-limit diagnostic on a run that made
-        // progress is a pause the run survived, not a failure.
+        // progress is a pause the run survived (reported below as a
+        // truncation), not a failure.
         let diagnosticIsFatalAtZero =
-            diagnosticCategory == .authentication || diagnosticCategory == .disk
-            || (diagnosticCategory == .rateLimited && !sawProgress)
+            rawDiagnostic != nil
+            && (descriptor.category == .authentication || descriptor.category == .disk
+                || (descriptor.category == .rateLimited && !sawProgress))
+        // Exit 0 with progress but a warn/error-level rate-limit diagnostic:
+        // X cut the listing short partway. Not a failure — but not proof the
+        // account is fully synced either.
+        let rateLimitTruncated =
+            exitCode == 0 && sawProgress && rawDiagnostic != nil
+            && descriptor.category == .rateLimited
         if (exitCode != 0 || diagnosticIsFatalAtZero), likesAccumulator.failureCount == 0,
             !likesCancelRequested
         {
-            let message = Self.likesFailureMessage(from: likesDiagnostics.last, exitCode: exitCode)
-            // Classify from the raw diagnostic, not the polished copy — the
-            // rewritten message may no longer contain the classifier's tokens.
-            recordLikesFailure(message: message, category: diagnosticCategory)
+            recordLikesFailure(message: descriptor.message, category: descriptor.category)
         }
 
         // A full scan that finishes cleanly without recording a new run-level
         // failure proves the run-level causes (sign-in, rate limit, disk…) are
         // gone — resolve their stale rows so the card can return to
-        // "Likes sync completed." instead of flagging them forever.
+        // "Likes sync completed." instead of flagging them forever. A
+        // rate-limit-truncated run proves no such thing: X stopped the
+        // listing early, so prior run-level rows (the rate-limit row
+        // included) must survive.
         if exitCode == 0, likesRunIsFullScan, !likesRunRecordedRunLevelFailure,
-            !likesCancelRequested
+            !likesCancelRequested, !rateLimitTruncated
         {
             likesSyncStore.resolveRunLevelFailures(accountID: accountID)
         }
@@ -1145,6 +1190,10 @@ class DownloadManager: ObservableObject {
                 likesSyncSnapshot.message =
                     "No likes were visible for \(name). Verify the X session in Settings; "
                     + "if you are signed in, update gallery-dl."
+            } else if rateLimitTruncated {
+                // "Up to date" / "completed" would overclaim: X stopped the
+                // listing partway, so unseen likes may remain.
+                likesSyncSnapshot.message = Self.likesRateLimitTruncatedMessage
             } else {
                 likesSyncSnapshot.message =
                     likesAccumulator.downloadedCount == 0
@@ -1248,34 +1297,66 @@ class DownloadManager: ObservableObject {
     nonisolated static let likesRetiredEndpointMessage =
         "X changed its API and the installed gallery-dl no longer speaks it — update gallery-dl, then retry."
 
-    nonisolated private static func likesFailureMessage(from diagnostic: String?, exitCode: Int32) -> String {
-        if exitCode == 2 { return likesStaleToolExitTwoMessage }
+    /// Exit 0 with downloads AND a warn/error-level rate-limit diagnostic: X
+    /// cut the listing short partway through the scan.
+    nonisolated static let likesRateLimitTruncatedMessage =
+        "Likes sync completed — X rate-limited the run partway; run again later to fetch the rest."
+
+    /// The ONE composition site for a likes run-level failure: message and
+    /// category travel together, and `classify()` only ever runs on the RAW
+    /// tool diagnostic — never on app-composed copy (the polished fallback
+    /// mentions "login" without being an authentication failure).
+    nonisolated static func likesFailureDescriptor(
+        from diagnostic: String?, exitCode: Int32, wasSignal: Bool
+    ) -> (message: String, category: LikesSyncFailureCategory) {
+        // argparse's usage error is a REAL exit 2 — when the process died of
+        // a signal, terminationStatus is the signal number, and signal 2
+        // (SIGINT) must not read as "your gallery-dl is too old".
+        if exitCode == 2, !wasSignal { return (likesStaleToolExitTwoMessage, .tool) }
         guard let diagnostic, !diagnostic.isEmpty else {
-            return "gallery-dl exited with code \(exitCode). Verify the selected X login and try again."
+            if wasSignal {
+                return (
+                    "gallery-dl was terminated (signal \(exitCode)) before the sync finished. Run it again.",
+                    .unknown
+                )
+            }
+            return (
+                "gallery-dl exited with code \(exitCode). Verify the selected X login and try again.",
+                .unknown
+            )
         }
         let category = LikesSyncFailureCategory.classify(diagnostic)
         switch category {
         case .authentication:
-            return "X login could not be verified. Select the browser profile where you are signed in to X, then try again."
+            return (
+                "X login could not be verified. Select the browser profile where you are signed in to X, then try again.",
+                category
+            )
         case .rateLimited:
-            return "X rate-limited this sync. Wait a while, then retry."
+            return ("X rate-limited this sync. Wait a while, then retry.", category)
         case .disk:
-            return "The Likes folder is not writable or the disk is full."
+            return ("The Likes folder is not writable or the disk is full.", category)
         case .network:
-            return "The network connection failed during Likes sync. Retry when the connection is stable."
+            return (
+                "The network connection failed during Likes sync. Retry when the connection is stable.",
+                category
+            )
         case .unavailable:
-            return "X did not return this item; it may be deleted, protected, or unavailable."
+            return ("X did not return this item; it may be deleted, protected, or unavailable.", category)
         case .tool:
             if LikesSyncFailureCategory.isEndpointNotFound(diagnostic) {
-                return likesRetiredEndpointMessage
+                return (likesRetiredEndpointMessage, category)
             }
             // Polished copy headlines; the raw diagnostic stays visible as
             // the failure row's secondary detail (the row renders this same
             // message under its category title).
-            return "This gallery-dl version cannot sync X Likes. Update gallery-dl, then try again."
-                + " (last output: \(diagnostic))"
+            return (
+                "This gallery-dl version cannot sync X Likes. Update gallery-dl, then try again."
+                    + " (last output: \(diagnostic))",
+                category
+            )
         default:
-            return diagnostic
+            return (diagnostic, category)
         }
     }
 
@@ -1773,10 +1854,13 @@ class DownloadManager: ObservableObject {
         }
         // A Pause pressed during the sweep terminated it by hand — a user
         // action, not gallery-dl breaking — so it must not count toward the
-        // systematic-failure notice (the stale request is consumed either way).
+        // systematic-failure notice (the stale request is consumed either
+        // way). Signal deaths in general (removeItem SIGTERMs a running
+        // sweep, crashes) prove nothing about gallery-dl's health and are
+        // filtered inside recordImageSweepOutcome.
         let userPausedSweep = pausedItemIDs.remove(item.id) != nil
         if let sweepResult, !userPausedSweep {
-            recordImageSweepOutcome(exitedCleanly: sweepResult.isSuccess)
+            recordImageSweepOutcome(result: sweepResult)
         }
     }
 

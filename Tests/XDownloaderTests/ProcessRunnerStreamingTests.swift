@@ -10,7 +10,7 @@ final class ProcessRunnerStreamingTests: XCTestCase {
         var registered = false
         var unregistered = false
 
-        let exitCode = await ProcessRunner.runStreaming(
+        let result = await ProcessRunner.runStreaming(
             executablePath: "/bin/sh",
             arguments: ["-c", "printf 'stdout\\n'; printf 'stderr-tail' >&2"],
             environment: ["PATH": "/usr/bin:/bin"],
@@ -18,7 +18,8 @@ final class ProcessRunnerStreamingTests: XCTestCase {
             unregister: { unregistered = true },
             onLine: { lines.append($0) })
 
-        XCTAssertEqual(exitCode, 0)
+        XCTAssertEqual(result.code, 0)
+        XCTAssertFalse(result.wasSignal)
         XCTAssertTrue(registered)
         XCTAssertTrue(unregistered)
         XCTAssertEqual(Set(lines), Set(["stdout", "stderr-tail"]))
@@ -31,7 +32,7 @@ final class ProcessRunnerStreamingTests: XCTestCase {
             process?.terminate()
         }
 
-        let exitCode = await ProcessRunner.runStreaming(
+        let result = await ProcessRunner.runStreaming(
             executablePath: "/bin/sleep",
             arguments: ["5"],
             environment: ["PATH": "/usr/bin:/bin"],
@@ -40,13 +41,17 @@ final class ProcessRunnerStreamingTests: XCTestCase {
             onLine: { _ in })
         _ = await cancel.value
 
-        XCTAssertNotEqual(exitCode, 0)
+        // terminate() is SIGTERM: the death must be reported AS a signal —
+        // code 15 read as an exit code would invent a tool-chosen status
+        // (and a SIGINT death would read as argparse's exit 2).
+        XCTAssertTrue(result.wasSignal)
+        XCTAssertEqual(result.code, 15)
         XCTAssertNil(process)
     }
 
     func testDeliversAllQueuedLinesBeforeReturning() async {
         var lines: [String] = []
-        let exitCode = await ProcessRunner.runStreaming(
+        let result = await ProcessRunner.runStreaming(
             executablePath: "/bin/sh",
             arguments: [
                 "-c",
@@ -57,7 +62,7 @@ final class ProcessRunnerStreamingTests: XCTestCase {
             unregister: {},
             onLine: { lines.append($0) })
 
-        XCTAssertEqual(exitCode, 0)
+        XCTAssertEqual(result.code, 0)
         XCTAssertEqual(lines.count, 1000)
         XCTAssertEqual(Set(lines).count, 1000)
         XCTAssertTrue(lines.contains("line-999"))
@@ -77,8 +82,9 @@ final class ProcessRunnerStreamingTests: XCTestCase {
         }
         task.cancel()
 
-        let exitCode = await task.value
-        XCTAssertEqual(exitCode, 15)
+        let result = await task.value
+        XCTAssertEqual(result.code, 15)
+        XCTAssertTrue(result.wasSignal, "pre-launch cancellation is morally a SIGTERM, not a tool exit")
         XCTAssertFalse(registered)
     }
 
@@ -86,7 +92,7 @@ final class ProcessRunnerStreamingTests: XCTestCase {
         var lines: [String] = []
         var registered = false
         var unregistered = false
-        let exitCode = await ProcessRunner.runStreaming(
+        let result = await ProcessRunner.runStreaming(
             executablePath: "/definitely/missing/gallery-dl",
             arguments: [],
             environment: ["PATH": "/usr/bin:/bin"],
@@ -94,7 +100,8 @@ final class ProcessRunnerStreamingTests: XCTestCase {
             unregister: { unregistered = true },
             onLine: { lines.append($0) })
 
-        XCTAssertEqual(exitCode, -1)
+        XCTAssertEqual(result.code, -1)
+        XCTAssertFalse(result.wasSignal)
         XCTAssertTrue(registered)
         XCTAssertTrue(unregistered)
         XCTAssertTrue(lines.contains { $0.hasPrefix("[process][error]") })

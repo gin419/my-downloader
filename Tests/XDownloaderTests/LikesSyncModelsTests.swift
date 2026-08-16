@@ -93,6 +93,17 @@ final class LikesSyncModelsTests: XCTestCase {
         XCTAssertEqual(unknown.displayTitle, "Whole sync failed")
     }
 
+    /// Run-level is defined by tweet_id ALONE: a row with a URL but no tweet
+    /// id is unreachable by per-item resolution (it matches the event's
+    /// tweet id, never NULL), so it must behave as run-level — full-scan
+    /// retry — while keeping the URL as its informative title.
+    func testUrlOnlyRowIsRunLevelWithFullScanRetry() {
+        let row = failure(tweetID: nil, url: "https://x.com/gin/status/999", category: .network)
+        XCTAssertTrue(row.isRunLevel)
+        XCTAssertEqual(row.displayTitle, "https://x.com/gin/status/999")
+        XCTAssertEqual(row.retryActionTitle, "Retry Sync")
+    }
+
     /// With the real stale-tool signatures now routed into .tool, its
     /// run-level row title must name the outdated tool — "gallery-dl" alone
     /// named the messenger, not the cause.
