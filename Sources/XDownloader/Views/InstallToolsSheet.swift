@@ -61,10 +61,10 @@ enum InstallSheetModel {
     }
 }
 
-/// Per-tool health table (every tool, not just missing ones) + the combined
-/// Homebrew repair flow: install missing → reinstall broken → upgrade
-/// outdated, streaming into one log. The run's state lives on the monitor,
-/// so dismissing and reopening the sheet shows the live run.
+/// Per-tool health table (every tool, not just missing ones) + the two-step
+/// setup wizard (choose tools/installer, then confirm) and the combined
+/// repair run. The run's state lives on the monitor, so dismissing and
+/// reopening the sheet shows the live run.
 struct InstallToolsSheet: View {
     @ObservedObject var monitor: ToolHealthMonitor
     @Environment(\.dismiss) private var dismiss
@@ -91,33 +91,28 @@ struct InstallToolsSheet: View {
         VStack(spacing: 0) {
             header
             Divider()
-            ScrollView {
-                VStack(alignment: .leading, spacing: 24) {
-                    toolTable
-                    if showsLogSection {
-                        Divider()
-                        logSection
-                    }
-                    if !monitor.problems.isEmpty {
-                        Divider()
-                        manualSection
-                    }
-                }
-                .padding(20)
+            switch monitor.setupStep {
+            case .choose(let draft):
+                chooseBody(draft)
+            case .confirm(let plan):
+                confirmBody(plan)
+            case .health, .running, .result:
+                healthBody
             }
             Divider()
             footer
         }
-        .frame(width: 500, height: 520)
+        .frame(width: 540, height: 560)
+        .onDisappear { monitor.cancelSetup() }
     }
 
     // MARK: - Header
 
     private var header: some View {
         HStack {
-            Image(systemName: "wrench.and.screwdriver.fill")
+            Image(systemName: headerIcon)
                 .foregroundColor(.orange)
-            Text("Tool Health")
+            Text(headerTitle)
                 .font(.system(size: 15, weight: .semibold))
             Spacer()
             Button(action: { dismiss() }) {
@@ -131,7 +126,39 @@ struct InstallToolsSheet: View {
         .padding(.vertical, 14)
     }
 
-    // MARK: - Tool health table
+    private var headerTitle: String {
+        switch monitor.setupStep {
+        case .choose: return "Choose tools"
+        case .confirm: return "Confirm setup"
+        default: return "Tool Health"
+        }
+    }
+
+    private var headerIcon: String {
+        switch monitor.setupStep {
+        case .choose, .confirm: return "square.and.arrow.down.on.square"
+        default: return "wrench.and.screwdriver.fill"
+        }
+    }
+
+    // MARK: - Health table
+
+    private var healthBody: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                toolTable
+                if showsLogSection {
+                    Divider()
+                    logSection
+                }
+                if !monitor.problems.isEmpty {
+                    Divider()
+                    manualSection
+                }
+            }
+            .padding(20)
+        }
+    }
 
     private var toolTable: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -175,7 +202,142 @@ struct InstallToolsSheet: View {
             .clipShape(Capsule())
     }
 
-    // MARK: - Homebrew log
+    // MARK: - Choose
+
+    private func chooseBody(_ draft: ToolSetupDraft) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Select which tools to act on and how to install them. Homebrew is preferred when it is already installed.")
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
+
+                ForEach(draft.choices) { choice in
+                    chooseRow(choice)
+                }
+            }
+            .padding(20)
+        }
+    }
+
+    private func chooseRow(_ choice: ToolSetupChoice) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .center, spacing: 8) {
+                Button {
+                    monitor.setChoiceSelected(toolID: choice.toolID, selected: !choice.isSelected)
+                } label: {
+                    Image(systemName: choice.isSelected ? "checkmark.square.fill" : "square")
+                        .foregroundColor(choice.canAct ? .orange : .secondary)
+                        .font(.system(size: 16))
+                }
+                .buttonStyle(.plain)
+                .disabled(!choice.canAct)
+
+                Text(choice.name)
+                    .font(.system(size: 13, weight: .bold))
+                Spacer()
+                Text(choice.action.verb)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(.secondary)
+            }
+
+            if let unmanaged = choice.unmanagedPath {
+                Text("\(unmanaged) is not managed by this app. Update it with the tool that installed it.")
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if choice.availableInstallers.count > 1 {
+                Picker(
+                    "Installer",
+                    selection: Binding(
+                        get: { choice.selectedInstaller ?? .standalone },
+                        set: { monitor.setChoiceInstaller(toolID: choice.toolID, installer: $0) })
+                ) {
+                    ForEach(choice.availableInstallers, id: \.self) { installer in
+                        let label =
+                            installer == .homebrew
+                            ? "Homebrew (preferred)"
+                            : "Standalone download"
+                        Text(label).tag(installer)
+                    }
+                }
+                .pickerStyle(.radioGroup)
+                .horizontalRadioGroupLayout()
+                .font(.system(size: 12))
+                .disabled(!choice.isSelected)
+
+                Text(destinationHint(for: choice))
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundColor(.secondary)
+                    .lineLimit(2)
+                    .truncationMode(.middle)
+            } else if let installer = choice.selectedInstaller {
+                Text(installer == .homebrew ? "Homebrew" : "Standalone download")
+                    .font(.system(size: 12))
+                Text(destinationHint(for: choice))
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundColor(.secondary)
+                    .lineLimit(2)
+                    .truncationMode(.middle)
+            }
+        }
+        .padding(12)
+        .background(Color(nsColor: .windowBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.primary.opacity(0.08), lineWidth: 1))
+    }
+
+    private func destinationHint(for choice: ToolSetupChoice) -> String {
+        guard let installer = choice.selectedInstaller else { return "" }
+        return choice.destination(for: installer)
+    }
+
+    // MARK: - Confirm
+
+    private func confirmBody(_ plan: ToolSetupPlan) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Review the plan. Nothing is downloaded or installed until you confirm.")
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
+
+                ForEach(ToolSetupPlanner.confirmationLines(for: plan), id: \.actionAndInstaller) { line in
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(line.actionAndInstaller)
+                            .font(.system(size: 13, weight: .semibold))
+                        Text("Destination: \(line.destination)")
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundColor(.secondary)
+                            .textSelection(.enabled)
+                        if let replacing = line.replacing {
+                            Text(replacing)
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundColor(.secondary)
+                        }
+                        if let source = line.source {
+                            Text(source)
+                                .font(.system(size: 11))
+                                .foregroundColor(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(12)
+                    .background(Color(nsColor: .windowBackgroundColor))
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10)
+                            .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1))
+                }
+
+                Text(ToolSetupPlanner.rollbackNotice)
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
+            }
+            .padding(20)
+        }
+    }
+
+    // MARK: - Homebrew / standalone log
 
     private var showsLogSection: Bool {
         if case .idle = monitor.repairState { return false } else { return true }
@@ -183,7 +345,7 @@ struct InstallToolsSheet: View {
 
     private var logSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("HOMEBREW")
+            Text("LOG")
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundColor(.secondary)
 
@@ -256,10 +418,10 @@ struct InstallToolsSheet: View {
                 .foregroundColor(.secondary)
 
             if RequirementsService.brewPath == nil {
-                HStack(spacing: 8) {
+                HStack(alignment: .top, spacing: 8) {
                     Image(systemName: "info.circle")
                         .foregroundColor(.secondary)
-                    Text("Homebrew is not installed. Install it from brew.sh, then relaunch the app.")
+                    Text("Homebrew is not installed. You can still install tools from inside the app, or install Homebrew from brew.sh.")
                         .font(.system(size: 12))
                         .foregroundColor(.secondary)
                 }
@@ -311,17 +473,31 @@ struct InstallToolsSheet: View {
         HStack(spacing: 10) {
             Spacer()
 
-            Button("Close") { dismiss() }
-
-            if RequirementsService.brewPath != nil,
-                let label = InstallSheetModel.primaryActionLabel(
-                    missingCount: redFamilyCount,
-                    outdatedCount: outdatedCount)
-            {
-                Button(label) { monitor.startRepair() }
+            switch monitor.setupStep {
+            case .choose(let draft):
+                Button("Cancel") { monitor.cancelSetup() }
+                Button("Continue") { monitor.reviewPlan() }
                     .buttonStyle(.borderedProminent)
                     .tint(.orange)
-                    .disabled(isRunning)
+                    .disabled(!draft.hasActionableSelection)
+            case .confirm:
+                Button("Cancel") { monitor.backToChoice() }
+                Button("Confirm and start") { monitor.confirmAndStart() }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.orange)
+            case .health, .running, .result:
+                Button("Close") { dismiss() }
+
+                if let label = InstallSheetModel.primaryActionLabel(
+                    missingCount: redFamilyCount,
+                    outdatedCount: outdatedCount),
+                    monitor.hasActionableSetup
+                {
+                    Button(label) { monitor.beginChoice() }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.orange)
+                        .disabled(isRunning)
+                }
             }
         }
         .padding(.horizontal, 20)

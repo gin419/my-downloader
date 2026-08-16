@@ -13,6 +13,43 @@ extension FileManager {
     }
 }
 
+/// Path strings under Application Support. These do not create directories —
+/// catalogue search paths must not mkdir as a side effect of being read.
+enum AppPaths {
+    static func applicationSupportDirectory(
+        home: String = FileManager.default.homeDirectoryForCurrentUser.path
+    ) -> String {
+        "\(home)/Library/Application Support/XDownloader"
+    }
+
+    static func toolsDirectory(
+        home: String = FileManager.default.homeDirectoryForCurrentUser.path
+    ) -> String {
+        applicationSupportDirectory(home: home) + "/tools"
+    }
+
+    static func appManagedToolPath(
+        _ toolID: String,
+        home: String = FileManager.default.homeDirectoryForCurrentUser.path
+    ) -> String {
+        toolsDirectory(home: home) + "/\(toolID)"
+    }
+
+    /// pip `--target` dir for the app-managed gallery-dl install. Separate
+    /// from the wrapper at `appManagedToolPath("gallery-dl")`.
+    static func galleryDlPackageDirectory(
+        home: String = FileManager.default.homeDirectoryForCurrentUser.path
+    ) -> String {
+        toolsDirectory(home: home) + "/gallery-dl-pkg"
+    }
+
+    static func bundledPythonDirectory(
+        home: String = FileManager.default.homeDirectoryForCurrentUser.path
+    ) -> String {
+        toolsDirectory(home: home) + "/python"
+    }
+}
+
 /// Homebrew locations, shared so ProcessRunner and RequirementsService don't drift.
 enum Homebrew {
     /// Homebrew bin/sbin prefixes (Apple Silicon + Intel).
