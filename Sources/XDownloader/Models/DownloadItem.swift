@@ -185,6 +185,14 @@ class DownloadItem: Identifiable, ObservableObject {
     /// kept across the subtitles-disabled re-run — the same binary re-runs,
     /// so the same WARNINGs re-fire anyway.
     var extractorBreakage: ExtractorBreakage = .none
+    /// In-memory only (NOT persisted). Set by YtDlpService.parseLine when
+    /// yt-dlp warns that a merge-requiring format selection ran with no
+    /// ffmpeg installed — it then writes the streams separately (video-only
+    /// + audio-only files) and still exits 0, so without this flag the run
+    /// reads as success while the user's "video" plays silent. Consumed by
+    /// DownloadManager's success-branch guard; cleared with the other
+    /// per-attempt parse state in resetForReattempt().
+    var ffmpegMissingForMerge: Bool = false
     /// In-memory only (NOT persisted). The off-site URL yt-dlp was following
     /// when the external-redirect sentinel fired — lets DownloadManager name
     /// the destination host in the final user-facing failure message.
@@ -223,6 +231,7 @@ class DownloadItem: Identifiable, ObservableObject {
         mediaCategory = .unknown
         lastToolWarning = nil
         extractorBreakage = .none
+        ffmpegMissingForMerge = false
     }
 
     /// Mark this item finished: completed status, full progress, no live speed/eta.

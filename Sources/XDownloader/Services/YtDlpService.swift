@@ -312,6 +312,17 @@ enum YtDlpService {
                     return
                 }
             }
+            // ffmpeg missing at merge time (all sites — Twitter HLS merges
+            // too, so unlike the tells above this is NOT YouTube-gated):
+            // yt-dlp then downloads the streams separately and still exits 0,
+            // so the flag is the only evidence that the "success" delivers a
+            // silent video-only file. Consumed by DownloadManager's
+            // success-branch guard. No return: the line still falls through
+            // to the generic capture below so exit-code failures can cite it.
+            let lowerLine = line.lowercased()
+            if lowerLine.contains("requested merging of multiple formats"), lowerLine.contains("ffmpeg") {
+                item.ffmpegMissingForMerge = true
+            }
             // Any other WARNING (all sites): not a failure by itself, but when
             // the run ends badly the most recent one is the best clue why —
             // remember it (minus the prefix) so DownloadManager can cite it in
