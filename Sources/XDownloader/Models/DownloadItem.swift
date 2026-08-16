@@ -220,6 +220,15 @@ class DownloadItem: Identifiable, ObservableObject {
     /// resetForReattempt(), and cleared by FxTwitterService when it takes
     /// over the outcome with a failure of a different shape.
     var emptySuccessFailure: Bool = false
+    /// In-memory only (NOT persisted). Files that actually LANDED this
+    /// attempt — gallery-dl path lines WITHOUT the "# " dedupe-skip prefix.
+    /// `imageCount`/`videoCount` deliberately include skips (they describe
+    /// what's on disk for this post), so they cannot answer "did THIS run
+    /// download anything?" — which the exit handling needs: a retry where
+    /// every file dedupe-skips must keep a mapped fatal error (NSFW, auth) as
+    /// the headline instead of demoting it into a partial "Saved N files…".
+    /// Cleared with the other per-attempt parse state in resetForReattempt().
+    var newToolFileCount = 0
 
     init(url: String, addedAt: Date = Date()) {
         self.url = url
@@ -251,6 +260,7 @@ class DownloadItem: Identifiable, ObservableObject {
         lastToolWarning = nil
         firstToolError = nil
         emptySuccessFailure = false
+        newToolFileCount = 0
         extractorBreakage = .none
         ffmpegMissingForMerge = false
     }

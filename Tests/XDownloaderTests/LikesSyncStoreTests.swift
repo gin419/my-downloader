@@ -189,6 +189,27 @@ final class LikesSyncStoreTests: XCTestCase {
         XCTAssertEqual(store.pendingFailures(accountID: accountID).map(\.tweetID), ["123"])
     }
 
+    /// Run-level is tweet_id NULL regardless of url: a row that captured a
+    /// URL but no tweet id is unreachable by per-item resolution (it matches
+    /// the event's tweet id, never NULL), so the run-level path must resolve
+    /// it too — otherwise it stays pending forever.
+    func testResolveRunLevelFailuresAlsoResolvesUrlOnlyRows() throws {
+        let dir = tempDir()
+        let store = LikesSyncStore(directory: dir)
+        let accountID = try XCTUnwrap(store.upsertAccount(input: "@Gin", rootDirectory: dir).id)
+        let run = store.startRun(accountID: accountID, id: "run-1")
+        store.recordFailure(
+            LikesSyncFailure(
+                id: "\(accountID):https://x.com/gin/status/999", accountID: accountID,
+                runID: run.id, tweetID: nil, url: "https://x.com/gin/status/999",
+                category: .network, message: "connection timeout",
+                ignoredAt: nil, resolvedAt: nil, retryCount: 0))
+
+        store.resolveRunLevelFailures(accountID: accountID, at: Date(timeIntervalSince1970: 30))
+
+        XCTAssertTrue(store.pendingFailures(accountID: accountID).isEmpty)
+    }
+
     /// Like per-item resolution, run-level resolution supersedes Ignore — a
     /// proven-gone cause must not linger in the ignored list either.
     func testResolveRunLevelFailuresSupersedesIgnore() throws {

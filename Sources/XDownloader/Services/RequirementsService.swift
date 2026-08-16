@@ -6,6 +6,11 @@ struct ToolRequirement: Identifiable {
     let brewPackage: String
     let docsURL: String
     let searchPaths: [String]
+    /// argv for the health probe. Most tools take GNU-style `--version`;
+    /// ffmpeg REJECTS it (exit 8, empty stdout, banner on stderr) and only
+    /// accepts single-dash `-version` — probing it with the wrong flag made
+    /// every healthy ffmpeg derive `.broken` forever.
+    var versionArguments: [String] = ["--version"]
 
     /// Resolved through the ONE shared resolver — the requirements banner and
     /// the launch paths in DownloadManager must never disagree about where a
@@ -98,7 +103,11 @@ enum RequirementsService {
                 "/usr/bin/ffmpeg",
                 "\(home)/.local/bin/ffmpeg",
                 "/opt/local/bin/ffmpeg",
-            ]
+            ],
+            // ffmpeg has no `--version`: it exits 8 with the banner on stderr
+            // and NOTHING on stdout. `-version` prints
+            // "ffmpeg version 9.0.1 …" on stdout and exits 0.
+            versionArguments: ["-version"]
         )
     }()
 
@@ -263,16 +272,31 @@ enum RequirementsService {
             .first { FileManager.default.fileExists(atPath: $0) }
     }
 
+    /// True when a resolved tool path lives under a Homebrew prefix. A brew
+    /// reinstall/upgrade only ever touches brew's own cellar — running it for
+    /// a pipx/MacPorts/manual install at ~/.local/bin or /opt/local "succeeds"
+    /// while the actually-resolved binary stays broken.
+    static func isBrewManagedPath(_ path: String) -> Bool {
+        path.hasPrefix("/opt/homebrew/") || path.hasPrefix("/usr/local/")
+    }
+
     /// `brew outdated --quiet <names>` against the LOCAL formula index — no
     /// forced network. Names not managed by brew make it exit non-zero;
     /// failures are tolerated silently (whatever names it printed still
     /// count). Callers must check `brewPath` themselves for the empty case.
+    /// Main-actor-confined mutable box: `runRaw`'s @Sendable line sink cannot
+    /// capture a mutable local, and every delivery happens on the main actor.
+    @MainActor
+    private final class OutdatedNames {
+        var value: Set<String> = []
+    }
+
     @MainActor
     static func brewOutdatedNames(packages: [String]) async -> Set<String> {
         guard let brew = brewPath, !packages.isEmpty else { return [] }
         let env = brewEnvironment(
             base: ProcessInfo.processInfo.environment, allowAutoUpdate: false)
-        var names: Set<String> = []
+        let names = OutdatedNames()
         _ = await ProcessRunner.runRaw(
             executablePath: brew,
             arguments: ["outdated", "--quiet"] + packages,
@@ -281,10 +305,10 @@ enum RequirementsService {
                 // --quiet prints one bare formula name per line; anything else
                 // (errors, warnings) simply won't match a catalogue package.
                 let name = line.split(separator: " ").first.map(String.init) ?? line
-                if packages.contains(name) { names.insert(name) }
+                if packages.contains(name) { names.value.insert(name) }
             }
         )
-        return names
+        return names.value
     }
 
     // MARK: - Homebrew install / upgrade
@@ -380,7 +404,7 @@ enum RequirementsService {
     /// Returns the process exit code (0 = success).
     static func installWithBrew(
         tools: [ToolRequirement],
-        onLine: @escaping @MainActor (String) -> Void
+        onLine: @escaping @MainActor @Sendable (String) -> Void
     ) async -> Int32 {
         // Auto-update off: a plain install works from the local index and
         // shouldn't stall on a slow network.
@@ -395,7 +419,7 @@ enum RequirementsService {
     /// tool stays broken — the exact lie this feature exists to end.
     static func upgradeWithBrew(
         tools: [ToolRequirement],
-        onLine: @escaping @MainActor (String) -> Void
+        onLine: @escaping @MainActor @Sendable (String) -> Void
     ) async -> Int32 {
         await runBrew(
             invocations: [["upgrade"] + tools.map(\.brewPackage)],
@@ -404,13 +428,14 @@ enum RequirementsService {
     }
 
     /// The combined flow: install missing, reinstall broken, then upgrade
-    /// outdated — one shared log stream. Stops at the first failing step and
-    /// returns its exit code.
+    /// outdated — one shared log stream. Every step runs even when an earlier
+    /// one fails (one bad formula must not doom the rest); the FIRST failing
+    /// step's exit code is returned.
     static func repairWithBrew(
         missing: [ToolRequirement],
         broken: [ToolRequirement],
         outdated: [ToolRequirement],
-        onLine: @escaping @MainActor (String) -> Void
+        onLine: @escaping @MainActor @Sendable (String) -> Void
     ) async -> Int32 {
         await runBrew(
             invocations: brewInvocations(
@@ -424,11 +449,14 @@ enum RequirementsService {
     private static func runBrew(
         invocations: [[String]],
         allowAutoUpdate: Bool,
-        onLine: @escaping @MainActor (String) -> Void
+        onLine: @escaping @MainActor @Sendable (String) -> Void
     ) async -> Int32 {
         guard let brew = brewPath else { return -1 }
         let env = brewEnvironment(
             base: ProcessInfo.processInfo.environment, allowAutoUpdate: allowAutoUpdate)
+        // Steps run independently: aborting at the first failure used to leave
+        // every later tool unrepaired because of one unrelated bad formula.
+        var firstFailure: Int32 = 0
         for arguments in invocations {
             let code = await ProcessRunner.runRaw(
                 executablePath: brew,
@@ -439,8 +467,8 @@ enum RequirementsService {
                     if !stripped.isEmpty { onLine(stripped) }
                 }
             )
-            if code != 0 { return code }
+            if code != 0, firstFailure == 0 { firstFailure = code }
         }
-        return 0
+        return firstFailure
     }
 }

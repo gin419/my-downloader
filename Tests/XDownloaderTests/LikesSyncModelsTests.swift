@@ -93,6 +93,119 @@ final class LikesSyncModelsTests: XCTestCase {
         XCTAssertEqual(unknown.displayTitle, "Whole sync failed")
     }
 
+    /// Run-level is defined by tweet_id ALONE: a row with a URL but no tweet
+    /// id is unreachable by per-item resolution (it matches the event's
+    /// tweet id, never NULL), so it must behave as run-level — full-scan
+    /// retry — while keeping the URL as its informative title.
+    func testUrlOnlyRowIsRunLevelWithFullScanRetry() {
+        let row = failure(tweetID: nil, url: "https://x.com/gin/status/999", category: .network)
+        XCTAssertTrue(row.isRunLevel)
+        XCTAssertEqual(row.displayTitle, "https://x.com/gin/status/999")
+        XCTAssertEqual(row.retryActionTitle, "Retry Sync")
+    }
+
+    /// With the real stale-tool signatures now routed into .tool, its
+    /// run-level row title must name the outdated tool — "gallery-dl" alone
+    /// named the messenger, not the cause.
+    func testToolRunLevelRowTitleNamesOutdatedTool() {
+        let tool = failure(tweetID: nil, url: nil, category: .tool)
+        XCTAssertTrue(tool.isRunLevel)
+        XCTAssertEqual(tool.displayTitle, "Whole sync failed — outdated tool")
+        XCTAssertEqual(tool.retryActionTitle, "Retry Sync")
+    }
+
+    // MARK: - classify() keyword truth (4e: stale-tool and auth blind spots)
+
+    /// X's primary real-world auth failure wordings must land in the
+    /// authentication bucket — in .unknown, the RAW line becomes the card
+    /// headline while the app's good sign-in guidance sits unused.
+    func testClassifyRoutesRealAuthWordingsToAuthentication() {
+        XCTAssertEqual(
+            LikesSyncFailureCategory.classify("[twitter][error] 'Could not authenticate you'"),
+            .authentication)
+        XCTAssertEqual(
+            LikesSyncFailureCategory.classify("[twitter][error] Missing authorization header"),
+            .authentication)
+        XCTAssertEqual(
+            LikesSyncFailureCategory.classify("auth_token missing or expired"),
+            .authentication)
+        XCTAssertEqual(
+            LikesSyncFailureCategory.classify("[twitter][error] Your account is temporarily locked"),
+            .authentication)
+        XCTAssertEqual(
+            LikesSyncFailureCategory.classify("[twitter][error] X blocked your account after unusual activity"),
+            .authentication)
+    }
+
+    func testClassifyRoutesProtectedTweetsToUnavailable() {
+        XCTAssertEqual(
+            LikesSyncFailureCategory.classify("[twitter][error] This account's tweets are protected"),
+            .unavailable)
+    }
+
+    /// The signatures a genuinely stale gallery-dl actually prints must
+    /// reach .tool — the only bucket whose copy says "update gallery-dl".
+    /// None of the bucket's previous keywords occur in real staleness output.
+    func testClassifyRoutesStaleToolSignaturesToTool() {
+        XCTAssertEqual(
+            LikesSyncFailureCategory.classify(
+                "gallery-dl: error: unrecognized arguments: --Print post:likes-sync"),
+            .tool)
+        XCTAssertEqual(
+            LikesSyncFailureCategory.classify("usage: gallery-dl [OPTION]... URL..."), .tool)
+        XCTAssertEqual(
+            LikesSyncFailureCategory.classify(
+                "[twitter][error] An unexpected error occurred: KeyError - 'data'"),
+            .tool)
+        XCTAssertEqual(LikesSyncFailureCategory.classify("KeyError: 'legacy'"), .tool)
+        XCTAssertEqual(
+            LikesSyncFailureCategory.classify("TypeError: 'NoneType' object is not subscriptable"),
+            .tool)
+        XCTAssertEqual(
+            LikesSyncFailureCategory.classify(
+                "[twitter][error] Unable to retrieve Tweets from this timeline"),
+            .tool)
+    }
+
+    /// The bare "process" keyword misrouted unrelated lines into .tool
+    /// (whose copy tells users to update gallery-dl); only the exact
+    /// bracketed "[process][error]" level qualifies.
+    func testClassifyProcessKeywordRequiresExactBracketedForm() {
+        XCTAssertEqual(
+            LikesSyncFailureCategory.classify("[process][error] An error occurred in postprocessing"),
+            .tool)
+        XCTAssertEqual(
+            LikesSyncFailureCategory.classify("gallery-dl could not process this item."),
+            .unknown)
+    }
+
+    // MARK: - Endpoint 404 vs item 404 (4e fix 4)
+
+    /// When X retires a GraphQL endpoint EVERY call 404s — that is the
+    /// installed tool speaking a retired dialect, not deleted content. A
+    /// single tweet or media file 404ing is genuinely gone and keeps the
+    /// unavailable copy.
+    func testEndpoint404IsToolWhilePerItem404StaysUnavailable() {
+        let graphql = "[twitter][error] '404 Not Found' for 'https://x.com/i/api/graphql/AbCdEf/Likes'"
+        let legacyAPI =
+            "[twitter][error] '404 Not Found' for 'https://api.twitter.com/graphql/AbCdEf/UserByScreenName'"
+        XCTAssertTrue(LikesSyncFailureCategory.isEndpointNotFound(graphql))
+        XCTAssertEqual(LikesSyncFailureCategory.classify(graphql), .tool)
+        XCTAssertTrue(LikesSyncFailureCategory.isEndpointNotFound(legacyAPI))
+        XCTAssertEqual(LikesSyncFailureCategory.classify(legacyAPI), .tool)
+
+        let media = "[downloader.http][warning] '404 Not Found' for 'https://pbs.twimg.com/media/AbC.jpg'"
+        let status = "[twitter][error] '404 Not Found' for 'https://x.com/gin/status/123'"
+        XCTAssertFalse(LikesSyncFailureCategory.isEndpointNotFound(media))
+        XCTAssertEqual(LikesSyncFailureCategory.classify(media), .unavailable)
+        XCTAssertFalse(LikesSyncFailureCategory.isEndpointNotFound(status))
+        XCTAssertEqual(LikesSyncFailureCategory.classify(status), .unavailable)
+        XCTAssertFalse(
+            LikesSyncFailureCategory.isEndpointNotFound(
+                "requesting https://x.com/i/api/graphql/AbCdEf/Likes"),
+            "an API URL in a line without a 404 is not an endpoint failure")
+    }
+
     // MARK: - Failed-run headline (fix 6)
 
     private func failure(id: String, runID: String?, message: String) -> LikesSyncFailure {

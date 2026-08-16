@@ -25,11 +25,11 @@ final class ImageSweepFeedbackTests: XCTestCase {
     func testNoticeAppearsAtThreeConsecutiveFailures() {
         let manager = makeManager()
         for _ in 0..<(DownloadManager.imageSweepFailureThreshold - 1) {
-            manager.recordImageSweepOutcome(exitedCleanly: false)
+            manager.recordImageSweepOutcome(result: ProcessResult(code: 4, wasSignal: false))
         }
         XCTAssertNil(manager.captureFeedback, "below the threshold nothing may surface")
 
-        manager.recordImageSweepOutcome(exitedCleanly: false)
+        manager.recordImageSweepOutcome(result: ProcessResult(code: 4, wasSignal: false))
 
         XCTAssertEqual(manager.captureFeedback?.message, DownloadManager.imageSweepBrokenFeedbackMessage)
         XCTAssertEqual(manager.captureFeedback?.kind, .warning)
@@ -40,14 +40,14 @@ final class ImageSweepFeedbackTests: XCTestCase {
         // A sweep that exits 0 — files found or not — proves gallery-dl still
         // works; only an unbroken run of failures may raise the notice.
         let manager = makeManager()
-        manager.recordImageSweepOutcome(exitedCleanly: false)
-        manager.recordImageSweepOutcome(exitedCleanly: false)
-        manager.recordImageSweepOutcome(exitedCleanly: true)
-        manager.recordImageSweepOutcome(exitedCleanly: false)
-        manager.recordImageSweepOutcome(exitedCleanly: false)
+        manager.recordImageSweepOutcome(result: ProcessResult(code: 4, wasSignal: false))
+        manager.recordImageSweepOutcome(result: ProcessResult(code: 4, wasSignal: false))
+        manager.recordImageSweepOutcome(result: ProcessResult(code: 0, wasSignal: false))
+        manager.recordImageSweepOutcome(result: ProcessResult(code: 4, wasSignal: false))
+        manager.recordImageSweepOutcome(result: ProcessResult(code: 4, wasSignal: false))
         XCTAssertNil(manager.captureFeedback)
 
-        manager.recordImageSweepOutcome(exitedCleanly: false)
+        manager.recordImageSweepOutcome(result: ProcessResult(code: 4, wasSignal: false))
         XCTAssertEqual(manager.captureFeedback?.message, DownloadManager.imageSweepBrokenFeedbackMessage)
     }
 
@@ -56,21 +56,45 @@ final class ImageSweepFeedbackTests: XCTestCase {
         // post would drown the status line the user already read.
         let manager = makeManager()
         for _ in 0..<DownloadManager.imageSweepFailureThreshold {
-            manager.recordImageSweepOutcome(exitedCleanly: false)
+            manager.recordImageSweepOutcome(result: ProcessResult(code: 4, wasSignal: false))
         }
         XCTAssertNotNil(manager.captureFeedback)
 
         manager.captureFeedback = nil
         for _ in 0..<DownloadManager.imageSweepFailureThreshold {
-            manager.recordImageSweepOutcome(exitedCleanly: false)
+            manager.recordImageSweepOutcome(result: ProcessResult(code: 4, wasSignal: false))
         }
         XCTAssertNil(manager.captureFeedback, "the notice must not re-surface within one session")
     }
 
     func testCleanExitsAloneNeverSurfaceAnything() {
         let manager = makeManager()
-        for _ in 0..<10 { manager.recordImageSweepOutcome(exitedCleanly: true) }
+        for _ in 0..<10 { manager.recordImageSweepOutcome(result: ProcessResult(code: 0, wasSignal: false)) }
         XCTAssertNil(manager.captureFeedback)
+    }
+
+    /// Signal deaths — removeItem SIGTERMs a running sweep, crashes, kills —
+    /// prove nothing about gallery-dl's health: they neither count toward the
+    /// threshold nor reset an honest failure streak.
+    func testSignalDeathsNeitherCountNorReset() {
+        let manager = makeManager()
+        manager.recordImageSweepOutcome(result: ProcessResult(code: 4, wasSignal: false))
+        manager.recordImageSweepOutcome(result: ProcessResult(code: 4, wasSignal: false))
+        // A user removing items mid-sweep must not push the count over the line…
+        manager.recordImageSweepOutcome(result: ProcessResult(code: 15, wasSignal: true))
+        XCTAssertNil(manager.captureFeedback, "a kill is not a gallery-dl failure")
+        // …and a kill must not wipe the streak either: the next REAL failure
+        // is the third consecutive one.
+        manager.recordImageSweepOutcome(result: ProcessResult(code: 4, wasSignal: false))
+        XCTAssertEqual(manager.captureFeedback?.message, DownloadManager.imageSweepBrokenFeedbackMessage)
+    }
+
+    func testBrokenSweepNoticeNamesTheActualFix() {
+        // The old copy pointed to a "Settings → Tools" pane that does not
+        // exist and left the user in a dead end.
+        XCTAssertEqual(
+            DownloadManager.imageSweepBrokenFeedbackMessage,
+            "Photo collection is failing repeatedly — updating gallery-dl usually fixes this (brew upgrade gallery-dl).")
     }
 }
 

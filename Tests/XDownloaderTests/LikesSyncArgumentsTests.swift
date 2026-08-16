@@ -34,8 +34,11 @@ final class LikesSyncArgumentsTests: XCTestCase {
         XCTAssertTrue(containsPair(args, "-o", "extractor.twitter.text-tweets=true"))
         XCTAssertTrue(containsPair(args, "-o", "archive-event=after,skip"))
 
+        // PrintAction consumes the "<event>:" selector, so the event name is
+        // re-embedded INSIDE the surviving format string — the emitted line
+        // is "likes-sync\t<event>:{json}".
         for event in LikesSyncArgumentBuilder.eventNames {
-            XCTAssertTrue(containsPair(args, "--Print", "\(event):likes-sync\t{_json}"))
+            XCTAssertTrue(containsPair(args, "--Print", "\(event):likes-sync\t\(event):{_json}"))
         }
         XCTAssertEqual(args.last, "https://x.com/gin/likes")
     }

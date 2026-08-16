@@ -71,14 +71,34 @@ enum LikesSyncFailureCategory: String, Codable, CaseIterable {
 
     static func classify(_ message: String) -> LikesSyncFailureCategory {
         let lower = message.lowercased()
-        if lower.contains("login") || lower.contains("unauthorized") || lower.contains("cookie") {
+        // Stale-tool signatures outrank the keyword buckets: argparse
+        // rejections and crash tails echo arbitrary text (option names,
+        // dict keys) that could stray into other buckets, and they are the
+        // output real staleness actually produces — the one case whose fix
+        // ("update gallery-dl") the .tool copy names.
+        if lower.contains("unrecognized arguments") || lower.contains("usage: gallery-dl")
+            || lower.contains("unexpected error occurred") || lower.contains("keyerror")
+            || lower.contains("typeerror") || lower.contains("unable to retrieve tweets")
+        {
+            return .tool
+        }
+        if lower.contains("login") || lower.contains("unauthorized") || lower.contains("cookie")
+            || lower.contains("could not authenticate") || lower.contains("authorization")
+            || lower.contains("auth_token") || lower.contains("account is temporarily locked")
+            || lower.contains("blocked your account")
+        {
             return .authentication
         }
         if lower.contains("rate limit") || lower.contains("too many requests") || lower.contains("429") {
             return .rateLimited
         }
+        // Before the "not found" bucket: an API-endpoint 404 is the tool
+        // speaking a retired dialect, not deleted content.
+        if isEndpointNotFound(message) {
+            return .tool
+        }
         if lower.contains("not found") || lower.contains("unavailable") || lower.contains("no results")
-            || lower.contains("deleted")
+            || lower.contains("deleted") || lower.contains("protected")
         {
             return .unavailable
         }
@@ -93,7 +113,7 @@ enum LikesSyncFailureCategory: String, Codable, CaseIterable {
             return .disk
         }
         if lower.contains("not installed") || lower.contains("unsupported url")
-            || lower.contains("no suitable extractor") || lower.contains("process")
+            || lower.contains("no suitable extractor") || lower.contains("[process][error]")
         {
             return .tool
         }
@@ -101,6 +121,20 @@ enum LikesSyncFailureCategory: String, Codable, CaseIterable {
             return .parse
         }
         return .unknown
+    }
+
+    /// True when an HTTP-404 diagnostic names an X/Twitter API endpoint
+    /// rather than a single tweet or media file. gallery-dl formats HTTP
+    /// failures as "'404 Not Found' for '<url>'"; when X retires a GraphQL
+    /// endpoint EVERY call 404s — that is the installed tool speaking a
+    /// retired dialect (the historically documented way stale gallery-dl
+    /// breaks), not deleted content. Per-item 404s (twimg media, status
+    /// URLs) stay `.unavailable`.
+    static func isEndpointNotFound(_ message: String) -> Bool {
+        let lower = message.lowercased()
+        guard lower.contains("404") || lower.contains("not found") else { return false }
+        return lower.contains("x.com/i/api") || lower.contains("twitter.com/i/api")
+            || lower.contains("/graphql/")
     }
 }
 
@@ -226,9 +260,13 @@ struct LikesSyncFailure: Equatable, Identifiable {
 
 extension LikesSyncFailure {
     /// A run-level failure describes the whole sync (authentication, rate
-    /// limit, disk…), not one liked tweet — it has neither a tweet id nor a
-    /// URL, and retrying it re-runs the full scan.
-    var isRunLevel: Bool { tweetID == nil && url == nil }
+    /// limit, disk…), not one liked tweet. The definition is tweet_id alone —
+    /// a row with no tweet id but a URL (an error event that carried only a
+    /// URL) must not fall between the two resolution paths: per-item
+    /// resolution matches by tweet id (never NULL) and run-level resolution
+    /// matches tweet_id IS NULL, so such a row is run-level and its retry
+    /// re-runs the full scan.
+    var isRunLevel: Bool { tweetID == nil }
 
     /// Row title for the failure list. Per-item rows show the tweet URL or id;
     /// run-level rows say the whole sync failed and why, instead of
@@ -242,7 +280,7 @@ extension LikesSyncFailure {
         case .network: return "Whole sync failed — network"
         case .disk: return "Whole sync failed — disk"
         case .unavailable: return "Whole sync failed — content unavailable"
-        case .tool: return "Whole sync failed — gallery-dl"
+        case .tool: return "Whole sync failed — outdated tool"
         case .parse: return "Whole sync failed — output parsing"
         case .unknown: return "Whole sync failed"
         }
