@@ -71,17 +71,16 @@ enum LikesSyncEventParser {
     private static let prefix = "likes-sync\t"
 
     /// True when a non-event stderr/stdout line is a diagnostic worth keeping
-    /// for failure messages. gallery-dl's info-level lines are routine
+    /// for failure messages. gallery-dl's info/debug-level lines are routine
     /// progress — most importantly the rate-limit wait notices ("[twitter][info]
     /// Waiting until … (rate limit)"), which describe a pause the run already
-    /// survived, not a failure.
-    ///
-    /// Declared red: this still keeps info-level wait lines; the exclusion
-    /// lands with the implementation commit.
+    /// survived, not a failure — so only warning/error-level (or unleveled)
+    /// lines qualify.
     static func isUsefulDiagnostic(_ line: String) -> Bool {
         let lower = line.lowercased()
+        if lower.contains("[info]") || lower.contains("[debug]") { return false }
+        if lower.trimmingCharacters(in: .whitespaces).hasPrefix("waiting") { return false }
         if lower.contains("[warning]") && lower.contains("api errors (") { return false }
-        if lower.contains("[cookies][info]") || lower.contains("[cookies][debug]") { return false }
         let cookieFailure =
             lower.contains("cookie")
             && (lower.contains("[warning]") || lower.contains("[error]")

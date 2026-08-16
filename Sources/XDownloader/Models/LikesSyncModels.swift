@@ -154,6 +154,10 @@ enum LikesAccessVerification: Equatable {
     case idle
     case verifying
     case verified(LikesSyncHandle)
+    /// gallery-dl exited cleanly but observed ZERO likes — what the wrong
+    /// account's session (likes are private) or an empty account looks like.
+    /// Distinct from `verified` and from `failed`, which names a diagnostic.
+    case noLikesVisible(LikesSyncHandle)
     case failed(String)
 }
 
@@ -170,15 +174,21 @@ enum LikesVerificationOutcome: Equatable {
 extension LikesAccessVerification {
     /// Pure decision for the verify flow: `sawLikes` is true when at least one
     /// likes-verify extractor line was observed; `hasDiagnostics` when a useful
-    /// diagnostic line was captured.
-    ///
-    /// Declared red: still reports `verified` on a silent exit 0; the honest
-    /// third state lands with the implementation.
+    /// diagnostic line was captured. "Verified" requires an observed like — a
+    /// silent exit 0 is the third state, and a diagnostic still names the
+    /// precise failure.
     static func outcome(exitCode: Int32, sawLikes: Bool, hasDiagnostics: Bool)
         -> LikesVerificationOutcome
     {
-        if exitCode == 0, !hasDiagnostics || sawLikes { return .verified }
-        return .failed
+        guard exitCode == 0 else { return .failed }
+        if sawLikes { return .verified }
+        return hasDiagnostics ? .failed : .noLikesVisible
+    }
+
+    /// Settings status-row copy for `noLikesVisible`.
+    static func noLikesVisibleMessage(for handle: LikesSyncHandle) -> String {
+        "Could not see any likes for \(handle.displayName). If this account has likes, "
+            + "the selected browser profile is signed in to a different account."
     }
 }
 
@@ -221,19 +231,36 @@ extension LikesSyncFailure {
     var isRunLevel: Bool { tweetID == nil && url == nil }
 
     /// Row title for the failure list. Per-item rows show the tweet URL or id;
-    /// run-level rows must say the whole sync failed and why, instead of
+    /// run-level rows say the whole sync failed and why, instead of
     /// masquerading as an item.
-    ///
-    /// Declared red: still shows the item placeholder for run-level rows; the
-    /// category-based title lands with the implementation.
     var displayTitle: String {
-        url ?? tweetID.map { "Tweet \($0)" } ?? "X Likes item"
+        if let url { return url }
+        if let tweetID { return "Tweet \(tweetID)" }
+        switch category {
+        case .authentication: return "Whole sync failed — sign-in"
+        case .rateLimited: return "Whole sync failed — rate limit"
+        case .network: return "Whole sync failed — network"
+        case .disk: return "Whole sync failed — disk"
+        case .unavailable: return "Whole sync failed — content unavailable"
+        case .tool: return "Whole sync failed — gallery-dl"
+        case .parse: return "Whole sync failed — output parsing"
+        case .unknown: return "Whole sync failed"
+        }
     }
 
-    /// Retry button label. A run-level row's retry silently re-runs the whole
-    /// scan, so its button must say so.
-    ///
-    /// Declared red: still labels run-level rows "Retry"; the honest label
-    /// lands with the implementation.
-    var retryActionTitle: String { "Retry" }
+    /// Retry button label. A run-level row's retry re-runs the whole scan, so
+    /// its button says so.
+    var retryActionTitle: String { isRunLevel ? "Retry Sync" : "Retry" }
+
+    /// The failure whose message headlines a failed run: prefer a failure
+    /// recorded by the current run, so a stale row whose `updated_at` was
+    /// bumped (mid-run Ignore/Restore, a retry marker) never masks the new
+    /// cause. Falls back to the list's own order — most recently updated
+    /// first.
+    static func headline(
+        from failures: [LikesSyncFailure], currentRunID: String?
+    ) -> LikesSyncFailure? {
+        guard let currentRunID else { return failures.first }
+        return failures.first { $0.runID == currentRunID } ?? failures.first
+    }
 }

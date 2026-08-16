@@ -150,4 +150,76 @@ final class LikesSyncStoreTests: XCTestCase {
         XCTAssertTrue(store.pendingFailures(accountID: accountID).isEmpty)
         XCTAssertTrue(store.ignoredFailures(accountID: accountID).isEmpty)
     }
+
+    // MARK: - Run-level failure resolution (fix 1)
+
+    private func runLevelFailure(
+        accountID: Int64, runID: String, category: LikesSyncFailureCategory = .authentication
+    ) -> LikesSyncFailure {
+        LikesSyncFailure(
+            id: "\(accountID):\(category.rawValue)",
+            accountID: accountID,
+            runID: runID,
+            tweetID: nil,
+            url: nil,
+            category: category,
+            message: "login required",
+            ignoredAt: nil,
+            resolvedAt: nil,
+            retryCount: 0)
+    }
+
+    /// `resolveFailures(_:tweetID:)` matches `tweet_id = ?` and can never
+    /// reach a run-level row; `resolveRunLevelFailures` resolves exactly the
+    /// NULL-tweet_id rows and leaves per-item failures pending.
+    func testResolveRunLevelFailuresResolvesOnlyNullTweetRows() throws {
+        let dir = tempDir()
+        let store = LikesSyncStore(directory: dir)
+        let accountID = try XCTUnwrap(store.upsertAccount(input: "@Gin", rootDirectory: dir).id)
+        let run = store.startRun(accountID: accountID, id: "run-1")
+        store.recordFailure(runLevelFailure(accountID: accountID, runID: run.id))
+        store.recordFailure(
+            LikesSyncFailure(
+                id: "\(accountID):123", accountID: accountID, runID: run.id, tweetID: "123",
+                url: "https://x.com/gin/status/123", category: .network,
+                message: "connection reset", ignoredAt: nil, resolvedAt: nil, retryCount: 0))
+
+        store.resolveRunLevelFailures(accountID: accountID, at: Date(timeIntervalSince1970: 30))
+
+        XCTAssertEqual(store.pendingFailures(accountID: accountID).map(\.tweetID), ["123"])
+    }
+
+    /// Like per-item resolution, run-level resolution supersedes Ignore — a
+    /// proven-gone cause must not linger in the ignored list either.
+    func testResolveRunLevelFailuresSupersedesIgnore() throws {
+        let dir = tempDir()
+        let store = LikesSyncStore(directory: dir)
+        let accountID = try XCTUnwrap(store.upsertAccount(input: "@Gin", rootDirectory: dir).id)
+        let run = store.startRun(accountID: accountID, id: "run-1")
+        let failure = runLevelFailure(accountID: accountID, runID: run.id)
+        store.recordFailure(failure)
+        store.ignoreFailure(id: failure.id, at: Date(timeIntervalSince1970: 10))
+
+        store.resolveRunLevelFailures(accountID: accountID, at: Date(timeIntervalSince1970: 30))
+
+        XCTAssertTrue(store.pendingFailures(accountID: accountID).isEmpty)
+        XCTAssertTrue(store.ignoredFailures(accountID: accountID).isEmpty)
+    }
+
+    /// Resolution is scoped to the account whose scan succeeded.
+    func testResolveRunLevelFailuresIsScopedToTheAccount() throws {
+        let dir = tempDir()
+        let store = LikesSyncStore(directory: dir)
+        let firstID = try XCTUnwrap(store.upsertAccount(input: "@first", rootDirectory: dir).id)
+        let secondID = try XCTUnwrap(store.upsertAccount(input: "@second", rootDirectory: dir).id)
+        for (accountID, runID) in [(firstID, "run-1"), (secondID, "run-2")] {
+            _ = store.startRun(accountID: accountID, id: runID)
+            store.recordFailure(runLevelFailure(accountID: accountID, runID: runID))
+        }
+
+        store.resolveRunLevelFailures(accountID: firstID)
+
+        XCTAssertTrue(store.pendingFailures(accountID: firstID).isEmpty)
+        XCTAssertEqual(store.pendingFailures(accountID: secondID).count, 1)
+    }
 }

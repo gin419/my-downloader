@@ -92,4 +92,36 @@ final class LikesSyncModelsTests: XCTestCase {
         let unknown = failure(tweetID: nil, url: nil, category: .unknown)
         XCTAssertEqual(unknown.displayTitle, "Whole sync failed")
     }
+
+    // MARK: - Failed-run headline (fix 6)
+
+    private func failure(id: String, runID: String?, message: String) -> LikesSyncFailure {
+        LikesSyncFailure(
+            id: id, accountID: 1, runID: runID, tweetID: id, url: nil,
+            category: .network, message: message,
+            ignoredAt: nil, resolvedAt: nil, retryCount: 0)
+    }
+
+    /// A stale row can outrank the new failure in the pending list (Ignore /
+    /// Restore bump its updated_at) — the headline must still cite the current
+    /// run's cause.
+    func testHeadlinePrefersCurrentRunFailureOverStaleFirstRow() {
+        let stale = failure(id: "111", runID: "run-1", message: "login required")
+        let fresh = failure(id: "222", runID: "run-2", message: "no space left on device")
+
+        let headline = LikesSyncFailure.headline(from: [stale, fresh], currentRunID: "run-2")
+        XCTAssertEqual(headline?.message, "no space left on device")
+    }
+
+    /// Without a current-run match (or a run id at all) the list's own order —
+    /// most recently updated first — decides.
+    func testHeadlineFallsBackToFirstRowWhenCurrentRunHasNoFailure() {
+        let a = failure(id: "111", runID: "run-1", message: "first")
+        let b = failure(id: "222", runID: "run-2", message: "second")
+
+        XCTAssertEqual(
+            LikesSyncFailure.headline(from: [a, b], currentRunID: "run-9")?.message, "first")
+        XCTAssertEqual(LikesSyncFailure.headline(from: [a, b], currentRunID: nil)?.message, "first")
+        XCTAssertNil(LikesSyncFailure.headline(from: [], currentRunID: "run-1"))
+    }
 }
