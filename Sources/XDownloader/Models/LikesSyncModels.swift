@@ -102,6 +102,21 @@ enum LikesSyncFailureCategory: String, Codable, CaseIterable {
         }
         return .unknown
     }
+
+    /// True when an HTTP-404 diagnostic names an X/Twitter API endpoint
+    /// rather than a single tweet or media file. gallery-dl formats HTTP
+    /// failures as "'404 Not Found' for '<url>'"; when X retires a GraphQL
+    /// endpoint EVERY call 404s — that is the installed tool speaking a
+    /// retired dialect (the historically documented way stale gallery-dl
+    /// breaks), not deleted content. Per-item 404s (twimg media, status
+    /// URLs) stay `.unavailable`.
+    ///
+    /// Declared red: always false for now; the URL inspection lands with the
+    /// implementation commit.
+    static func isEndpointNotFound(_ message: String) -> Bool {
+        _ = message
+        return false
+    }
 }
 
 struct LikesSyncAccount: Equatable {

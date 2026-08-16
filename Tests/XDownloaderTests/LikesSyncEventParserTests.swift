@@ -112,6 +112,38 @@ final class LikesSyncEventParserTests: XCTestCase {
                 "[cookies][info] Extracted 863 cookies from Chrome"))
     }
 
+    /// A gallery-dl too old for this app's CLI options exits 2 printing
+    /// argparse lines with no bracketed level. The filter must keep them —
+    /// dropped, the failure card falls back to a bare exit code and blames
+    /// the user's login for an outdated binary. Indented usage-continuation
+    /// lines are noise and stay excluded.
+    func testArgparseRejectionLinesAreCapturedAsDiagnostics() {
+        XCTAssertTrue(
+            LikesSyncEventParser.isUsefulDiagnostic("usage: gallery-dl [OPTION]... URL..."))
+        XCTAssertTrue(
+            LikesSyncEventParser.isUsefulDiagnostic(
+                "gallery-dl: error: unrecognized arguments: --Print post:likes-sync"))
+        XCTAssertFalse(
+            LikesSyncEventParser.isUsefulDiagnostic("                  [--filter EXPR] [--range RANGE]"))
+        XCTAssertFalse(
+            LikesSyncEventParser.isUsefulDiagnostic("/tmp/likes/gin/img 123.jpg"),
+            "plain output paths are progress, not diagnostics")
+    }
+
+    /// Python traceback tails ("KeyError: 'data'") are the stale-extractor
+    /// crash signature; they carry no bracketed level either. Only the tail
+    /// names the cause — the "Traceback" head and frame lines stay excluded.
+    func testTracebackTailsAreCapturedButFrameLinesExcluded() {
+        XCTAssertTrue(LikesSyncEventParser.isUsefulDiagnostic("KeyError: 'data'"))
+        XCTAssertTrue(
+            LikesSyncEventParser.isUsefulDiagnostic("ValueError: not enough values to unpack"))
+        XCTAssertFalse(
+            LikesSyncEventParser.isUsefulDiagnostic("Traceback (most recent call last):"))
+        XCTAssertFalse(
+            LikesSyncEventParser.isUsefulDiagnostic(
+                "  File \"extractor/twitter.py\", line 1428, in _pagination_legacy"))
+    }
+
     /// Real warning/error-level rate-limit and auth lines must stay captured —
     /// they are the message source when the run genuinely fails.
     func testWarningAndErrorLevelDiagnosticsAreRetained() {
