@@ -6,6 +6,60 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Entries before _Unreleased_ were back-filled from git history.
 
+## [1.10.0] — 2026-08-16
+
+### Added
+- **Tool health ("Honest Toolbox")** — the app now probes the versions of yt-dlp,
+  gallery-dl, ffmpeg, and deno at launch and on return to the app: an amber
+  banner flags outdated tools (a yt-dlp older than ~90 days, or anything
+  Homebrew's index says is behind), red flags missing or broken ones, and the
+  Set Up sheet became a per-tool health table whose one button installs the
+  missing and updates the outdated in a single run. deno is now a first-class
+  requirement (yt-dlp needs it as its JavaScript runtime for YouTube). The
+  banner and the download engine resolve tools through one shared path list,
+  so "looks healthy" and "actually runs" can never disagree (#60).
+- **Rate-limit waits are visible** — while gallery-dl sleeps through an X rate
+  limit or CDN backoff, the row shows "rate limited — resuming in …" instead of
+  looking hung (#58, #60).
+
+### Changed
+- **Failure messages tell the truth** — an audit of every user-facing error
+  across yt-dlp, gallery-dl, Likes sync, and the fxtwitter fallback rewrote the
+  misleading ones. Highlights: a yt-dlp too old for current YouTube now says
+  "update it (brew upgrade yt-dlp)" instead of "usually a brief YouTube hiccup,
+  click Retry" — and a missing deno gets its own guidance (#57); private,
+  age-restricted, and members-only videos, YouTube bot checks, unreadable
+  browser cookies, protected and NSFW posts, Instagram security checks,
+  unsupported URLs, and bare gallery-dl exit codes all map to plain language
+  naming the fix in Settings instead of raw tool output (#58); in Likes sync, a
+  stale gallery-dl no longer masquerades as "verify your login" or "the post may
+  be deleted" — outdated-tool failures now say exactly that (#64).
+- **Partial results are reported honestly** — a multi-file post where one file
+  fails now says "Saved N files — Retry fetches the rest" instead of a bare
+  failure that hides the files already on disk; a full or unwritable download
+  folder is told apart from problems with the post itself (#63).
+
+### Fixed
+- **Green "Done" on a silent video** — with ffmpeg missing, yt-dlp downloads
+  video and audio as separate unmerged files and still reports success; the row
+  showed Done while "Open" revealed the audio file. It now fails truthfully with
+  install guidance, and Retry after installing ffmpeg completes the merge (#59).
+- **cookies.txt silent degradation** — a moved, deleted, or unwritable
+  cookies.txt no longer fails an otherwise-successful download with a raw
+  Python traceback, and the app says so once instead of silently falling back
+  to browser cookies while later errors advise exporting the cookies.txt you
+  already had (#61).
+- **Likes sync sticky states** — one failed run no longer shows "needs
+  attention" forever across later flawless syncs; a rate-limit wait during a
+  successful sync is no longer recorded as a failure; Settings "Verify" and
+  "Up to date — no new media." are only claimed when likes were actually
+  visible to the selected session (#62).
+- **Likes event counting** — the app parsed gallery-dl's `--Print` event lines
+  with a prefix the real tool never emits, so synced tweets were never counted;
+  real runs now count correctly (#64).
+- The fxtwitter fallback no longer saves a CDN 404 error page as if it were a
+  media file (#63).
+
 ## [1.9.3] — 2026-08-16
 
 ### Fixed
