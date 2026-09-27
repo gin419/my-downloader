@@ -59,13 +59,13 @@ struct SettingsView: View {
                         }
                     }
 
-                    Text("Choose the browser profile where you are signed in to X.com.")
+                    Text("Choose the browser profile where you are signed in to X.com, Instagram or Threads.")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
 
                 Text(
-                    "yt-dlp and gallery-dl use cookies from the selected browser to access your X.com session. Make sure you're logged in to X.com in that browser."
+                    "yt-dlp and gallery-dl use cookies from the selected browser to access your X.com, Instagram and Threads sessions. Make sure you're logged in to the site in that browser. Threads needs its own sign-in at threads.com — an Instagram sign-in alone is not enough — and it is used only for posts Threads hides from logged-out visitors."
                 )
                 .font(.caption)
                 .foregroundColor(.secondary)
