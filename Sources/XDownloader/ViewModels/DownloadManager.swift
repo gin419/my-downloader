@@ -72,9 +72,10 @@ class DownloadManager: ObservableObject {
     /// True once the active run records a run-level failure (nil tweet id),
     /// which blocks auto-resolving the account's prior run-level rows.
     private var likesRunRecordedRunLevelFailure = false
-    /// In-flight FxTwitterService fallbacks — URLSession Tasks, so they need
-    /// Task.cancel() rather than Process.terminate() when the user hits Stop.
-    private var activeFxTasks: [UUID: Task<Bool, Never>] = [:]
+    /// In-flight in-app resolvers (FxTwitterService, ThreadsService) —
+    /// URLSession Tasks, so they need Task.cancel() rather than
+    /// Process.terminate() when the user hits Stop.
+    private var activeResolverTasks: [UUID: Task<Bool, Never>] = [:]
     private var downloadQueue: [DownloadItem] = []
     /// Overflow behind `pendingDuplicates`: each capture's duplicates present
     /// as ONE alert; a second capture while it's up waits its turn here.
@@ -704,8 +705,8 @@ class DownloadManager: ObservableObject {
     func removeItem(_ item: DownloadItem) {
         activeProcesses[item.id]?.terminate()
         activeProcesses.removeValue(forKey: item.id)
-        activeFxTasks[item.id]?.cancel()
-        activeFxTasks.removeValue(forKey: item.id)
+        activeResolverTasks[item.id]?.cancel()
+        activeResolverTasks.removeValue(forKey: item.id)
         pausedItemIDs.remove(item.id)
         downloadQueue.removeAll { $0.id == item.id }
         items.removeAll { $0.id == item.id }
@@ -724,9 +725,10 @@ class DownloadManager: ObservableObject {
         // The post-exit branch in runDownload flips status to .paused once
         // the yt-dlp process actually finishes terminating.
         activeProcesses[item.id]?.terminate()
-        // The fxtwitter fallback runs as a URLSession Task, not a Process —
-        // cancel it too; runDownload consumes the pause after it returns.
-        activeFxTasks[item.id]?.cancel()
+        // The in-app resolvers (fxtwitter, Threads) run as a URLSession Task,
+        // not a Process — cancel it too; runDownload consumes the pause
+        // after it returns.
+        activeResolverTasks[item.id]?.cancel()
     }
 
     func resumeItem(_ item: DownloadItem) {
@@ -1459,6 +1461,57 @@ class DownloadManager: ObservableObject {
     static let ytDlpEmptySuccessMessage =
         "yt-dlp reported success but found no media to download — the link may be a playlist/channel page, or the post has no video."
 
+    /// A site that skips yt-dlp ended its run without any downloader having
+    /// run. Not reachable with today's profiles — every such site declares
+    /// an in-app resolver — but if it ever is, the row must not blame yt-dlp
+    /// for a run that never happened.
+    static let noDownloaderRanMessage =
+        "Nothing on this Mac could download this link — update XDownloader, then Retry."
+
+    /// A run ended with the row still reading "fetching" or "downloading".
+    /// Such a row is never written to history and is queued again on every
+    /// launch, so it is turned into a failure that can be seen and retried.
+    static let noOutcomeMessage =
+        "The download stopped without a result — Retry."
+
+    /// No fallback ran: the outcome is yt-dlp's own — unless yt-dlp was
+    /// skipped for this site, in which case `ytResult` is the untouched
+    /// initial value and says nothing: reading it as "exit 0" would claim
+    /// that yt-dlp reported success, and arm an auto-retry of a run that
+    /// never happened.
+    static func settleOutcomeWithoutFallback(_ item: DownloadItem, ranYtDlp: Bool, ytResult: ProcessResult) {
+        if case .failed = item.status {
+            // already set by YtDlpService
+        } else if !ranYtDlp {
+            item.emptySuccessFailure = false
+            item.status = .failed(noDownloaderRanMessage)
+        } else if ytResult.isSuccess {
+            // Empty-success set-point: the structural flag — not the
+            // message wording — arms the one-shot auto-retry below.
+            item.emptySuccessFailure = true
+            item.status = .failed(ytDlpEmptySuccessMessage)
+        } else {
+            item.status = .failed(
+                ytDlpFailureMessage(
+                    code: ytResult.code, wasSignal: ytResult.wasSignal,
+                    lastWarning: item.lastToolWarning))
+        }
+    }
+
+    /// Last line of defence after the fallback chain: whatever ran, the row
+    /// leaves `runDownload` completed or failed.
+    static func ensureTerminalStatus(_ item: DownloadItem) {
+        switch item.status {
+        case .completed, .failed:
+            return
+        default:
+            item.emptySuccessFailure = false
+            item.speed = nil
+            item.eta = nil
+            item.status = .failed(noOutcomeMessage)
+        }
+    }
+
     /// Appended to the final failure when the fallback loop skipped gallery-dl
     /// because it isn't installed — the missing tool, not the site, is then
     /// the likely cause.
@@ -1613,34 +1666,39 @@ class DownloadManager: ObservableObject {
         // drop subtitles on the retry so the video itself can download.
         let effectiveSubtitleLanguage: SubtitleLanguage = item.subtitlesDisabled ? .none : subtitleLanguage
 
-        let cookies = resolveCookiesForDownload()
+        let profile = SiteRegistry.profile(for: item.url)
+        // A site that skips yt-dlp runs no tool that takes cookies, so the
+        // cookies file is not even looked up for it.
+        let cookies: (path: String?, granted: URL?) = profile.usesYtDlp ? resolveCookiesForDownload() : (nil, nil)
         var ytResult = ProcessResult(code: 0, wasSignal: false)
-        await cookieAccess.withScope(for: item.id, file: cookies.path, grantedURL: cookies.granted) {
-            let args = YtDlpService.buildArguments(
-                for: item,
-                outputDirectory: outputDirectory,
-                format: youtubeFormat,
-                videoQuality: videoQuality,
-                audioQuality: audioQuality,
-                subtitleLanguage: effectiveSubtitleLanguage,
-                embedSubtitles: embedSubtitles,
-                cookieBrowser: cookieBrowser,
-                cookieBrowserProfile: cookieBrowserProfile,
-                cookiesFile: cookies.path
-            )
+        if profile.usesYtDlp {
+            await cookieAccess.withScope(for: item.id, file: cookies.path, grantedURL: cookies.granted) {
+                let args = YtDlpService.buildArguments(
+                    for: item,
+                    outputDirectory: outputDirectory,
+                    format: youtubeFormat,
+                    videoQuality: videoQuality,
+                    audioQuality: audioQuality,
+                    subtitleLanguage: effectiveSubtitleLanguage,
+                    embedSubtitles: embedSubtitles,
+                    cookieBrowser: cookieBrowser,
+                    cookieBrowserProfile: cookieBrowserProfile,
+                    cookiesFile: cookies.path
+                )
 
-            ytResult = await ProcessRunner.run(
-                executablePath: ytdlpPath,
-                arguments: args,
-                item: item,
-                register: { [weak self] p in self?.activeProcesses[item.id] = p },
-                unregister: { [weak self] in self?.activeProcesses.removeValue(forKey: item.id) },
-                lineParser: { [weak self] line, item in
-                    YtDlpService.parseLine(line, item: item) {
-                        self?.activeProcesses[item.id]?.terminate()
+                ytResult = await ProcessRunner.run(
+                    executablePath: ytdlpPath,
+                    arguments: args,
+                    item: item,
+                    register: { [weak self] p in self?.activeProcesses[item.id] = p },
+                    unregister: { [weak self] in self?.activeProcesses.removeValue(forKey: item.id) },
+                    lineParser: { [weak self] line, item in
+                        YtDlpService.parseLine(line, item: item) {
+                            self?.activeProcesses[item.id]?.terminate()
+                        }
                     }
-                }
-            )
+                )
+            }
         }
 
         // The row's ✕ terminated this process mid-run: the user cancelled.
@@ -1653,7 +1711,9 @@ class DownloadManager: ObservableObject {
         // Use a cookies.txt export (Settings) for X adult/NSFW media that browser cookies can't reach.
         // gallery-dl often picks these up, so treat it the same as a non-zero
         // exit and let the fallback below try.
-        let mediaCaptured = item.outputPath != nil
+        // Only yt-dlp's own run can be judged here: with yt-dlp skipped,
+        // `ytResult` is the untouched initial value, not a success.
+        let mediaCaptured = profile.usesYtDlp && item.outputPath != nil
         var hasFatalError = false
         if case .failed = item.status { hasFatalError = true }
         // Subtitles are best-effort: if the video already reached disk but yt-dlp
@@ -1719,11 +1779,11 @@ class DownloadManager: ObservableObject {
             return
         }
 
-        // yt-dlp failed or found no media — run the site's declared fallback
-        // chain (data-driven from its SiteProfile) until one succeeds. Each tool
-        // owns its own process/task + pause handling in a helper below; adding or
-        // reordering a site's fallbacks is now a profile edit, not a change here.
-        let profile = SiteRegistry.profile(for: item.url)
+        // yt-dlp failed, found no media, or was skipped for this site — run the
+        // site's declared fallback chain (data-driven from its SiteProfile)
+        // until one succeeds. Each tool owns its own process/task + pause
+        // handling in a helper below; adding or reordering a site's fallbacks
+        // is now a profile edit, not a change here.
         var ranFallback = false
         var skippedMissingGalleryDl = false
         for fallback in profile.fallbacks {
@@ -1741,26 +1801,29 @@ class DownloadManager: ObservableObject {
                 guard case .failed = item.status else { continue }  // only as a rescue
                 ranFallback = true
                 if await runFxTwitterFallback(item) { return }  // user pressed Stop mid-run
+            case .threads:
+                // No "only as a rescue" guard: yt-dlp never ran for this
+                // site, so there is no earlier failure to rescue — the
+                // resolver is the download.
+                ranFallback = true
+                let directory = outputDirectory
+                let stopped = await runResolverTask(item) {
+                    await ThreadsService.run(item: item, outputDirectory: directory)
+                }
+                if stopped { return }  // user pressed Stop mid-run
             }
         }
 
         // No fallback ran (none declared for this site, or gallery-dl missing) —
         // finalize yt-dlp's own outcome.
         if !ranFallback {
-            if case .failed = item.status {
-                // already set by YtDlpService
-            } else if ytResult.isSuccess {
-                // Empty-success set-point: the structural flag — not the
-                // message wording — arms the one-shot auto-retry below.
-                item.emptySuccessFailure = true
-                item.status = .failed(Self.ytDlpEmptySuccessMessage)
-            } else {
-                item.status = .failed(
-                    Self.ytDlpFailureMessage(
-                        code: ytResult.code, wasSignal: ytResult.wasSignal,
-                        lastWarning: item.lastToolWarning))
-            }
+            Self.settleOutcomeWithoutFallback(item, ranYtDlp: profile.usesYtDlp, ytResult: ytResult)
         }
+        // The user removed the row while a resolver was running: its Task
+        // was cancelled and deliberately left no outcome — there is nothing
+        // to settle, retry or record.
+        guard stillInList(item) else { return }
+        Self.ensureTerminalStatus(item)
 
         // gallery-dl was skipped for being missing: whatever failure stands —
         // yt-dlp's own, or fxtwitter's restored prior — the absent tool, not
@@ -1893,18 +1956,29 @@ class DownloadManager: ObservableObject {
 
     /// Last-resort fallback: X's GraphQL APIs sometimes hide tweets from
     /// spam-flagged accounts while the media stays publicly served from the twimg
-    /// CDN — fxtwitter still resolves those. Runs as a cancellable Task (no
-    /// Process to kill), so it registers in `activeFxTasks`. Keeps the prior
-    /// (gallery-dl) failure message when it can't help. Returns true if the user
-    /// pressed Stop mid-run — the item is set to .paused and the caller returns.
+    /// CDN — fxtwitter still resolves those. Keeps the prior (gallery-dl)
+    /// failure message when it can't help. Returns true if the user pressed
+    /// Stop mid-run (see `runResolverTask`).
     private func runFxTwitterFallback(_ item: DownloadItem) async -> Bool {
-        // A seconds-long fxtwitter fetch must never display a rate-limit wait
+        let directory = outputDirectory
+        return await runResolverTask(item) {
+            await FxTwitterService.run(item: item, outputDirectory: directory)
+        }
+    }
+
+    /// Runs an in-app resolver — a URLSession download with no Process to
+    /// kill — as a cancellable Task registered in `activeResolverTasks`, which
+    /// is where Stop and the row's ✕ look for it. Returns true if the user
+    /// pressed Stop mid-run — the item is set to .paused and the caller
+    /// returns.
+    private func runResolverTask(_ item: DownloadItem, _ run: @escaping @MainActor () async -> Bool) async -> Bool {
+        // A seconds-long page fetch must never display a rate-limit wait
         // inherited from a previous tool's backoff.
         item.eta = nil
-        let fxTask = Task { await FxTwitterService.run(item: item, outputDirectory: outputDirectory) }
-        activeFxTasks[item.id] = fxTask
-        _ = await fxTask.value
-        activeFxTasks.removeValue(forKey: item.id)
+        let task = Task { await run() }
+        activeResolverTasks[item.id] = task
+        _ = await task.value
+        activeResolverTasks.removeValue(forKey: item.id)
 
         if pausedItemIDs.remove(item.id) != nil, item.status != .completed {
             item.status = .paused
@@ -2046,7 +2120,8 @@ class DownloadManager: ObservableObject {
 
         // Self-heal v1.3.0-era "empty success" rows: marked Done but no file
         // was ever recorded (no title/media chip in the UI). Re-queue them so
-        // they run through the current yt-dlp → gallery-dl → fxtwitter chain
+        // they run through their site's current chain (for X: yt-dlp →
+        // gallery-dl → fxtwitter)
         // instead of posing as completed forever.
         for item in restored
         where item.status == .completed
@@ -2065,8 +2140,10 @@ class DownloadManager: ObservableObject {
     // status URL; YouTube's t= is only a seek position, irrelevant to a download.
     // "igsh" is Instagram's share-link tracking param (?igsh=…), and "igshid"
     // its older spelling still present in countless shared links — same dedup story.
+    // "xmt" and "slof" ride on Threads share links; the post is named by its
+    // path alone, so they go for the same reason.
     private static let trackingParamsExact = Set([
-        "si", "s", "t", "ref", "ref_src", "ref_url", "fbclid", "gclid", "msclkid", "igsh", "igshid",
+        "si", "s", "t", "ref", "ref_src", "ref_url", "fbclid", "gclid", "msclkid", "igsh", "igshid", "xmt", "slof",
     ])
 
     static func stripTrackingParams(_ urlString: String) -> String {

@@ -4,10 +4,184 @@ import Foundation
 /// Threads extractor, but a public post's page carries the whole post —
 /// every carousel child, original-resolution images and a progressive MP4 —
 /// as JSON inside a `<script type="application/json">` tag, so one page
-/// fetch resolves it. Everything here is a pure function of the fetched
-/// page: no cookies are read or sent, and nothing resolved is ever stored,
+/// fetch resolves it. Everything but `run` is a pure function of the fetched
+/// page. No cookies are read or sent, and nothing resolved is ever stored,
 /// because the media addresses are signed and expire within days.
 enum ThreadsService {
+
+    // MARK: - Running a download
+
+    /// Resolves the post and downloads its files. Returns true only when
+    /// every file is on disk.
+    ///
+    /// Unlike the fxtwitter rescue this is the ONLY downloader for its site,
+    /// so it never restores an earlier status: every exit but a cancel
+    /// leaves the row completed or failed with a message of its own. A
+    /// cancel (Stop, or the row's ✕) leaves no outcome — DownloadManager
+    /// sets the paused state, or the row is already gone.
+    ///
+    /// `session` is a seam for tests; the default keeps and sends no cookies.
+    @MainActor
+    static func run(item: DownloadItem, outputDirectory: URL, session: URLSession = DirectDownload.session) async -> Bool {
+        item.status = .fetching
+        // While fetching, any eta is shown as a rate-limit wait.
+        item.eta = nil
+        // This run owns the outcome; only the two outcomes that may be
+        // transient arm the one-shot auto-retry again.
+        item.emptySuccessFailure = false
+
+        guard let link = parseLink(item.url), let pageURL = canonicalURL(for: link) else {
+            // Profile pages, search, the feed: never crawled.
+            item.status = .failed(notAPostLinkMessage)
+            return false
+        }
+
+        let post: ResolvedPost
+        switch await fetchPost(at: pageURL, code: link.code, session: session) {
+        case .resolved(let resolved): post = resolved
+        case .cancelled: return false
+        case .failed(let message, let mayBeTransient):
+            item.emptySuccessFailure = mayBeTransient
+            item.status = .failed(message)
+            return false
+        }
+
+        let stem = fileStem(author: post.author, text: post.text, code: post.code)
+        var media = post.media
+        var savedPaths: [String] = []
+        var imageCount = 0
+        var videoCount = 0
+        // A per-file failure must not silently shrink the file count under a
+        // green "Done" — remember the last one so the final message can name
+        // a concrete reason.
+        var lastFailure: DirectDownload.FileFailure?
+        var resolvedAgain = false
+
+        var index = 0
+        while index < media.count {
+            // Stop cancels the wrapping Task (see DownloadManager) — bail
+            // out between files; a transfer in flight reports .cancelled.
+            if Task.isCancelled { return false }
+            let entry = media[index]
+            let name = baseName(stem: stem, index: index, count: media.count)
+
+            var saved = DirectDownload.existingFile(baseName: name, in: outputDirectory)
+            if saved == nil {
+                item.status = .downloading
+                let outcome = await DirectDownload.download(
+                    entry.url, to: outputDirectory, baseName: name,
+                    fallbackExtension: entry.kind == .video ? "mp4" : "jpg",
+                    item: item, fileIndex: index, fileCount: media.count, session: session)
+                switch outcome {
+                case .saved(let url):
+                    saved = url
+                case .cancelled:
+                    return false
+                case .failed(let failure):
+                    // The signed address ran out (or was refused): resolve
+                    // the post afresh, once, and try this file again. A
+                    // second refusal is reported like any other failure.
+                    if case .httpStatus(403) = failure, !resolvedAgain {
+                        resolvedAgain = true
+                        item.status = .fetching
+                        item.speed = nil
+                        if case .resolved(let fresh) = await fetchPost(at: pageURL, code: link.code, session: session),
+                            fresh.code == post.code, fresh.media.count == media.count
+                        {
+                            media = fresh.media
+                            continue
+                        }
+                        if Task.isCancelled { return false }
+                    }
+                    lastFailure = failure
+                }
+            }
+            if let saved {
+                savedPaths.append(saved.path)
+                if entry.kind == .video { videoCount += 1 } else { imageCount += 1 }
+            }
+            index += 1
+        }
+
+        if Task.isCancelled { return false }
+        guard let first = savedPaths.first else {
+            item.speed = nil
+            item.status = .failed(
+                DirectDownload.zeroSavedFailureMessage(lastFailure: lastFailure) ?? nothingSavedMessage(lastFailure: lastFailure))
+            return false
+        }
+
+        item.outputPath = savedPaths.first { !MediaExtensions.image.contains(URL(fileURLWithPath: $0).pathExtension.lowercased()) } ?? first
+        item.imageCount = imageCount > 0 ? imageCount : nil
+        item.videoCount = videoCount > 0 ? videoCount : nil
+        item.recomputeMediaCategory()
+        if item.title == nil { item.title = displayTitle(author: post.author, text: post.text) }
+        if let lastFailure {
+            // Some files failed: keep the saved ones on the row, but the run
+            // must not read as a clean "Done" with a silently smaller count.
+            // The count is what is ON DISK — this run's downloads and the
+            // files an earlier run saved.
+            item.speed = nil
+            item.status = .failed(
+                DirectDownload.partialFailureMessage(saved: savedPaths.count, attempted: media.count, lastFailure: lastFailure))
+            return false
+        }
+        item.markCompleted()
+        return true
+    }
+
+    /// What the page request sends, and nothing else of ours: without all
+    /// three Threads answers HTTP 200 with a page that carries no post data.
+    /// URLSession's own User-Agent and "Accept: */*" are among the refused.
+    static let pageHeaders: [String: String] = [
+        "User-Agent":
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Sec-Fetch-Mode": "navigate",
+    ]
+
+    /// Whether a failed resolve may be a passing answer worth the one
+    /// automatic retry. Threads has answered "no such post" once for a post
+    /// that existed, and a page without post data can be a bad moment on
+    /// their side. Sign-in, restriction, a post without media and a malformed
+    /// link give the same answer every time.
+    static func mayBeTransient(_ failure: Failure) -> Bool {
+        switch failure {
+        case .notFound, .noPostData: return true
+        case .loginRequired, .restricted, .blockedShell, .noMedia: return false
+        }
+    }
+
+    private enum PageOutcome {
+        case resolved(ResolvedPost)
+        case failed(message: String, mayBeTransient: Bool)
+        case cancelled
+    }
+
+    /// One page request, redirects followed. The address the redirects END
+    /// at is what gets classified: a missing post and the login wall both
+    /// answer HTTP 200, on another page.
+    @MainActor
+    private static func fetchPost(at pageURL: URL, code: String, session: URLSession) async -> PageOutcome {
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(for: DirectDownload.request(for: pageURL, headers: pageHeaders))
+        } catch {
+            if Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled { return .cancelled }
+            return .failed(message: pageUnreachableMessage(.transport(error)), mayBeTransient: false)
+        }
+        if Task.isCancelled { return .cancelled }
+        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+            return .failed(message: pageUnreachableMessage(.httpStatus(http.statusCode)), mayBeTransient: false)
+        }
+        switch resolve(html: String(decoding: data, as: UTF8.self), finalURL: response.url, code: code) {
+        case .success(let post):
+            return .resolved(post)
+        case .failure(let failure):
+            return .failed(message: message(for: failure), mayBeTransient: mayBeTransient(failure))
+        }
+    }
 
     // MARK: - Failure messages
 
@@ -30,6 +204,18 @@ enum ThreadsService {
         "Threads sent the page without the post's data — wait a moment, then Retry. If it persists, Threads may have changed its site."
     static let noMediaMessage =
         "No photo or video in this Threads post — text, link cards and GIFs can't be downloaded."
+
+    /// The page request itself failed: no answer, or an HTTP error status.
+    static func pageUnreachableMessage(_ failure: DirectDownload.FileFailure) -> String {
+        "Couldn't load the post from Threads — \(DirectDownload.shortReason(for: failure)). Check the connection, then Retry."
+    }
+
+    /// The post resolved, but not one of its files could be saved. A Retry
+    /// resolves the post again, so it also gets fresh media addresses.
+    static func nothingSavedMessage(lastFailure: DirectDownload.FileFailure?) -> String {
+        guard let lastFailure else { return "None of this post's files could be saved — Retry." }
+        return "None of this post's files could be saved — \(DirectDownload.shortReason(for: lastFailure)). Retry fetches them again."
+    }
 
     /// The message a resolve failure puts on the row.
     static func message(for failure: Failure) -> String {
@@ -57,6 +243,18 @@ enum ThreadsService {
     /// substring would also claim "somethreads.com" and any link that merely
     /// mentions a Threads address in its query.
     static let hosts: Set<String> = ["threads.com", "www.threads.com", "threads.net", "www.threads.net"]
+
+    private static let domains = ["threads.com", "threads.net"]
+
+    /// True for a link on Threads — the site's domains and their subdomains,
+    /// in any letter case. Wider than `parseLink` on purpose: a Threads link
+    /// that is not a single post still belongs to this site, and is turned
+    /// down with a message of its own instead of being handed to yt-dlp.
+    static func isThreadsHost(_ link: String) -> Bool {
+        let trimmed = link.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let host = URLComponents(string: trimmed)?.host?.lowercased() else { return false }
+        return domains.contains { host == $0 || host.hasSuffix("." + $0) }
+    }
 
     private static let codePattern = "[A-Za-z0-9_-]{5,}"
     private static let postPathPattern = "^/@?([A-Za-z0-9._]+)/post/(\(codePattern))(?:/(?:embed|media)?)?/?$"
@@ -334,9 +532,22 @@ enum ThreadsService {
     /// have (see SiteRegistry.twitter's galleryDlArgs and FxTwitterService).
     /// The code keeps two posts by one author with the same or no text from
     /// colliding and being skipped as already downloaded.
+    ///
+    /// A file name holds 255 BYTES, and 100 characters of Chinese or Japanese
+    /// text alone are 300: the text is cut further, as far as it takes, or
+    /// the file could not be saved at all.
     static func fileStem(author: String, text: String, code: String) -> String {
-        DirectDownload.sanitize("\(author) - \(String(text.prefix(100))) [\(code)]")
+        var cut = String(text.prefix(100))
+        var stem = DirectDownload.sanitize("\(author) - \(cut) [\(code)]")
+        while stem.utf8.count > maxStemBytes, !cut.isEmpty {
+            cut.removeLast()
+            stem = DirectDownload.sanitize("\(author) - \(cut) [\(code)]")
+        }
+        return stem
     }
+
+    /// Leaves room under the 255-byte limit for " #NN" and the extension.
+    static let maxStemBytes = 240
 
     /// File name of the post's `index`th file (0-based) out of `count`. Only
     /// multi-file posts get the " #N" suffix: X downloads have the
@@ -344,7 +555,13 @@ enum ThreadsService {
     /// without it from the start keeps the re-download check a plain
     /// file-exists test.
     static func fileName(stem: String, index: Int, count: Int, fileExtension: String) -> String {
-        count > 1 ? "\(stem) #\(index + 1).\(fileExtension)" : "\(stem).\(fileExtension)"
+        "\(baseName(stem: stem, index: index, count: count)).\(fileExtension)"
+    }
+
+    /// The file name without its extension, which is only known once the
+    /// server has answered.
+    static func baseName(stem: String, index: Int, count: Int) -> String {
+        count > 1 ? "\(stem) #\(index + 1)" : stem
     }
 
     /// Row title: the stem without its code — what GalleryDlService's

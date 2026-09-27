@@ -417,10 +417,24 @@ final class ThreadsResolverTests: XCTestCase {
     }
 
     func testFileStemCutsTheTextAt100Characters() {
-        let text = String(repeating: "字", count: 99) + "ab"
+        // Characters, not bytes: "é" is one character and two bytes.
+        let text = String(repeating: "é", count: 99) + "ab"
         XCTAssertEqual(
             ThreadsService.fileStem(author: "Example Author", text: text, code: "SYNimage0001"),
-            "Example Author - " + String(repeating: "字", count: 99) + "a [SYNimage0001]")
+            "Example Author - " + String(repeating: "é", count: 99) + "a [SYNimage0001]")
+    }
+
+    func testFileStemFitsAFileNameWhateverTheScript() {
+        // 100 Chinese characters are 300 bytes, more than a file name holds:
+        // cut at 100 characters only, the file could never be saved.
+        let text = String(repeating: "字", count: 150)
+        let stem = ThreadsService.fileStem(author: "Example Author", text: text, code: "SYNimage0001")
+        XCTAssertLessThanOrEqual(stem.utf8.count, ThreadsService.maxStemBytes)
+        XCTAssertLessThanOrEqual(ThreadsService.fileName(stem: stem, index: 98, count: 99, fileExtension: "webp").utf8.count, 255)
+        XCTAssertTrue(stem.hasPrefix("Example Author - 字字字"))
+        XCTAssertTrue(stem.hasSuffix("字 [SYNimage0001]"), "the code must survive the cut")
+        // As much of the text as fits, not a fixed shorter cut.
+        XCTAssertGreaterThan(stem.utf8.count, ThreadsService.maxStemBytes - 3)
     }
 
     func testFileNameNumbersOnlyMultiFilePosts() {

@@ -9,18 +9,31 @@ import Foundation
 /// flags that used to be scattered as `SiteKind(url:) == .x` / `isYouTube` checks.
 struct SiteProfile {
 
-    /// A tool tried after yt-dlp when it fails / finds no media.
+    /// A downloader tried after yt-dlp when it fails / finds no media — or,
+    /// for a site that skips yt-dlp (`usesYtDlp == false`), the downloader
+    /// that does the whole job.
     enum Fallback {
         case galleryDl  // image tweets, Reddit posts/galleries, …
         case fxTwitter  // X CDN direct download for spam-flagged/hidden tweets
+        case threads  // in-app Threads resolver, direct download
+
+        /// Runs an external command-line tool, which may not be installed.
+        /// The in-app resolvers need nothing but the network.
+        var needsExternalTool: Bool {
+            switch self {
+            case .galleryDl: return true
+            case .fxTwitter, .threads: return false
+            }
+        }
     }
 
     /// Stable identifier, also used as the history "site" label.
     let id: String
     /// Whether this profile handles the given URL.
     let matches: (String) -> Bool
-    /// Ordered fallbacks tried after yt-dlp — the single source of truth; the
-    /// orchestrator drives its whole fallback loop from this list.
+    /// Ordered fallbacks tried after yt-dlp (or instead of it, see
+    /// `usesYtDlp`) — the single source of truth; the orchestrator drives its
+    /// whole fallback loop from this list.
     let fallbacks: [Fallback]
 
     // MARK: Capability flags (replace the old scattered site checks)
@@ -47,13 +60,23 @@ struct SiteProfile {
     /// these extra args to collect the post's photos. yt-dlp deliberately skips
     /// photos in mixed video+photo posts and exits 0, and success bypasses the
     /// failure-driven `fallbacks` chain — without the sweep the photos would
-    /// silently vanish.
+    /// silently vanish. Never runs for a site that skips yt-dlp.
     let imageSweepArgs: [String]?
+    /// False: yt-dlp is not run at all and `fallbacks` does the whole job.
+    /// For sites yt-dlp has no extractor for — running it there costs
+    /// seconds per link and leaves its raw "Unsupported URL" line as the
+    /// row's message. Such a site must declare at least one fallback that
+    /// needs no external tool, or nothing could ever download it. Declared
+    /// last and defaulted so every other profile stays as written.
+    var usesYtDlp: Bool = true
 
 }
 
 /// The single registry of known sites. Order matters: specific profiles first,
-/// the `other` catch-all last (first match wins).
+/// the `other` catch-all last (first match wins). `threads` leads because the
+/// other profiles match by substring: a Threads link whose username ends in
+/// "x.com" ("/@fox.com/post/…") contains "x.com/" and would be claimed by
+/// `twitter`.
 enum SiteRegistry {
 
     static let twitter = SiteProfile(
@@ -142,7 +165,27 @@ enum SiteRegistry {
         imageSweepArgs: ["-o", "videos=false"]
     )
 
-    /// Catch-all: the generic yt-dlp extractor with no fallbacks.
+    /// Threads: neither yt-dlp nor gallery-dl can read it, so the in-app
+    /// resolver is the only downloader and yt-dlp is skipped. Matching is by
+    /// host, never by substring: a substring test claims "somethreads.com"
+    /// and any link that merely carries a Threads address in its query, and
+    /// misses an uppercase host.
+    static let threads = SiteProfile(
+        id: "threads",
+        matches: { ThreadsService.isThreadsHost($0) },
+        fallbacks: [.threads],
+        supportsSubtitles: false,
+        usesYouTubeFormatSelector: false,
+        outputTemplateSuffix: "",
+        extractorTitleIncludesUploader: false,
+        detectsExternalRedirect: false,
+        galleryDlArgs: [],
+        imageSweepArgs: nil,
+        usesYtDlp: false
+    )
+
+    /// Catch-all: the generic yt-dlp extractor with no fallbacks. The only
+    /// profile that matches by default, so it must stay last.
     static let other = SiteProfile(
         id: "other",
         matches: { _ in true },
@@ -156,7 +199,7 @@ enum SiteRegistry {
         imageSweepArgs: nil
     )
 
-    static let all: [SiteProfile] = [twitter, youtube, reddit, instagram, other]
+    static let all: [SiteProfile] = [threads, twitter, youtube, reddit, instagram, other]
 
     static func profile(for url: String) -> SiteProfile {
         all.first { $0.matches(url) } ?? other

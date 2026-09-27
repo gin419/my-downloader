@@ -52,6 +52,20 @@ final class URLTrackingParamsTests: XCTestCase {
             "https://www.instagram.com/p/Daoe_4TTVY0/")
     }
 
+    func testStripsThreadsShareLinkParams() {
+        // Threads share links carry ?xmt=…&slof=… — the post is named by its
+        // path alone, so the shared link must dedup against the bare one.
+        XCTAssertEqual(
+            DownloadManager.stripTrackingParams("https://www.threads.com/@user/post/CODE?xmt=AQF0abc&slof=1"),
+            "https://www.threads.com/@user/post/CODE")
+        XCTAssertEqual(
+            DownloadManager.stripTrackingParams("https://www.threads.net/@user/post/CODE?igshid=abc"),
+            "https://www.threads.net/@user/post/CODE")
+        XCTAssertEqual(
+            DownloadManager.stripTrackingParams("https://www.threads.com/@user/post/CODE?XMT=abc&keep=1"),
+            "https://www.threads.com/@user/post/CODE?keep=1")
+    }
+
     func testLeavesNonTrackingParamsUntouched() {
         XCTAssertEqual(
             DownloadManager.stripTrackingParams("https://example.com/p?keep=1"),

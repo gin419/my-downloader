@@ -340,8 +340,9 @@ final class DirectDownloadTests: XCTestCase {
 }
 
 /// Answers requests from a table instead of the network. Registered on the
-/// injected session only, so no other test's traffic can reach it.
-private final class StubProtocol: URLProtocol {
+/// injected session only, so no other test's traffic can reach it. Shared
+/// with ThreadsRunTests.
+final class StubProtocol: URLProtocol {
 
     struct Stub {
         enum Ending {
@@ -364,24 +365,42 @@ private final class StubProtocol: URLProtocol {
     private var isStopped = false
 
     private static let lock = NSLock()
-    private static var stubs: [URL: Stub] = [:]
+    private static var stubs: [URL: [Stub]] = [:]
+    private static var requests: [URLRequest] = []
 
     static func set(_ stub: Stub, for url: URL) {
+        set([stub], for: url)
+    }
+
+    /// Answers in turn: each request takes the next one, and the last one
+    /// answers every request after that.
+    static func set(_ sequence: [Stub], for url: URL) {
         lock.lock()
         defer { lock.unlock() }
-        stubs[url] = stub
+        stubs[url] = sequence
     }
 
     static func removeAll() {
         lock.lock()
         defer { lock.unlock() }
         stubs.removeAll()
+        requests.removeAll()
     }
 
-    private static func stub(for url: URL?) -> Stub? {
+    /// Every request made to `url` so far, in order.
+    static func requests(to url: URL) -> [URLRequest] {
         lock.lock()
         defer { lock.unlock() }
-        return url.flatMap { stubs[$0] }
+        return requests.filter { $0.url == url }
+    }
+
+    private static func take(_ request: URLRequest) -> Stub? {
+        lock.lock()
+        defer { lock.unlock() }
+        requests.append(request)
+        guard let url = request.url, let sequence = stubs[url], let next = sequence.first else { return nil }
+        if sequence.count > 1 { stubs[url] = Array(sequence.dropFirst()) }
+        return next
     }
 
     override class func canInit(with request: URLRequest) -> Bool { true }
@@ -389,7 +408,7 @@ private final class StubProtocol: URLProtocol {
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
 
     override func startLoading() {
-        guard let url = request.url, let stub = Self.stub(for: url),
+        guard let url = request.url, let stub = Self.take(request),
             let response = HTTPURLResponse(url: url, statusCode: stub.status, httpVersion: "HTTP/1.1", headerFields: stub.headers)
         else {
             // An address nobody stubbed must fail, never reach the network.

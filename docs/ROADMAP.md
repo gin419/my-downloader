@@ -105,6 +105,9 @@ These were not on the v1.7 / v2.0 lists. They are live and stay out of the
   checkpoint) instead of a generic hiccup. Partial multi-file posts say
   "Saved N files — Retry fetches the rest". Rate-limit sleeps show
   "resuming in …" instead of looking hung.
+- **Threads** *(unreleased)* — public Threads posts (photos, videos,
+  multi-item posts) download through an in-app reader: no external tool,
+  no login, yt-dlp skipped. Posts that need sign-in are not supported yet.
 
 ---
 
