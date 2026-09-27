@@ -44,6 +44,14 @@ Entries before _Unreleased_ were back-filled from git history.
   removed while they wait. Public posts and other sites are not held up.
 
 ### Changed
+- **Instagram links must name a single post, reel or story** — a profile,
+  a profile tab, a hashtag or explore page, an audio page, a highlights
+  link or a stories link without a story id used to be handed to the
+  download tools, which could fetch everything the link named — a whole
+  account or a whole page of posts — with your browser login. Such a link
+  now fails at once with a message asking for the single post's own link;
+  no tool is started and nothing is requested from Instagram. A story
+  shared out of a highlight (an `/s/…` link) is turned down as well.
 - **Share-link cleanup** — Threads share parameters (`xmt`, `slof`) are
   stripped like the other tracking parameters, so a shared link is
   recognised as the same post as its plain link.

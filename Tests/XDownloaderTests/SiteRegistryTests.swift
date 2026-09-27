@@ -223,6 +223,32 @@ final class SiteRegistryTests: XCTestCase {
         XCTAssertEqual(ig.imageSweepArgs, ["-o", "videos=false"])
     }
 
+    /// Instagram is downloaded one post, reel or story at a time: its
+    /// downloads run with the browser login, and a profile link would walk
+    /// the whole account with it.
+    func testInstagramDeclaresTheSingleItemGuard() throws {
+        let guardDeclared = try XCTUnwrap(SiteRegistry.instagram.singleItemGuard)
+        XCTAssertEqual(guardDeclared.message, InstagramLink.notASingleItemMessage)
+        XCTAssertTrue(guardDeclared.turnsDown("https://www.instagram.com/someone.invented/"))
+        XCTAssertFalse(guardDeclared.turnsDown("https://www.instagram.com/p/SYNpost0001_/"))
+        XCTAssertFalse(guardDeclared.turnsDown("https://example.com/someone.invented/"))
+    }
+
+    /// Every other profile turns nothing down, account links included.
+    func testEveryOtherProfileDeclaresNoSingleItemGuard() {
+        let links = [
+            "https://x.com/someone", "https://www.youtube.com/@someone/videos", "https://www.reddit.com/user/someone/",
+            "https://www.threads.com/@someone.invented", "https://video.dmm.co.jp/cinema/list/",
+            "https://example.com/someone/", "https://www.instagram.com/someone.invented/",
+        ]
+        for profile in SiteRegistry.all where profile.id != "instagram" {
+            XCTAssertNil(profile.singleItemGuard, profile.id)
+            for link in links {
+                XCTAssertNil(profile.refusalMessage(for: link), "\(profile.id) \(link)")
+            }
+        }
+    }
+
     /// The sweep's extra args slot in AFTER the profile's own gallery-dl args
     /// (so `-o videos=false` overrides any per-site option default) and before
     /// the trailing URL.

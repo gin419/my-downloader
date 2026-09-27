@@ -79,6 +79,28 @@ struct SiteProfile {
     /// up. For a site whose downloads are what it serves every logged-out
     /// visitor. Defaulted like `usesYtDlp`.
     var receivesBrowserCookies: Bool = true
+    /// Non-nil: the site is downloaded one item at a time. A link on it
+    /// that names more than one item — an account, a tab, a collection —
+    /// would have the tools walk all of it with the browser login, so the
+    /// run ends at once under `message` instead: no tool is started, no
+    /// request is made and no cookie source is looked up. Defaulted like
+    /// `usesYtDlp`: a site that declares nothing turns nothing down.
+    var singleItemGuard: SingleItemGuard? = nil
+
+    struct SingleItemGuard {
+        /// True for a link to turn down. Judged by the link's shape alone,
+        /// without a request; a link that is not the site's own is never
+        /// turned down.
+        let turnsDown: (String) -> Bool
+        /// The failed row's whole message.
+        let message: String
+    }
+
+    /// The message `link` is turned down under, nil when it may run.
+    func refusalMessage(for link: String) -> String? {
+        guard let singleItemGuard, singleItemGuard.turnsDown(link) else { return nil }
+        return singleItemGuard.message
+    }
 
 }
 
@@ -174,7 +196,10 @@ enum SiteRegistry {
         galleryDlArgs: [
             "-f", "{username} - {description|''!s:.100} [{post_shortcode}] #{num}.{extension}",
         ],
-        imageSweepArgs: ["-o", "videos=false"]
+        imageSweepArgs: ["-o", "videos=false"],
+        singleItemGuard: .init(
+            turnsDown: { InstagramLink.shape(of: $0) == .notASingleItem },
+            message: InstagramLink.notASingleItemMessage)
     )
 
     /// Threads: neither yt-dlp nor gallery-dl can read it, so the in-app
@@ -239,6 +264,16 @@ enum SiteRegistry {
 
     static func profile(for url: String) -> SiteProfile {
         all.first { $0.matches(url) } ?? other
+    }
+
+    /// The message `url` is turned down under, nil when it may run. Every
+    /// profile is asked, not only the one the link is routed to: most
+    /// profiles match by case-sensitive substring, so an Instagram link with
+    /// an uppercase host is routed to `other`, and one whose username ends
+    /// in "x.com" to `twitter` — and the tools would walk the account all
+    /// the same. A guard only ever turns down links of its own site.
+    static func refusalMessage(for url: String) -> String? {
+        all.lazy.compactMap { $0.refusalMessage(for: url) }.first
     }
 
     /// True if `url` is Twitter content, including the twimg.com CDN. Used to
