@@ -335,7 +335,7 @@ enum ThreadsService {
     /// The code keeps two posts by one author with the same or no text from
     /// colliding and being skipped as already downloaded.
     static func fileStem(author: String, text: String, code: String) -> String {
-        FxTwitterService.sanitize("\(author) - \(String(text.prefix(100))) [\(code)]")
+        DirectDownload.sanitize("\(author) - \(String(text.prefix(100))) [\(code)]")
     }
 
     /// File name of the post's `index`th file (0-based) out of `count`. Only
@@ -352,7 +352,7 @@ enum ThreadsService {
     /// than by stripping the file name, which would have to guess where the
     /// code starts.
     static func displayTitle(author: String, text: String) -> String {
-        let title = FxTwitterService.sanitize("\(author) - \(String(text.prefix(100)))")
+        let title = DirectDownload.sanitize("\(author) - \(String(text.prefix(100)))")
         return title.hasSuffix("-") ? String(title.dropLast()).trimmingCharacters(in: .whitespaces) : title
     }
 
