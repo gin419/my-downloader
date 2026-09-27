@@ -201,14 +201,23 @@ final class ThreadsResolverTests: XCTestCase {
 
     func testNoFixtureYieldsDecoyMedia() throws {
         let manifest = try JSONDecoder().decode([Expectation].self, from: Data(contentsOf: fixtureURL("manifest.json")))
-        for expected in manifest {
+        var checked = 0
+        for expected in manifest where expected.expect_ok {
             let html = try String(contentsOf: fixtureURL(expected.fixture), encoding: .utf8)
-            guard html.contains("decoy") else { continue }
-            if case .success(let post) = try resolve(expected) {
-                XCTAssertFalse(post.media.contains { $0.url.absoluteString.contains("decoy") }, expected.fixture)
-                XCTAssertFalse(post.author.contains("Third Party"), expected.fixture)
+            XCTAssertTrue(html.contains("decoy"), "\(expected.fixture) holds no decoy media to be told from")
+            guard case .success(let post) = try resolve(expected) else {
+                XCTFail("\(expected.fixture) did not resolve")
+                continue
             }
+            XCTAssertFalse(post.media.isEmpty, expected.fixture)
+            XCTAssertFalse(post.media.contains { $0.url.absoluteString.contains("decoy") }, expected.fixture)
+            XCTAssertFalse(post.author.contains("Third Party"), expected.fixture)
+            checked += 1
         }
+        // Every page the manifest expects media from; a loop that skipped
+        // them all would pass just the same.
+        XCTAssertEqual(checked, manifest.filter(\.expect_ok).count)
+        XCTAssertEqual(checked, 8)
     }
 
     func testQuotedCopyOfTheTargetInRelatedPostsIsNotTheTarget() throws {
@@ -220,6 +229,15 @@ final class ThreadsResolverTests: XCTestCase {
         let copy = try XCTUnwrap(html.range(of: "img_SYNdecoyQcp1"))
         let target = try XCTUnwrap(html.range(of: "BarcelonaPostPageTargetQuery"))
         XCTAssertLessThan(copy.lowerBound, target.lowerBound)
+        // The copy's script tag must be one that is actually searched — it
+        // mentions the code and "media", like the target's own — or the
+        // copy is skipped before the rule under test is ever asked.
+        let tagStart = try XCTUnwrap(html.range(of: "<script", options: .backwards, range: html.startIndex..<copy.lowerBound))
+        let tagEnd = try XCTUnwrap(html.range(of: "</script>", range: copy.upperBound..<html.endIndex))
+        let tag = html[tagStart.lowerBound..<tagEnd.lowerBound]
+        XCTAssertFalse(tag.contains("BarcelonaPostPageTargetQuery"))
+        XCTAssertTrue(tag.contains("\"code\": \"SYNlinked001\""))
+        XCTAssertTrue(tag.contains("\"media\""))
 
         let post = try XCTUnwrap(ThreadsService.findTarget(html: html, code: "SYNlinked001"))
         XCTAssertEqual(post["media_type"] as? Int, 19)
@@ -325,6 +343,28 @@ final class ThreadsResolverTests: XCTestCase {
         XCTAssertEqual(ThreadsService.mediaOf(unmatched).map(\.url.absoluteString), ["https://example.invalid/crop.jpg"])
     }
 
+    func testOnlyHTTPSAddressesWithAHostAreMedia() {
+        let refused = [
+            "file:///tmp/example.txt",
+            "http://scontent.example.invalid/a.jpg",
+            "ftp://scontent.example.invalid/a.jpg",
+            "data:image/png;base64,AAAA",
+            "https:///a.jpg",
+            "/relative/a.jpg",
+            "",
+        ]
+        for address in refused {
+            let image: [String: Any] = ["image_versions2": ["candidates": [["url": address, "width": 10, "height": 10]]]]
+            XCTAssertEqual(ThreadsService.mediaOf(image), [], address)
+            let video: [String: Any] = ["video_versions": [["type": 101, "url": address]]]
+            XCTAssertEqual(ThreadsService.mediaOf(video), [], address)
+            let gif: [String: Any] = ["giphy_media_info": ["images": ["original": ["url": address]]]]
+            XCTAssertEqual(ThreadsService.mediaOf(gif), [], address)
+        }
+        let kept: [String: Any] = ["video_versions": [["type": 101, "url": "HTTPS://scontent.example.invalid/v.mp4"]]]
+        XCTAssertEqual(ThreadsService.mediaOf(kept).map(\.url.absoluteString), ["HTTPS://scontent.example.invalid/v.mp4"])
+    }
+
     func testVideoEntryWithoutAddressIsSkipped() {
         let node: [String: Any] = [
             "video_versions": [["type": 101], ["type": 102, "url": ""], ["type": 103, "url": "https://example.invalid/v.mp4"]]
@@ -414,6 +454,40 @@ final class ThreadsResolverTests: XCTestCase {
             "A_B - line one line two [SYNimage0001]")
         // No text: the code alone keeps posts by one author apart.
         XCTAssertEqual(ThreadsService.fileStem(author: "Example Author", text: "", code: "SYNimage0001"), "Example Author -  [SYNimage0001]")
+    }
+
+    func testLeadingDotNeverMakesTheFileAHiddenOne() throws {
+        XCTAssertEqual(
+            ThreadsService.fileStem(author: ".studio", text: "hello", code: "SYNimage0001"), "studio - hello [SYNimage0001]")
+        XCTAssertEqual(
+            ThreadsService.fileStem(author: " .. . studio.invented", text: "hello", code: "SYNimage0001"),
+            "studio.invented - hello [SYNimage0001]")
+        // Nothing left of the name: the site's name stands in.
+        XCTAssertEqual(ThreadsService.fileStem(author: "...", text: "hello", code: "SYNimage0001"), "threads - hello [SYNimage0001]")
+        XCTAssertEqual(ThreadsService.fileStem(author: "", text: "hello", code: "SYNimage0001"), "threads - hello [SYNimage0001]")
+
+        // A display name of dots falls through to the username.
+        let dots = node(code: "SYNp0000001", name: "..", username: ".example_author", image: "https://example.invalid/a.jpg")
+        XCTAssertEqual(ThreadsService.resolveMedia(in: dots, linkCode: "x")?.author, "example_author")
+        let dotted = node(code: "SYNp0000001", name: ".studio", username: "example_author", image: "https://example.invalid/a.jpg")
+        XCTAssertEqual(ThreadsService.resolveMedia(in: dotted, linkCode: "x")?.author, "studio")
+    }
+
+    func testControlAndDirectionCharactersNeverReachAFileName() {
+        XCTAssertEqual(
+            ThreadsService.fileStem(author: "Exam\u{07}ple\u{00} Author", text: "one\ttwo\u{2028}three\u{1B}", code: "SYNimage0001"),
+            "Example Author - one two three [SYNimage0001]")
+        // A right-to-left override makes "exe.gpj" read as "jpg.exe".
+        XCTAssertEqual(
+            ThreadsService.fileStem(author: "Example\u{202E} Author\u{2066}", text: "\u{200F}hello\u{202C}", code: "SYNimage0001"),
+            "Example Author - hello [SYNimage0001]")
+        XCTAssertEqual(ThreadsService.displayTitle(author: "Exam\u{07}ple Author", text: "one\u{202E}two"), "Example Author - onetwo")
+        // Emoji built with a joiner, and text in any script, stay whole.
+        let family = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}"
+        XCTAssertEqual(ThreadsService.printable("\(family) 測試 é"), "\(family) 測試 é")
+        XCTAssertEqual(
+            ThreadsService.fileStem(author: "Example Author", text: "\(family) 測試", code: "SYNimage0001"),
+            "Example Author - \(family) 測試 [SYNimage0001]")
     }
 
     func testFileStemCutsTheTextAt100Characters() {

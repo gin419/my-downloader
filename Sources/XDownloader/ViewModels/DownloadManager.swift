@@ -115,6 +115,10 @@ class DownloadManager: ObservableObject {
     private let likesSyncStore: LikesSyncStore
     private let likesProcessRunner: any LikesSyncProcessRunning
     private let galleryDlPathProvider: () -> String?
+    private let ytDlpPathProvider: () -> String?
+    /// What the Threads resolver fetches with. A seam for tests, like the
+    /// two path providers above; the default keeps and sends no cookies.
+    private let threadsSession: URLSession
     /// Probes tool health on the app-lifecycle cadence; views reach it for
     /// forced refreshes (install sheet) and it feeds `toolHealths` above.
     let toolHealth: ToolHealthMonitor
@@ -122,7 +126,7 @@ class DownloadManager: ObservableObject {
     // Resolved at runtime through RequirementsService's ONE shared resolver —
     // the same one the banner uses, so the banner can never disagree with
     // what downloads actually execute.
-    private var ytdlpPath: String { RequirementsService.ytdlp.installedPath ?? "yt-dlp" }
+    private var ytdlpPath: String { ytDlpPathProvider() ?? "yt-dlp" }
     private var galleryDlPath: String? { galleryDlPathProvider() }
 
     var availableCookieBrowserProfiles: [BrowserCookieProfile] {
@@ -140,6 +144,10 @@ class DownloadManager: ObservableObject {
         galleryDlPathProvider: @escaping () -> String? = {
             RequirementsService.galleryDl.installedPath
         },
+        ytDlpPathProvider: @escaping () -> String? = {
+            RequirementsService.ytdlp.installedPath
+        },
+        threadsSession: URLSession = DirectDownload.session,
         toolHealthMonitor: ToolHealthMonitor? = nil
     ) {
         self.history = history ?? HistoryStore()
@@ -148,6 +156,8 @@ class DownloadManager: ObservableObject {
         self.likesSyncStore = likesSyncStore ?? LikesSyncStore()
         self.likesProcessRunner = likesProcessRunner ?? LiveLikesSyncProcessRunner()
         self.galleryDlPathProvider = galleryDlPathProvider
+        self.ytDlpPathProvider = ytDlpPathProvider
+        self.threadsSession = threadsSession
         self.toolHealth = toolHealthMonitor ?? ToolHealthMonitor()
         let downloads =
             FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
@@ -449,7 +459,10 @@ class DownloadManager: ObservableObject {
     /// consulted when the token is the entire input, so prose never sprouts
     /// accidental URLs.
     nonisolated private static func looksLikeBareURL(_ token: String) -> Bool {
-        guard token.contains("/"), !token.contains("://"), !token.contains("@"),
+        // "@" rules out e-mail addresses, so only the part before the path
+        // is tested: a Threads link carries one in its path ("/@user/post/…").
+        let beforePath = token.prefix { $0 != "/" }
+        guard token.contains("/"), !token.contains("://"), !beforePath.contains("@"),
             let url = URL(string: "https://" + token),
             let host = url.host, host.contains(".")
         else { return false }
@@ -488,6 +501,17 @@ class DownloadManager: ObservableObject {
 
     // MARK: - Queue management
 
+    /// True when two links would download the same thing. Links are compared
+    /// as text, except Threads posts: one post has many spellings
+    /// (threads.net, no www, "/t/<code>", a trailing "/media", and a
+    /// username the server doesn't even check), and only the code names it.
+    /// Two rows for one post would save to the same file names at once.
+    nonisolated static func isSameDownload(_ link: String, _ other: String) -> Bool {
+        if link == other { return true }
+        guard let code = ThreadsService.parseLink(link)?.code else { return false }
+        return code == ThreadsService.parseLink(other)?.code
+    }
+
     private enum AddOutcome {
         case queued
         case alreadyInList(UUID)
@@ -501,7 +525,7 @@ class DownloadManager: ObservableObject {
         guard !trimmed.isEmpty else { return nil }
         let stripped = Self.stripTrackingParams(trimmed)
 
-        if let existing = items.first(where: { $0.url == stripped }) {
+        if let existing = items.first(where: { Self.isSameDownload($0.url, stripped) }) {
             return .alreadyInList(existing.id)
         }
 
@@ -1807,8 +1831,9 @@ class DownloadManager: ObservableObject {
                 // resolver is the download.
                 ranFallback = true
                 let directory = outputDirectory
+                let session = threadsSession
                 let stopped = await runResolverTask(item) {
-                    await ThreadsService.run(item: item, outputDirectory: directory)
+                    await ThreadsService.run(item: item, outputDirectory: directory, session: session)
                 }
                 if stopped { return }  // user pressed Stop mid-run
             }

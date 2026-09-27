@@ -25,7 +25,10 @@ enum NotificationService {
     /// on screen. The request chains into delivery, so even that first
     /// notification arrives once the user grants.
     static func downloadFinished(_ item: DownloadItem) {
-        guard hasBundle, !NSApp.isActive else { return }
+        // No application object (a test host has a bundle identifier but
+        // never starts one): nobody to notify, and `NSApp` must not be
+        // unwrapped.
+        guard hasBundle, let app = NSApp, !app.isActive else { return }
 
         let content = UNMutableNotificationContent()
         switch item.status {

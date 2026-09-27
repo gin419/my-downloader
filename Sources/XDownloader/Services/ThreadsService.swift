@@ -415,8 +415,14 @@ enum ThreadsService {
         return Media(kind: .image, url: url, width: pick["width"] as? Int, height: pick["height"] as? Int)
     }
 
+    /// Only an https address with a host counts as media. The page is the
+    /// only source of these addresses, and anything else in that place — a
+    /// file:// address would be read off this Mac and copied into the
+    /// download folder — is not a file of the post.
     private static func mediaURL(_ value: Any?) -> URL? {
-        guard let raw = value as? String, !raw.isEmpty, let url = URL(string: raw), url.scheme != nil else { return nil }
+        guard let raw = value as? String, let url = URL(string: raw),
+            url.scheme?.lowercased() == "https", let host = url.host, !host.isEmpty
+        else { return nil }
         return url
     }
 
@@ -503,12 +509,17 @@ enum ThreadsService {
     private static func author(of node: [String: Any]) -> String {
         let user = node["user"] as? [String: Any]
         for key in ["full_name", "username"] {
-            if let name = (user?[key] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty {
+            // Cleaned here, not only in the file name: a display name of
+            // nothing but dots must fall through to the username.
+            if let name = (user?[key] as? String).map(leadingNamePart), !name.isEmpty {
                 return name
             }
         }
-        return "threads"
+        return unknownAuthor
     }
+
+    /// Stands in for an author the page doesn't name.
+    static let unknownAuthor = "threads"
 
     /// Classifies a page that held no post object. Only addresses and the
     /// names of routes and components are tested: the visible text is
@@ -537,13 +548,51 @@ enum ThreadsService {
     /// text alone are 300: the text is cut further, as far as it takes, or
     /// the file could not be saved at all.
     static func fileStem(author: String, text: String, code: String) -> String {
-        var cut = String(text.prefix(100))
+        let name = leadingNamePart(author)
+        let author = name.isEmpty ? unknownAuthor : name
+        var cut = String(printable(text).prefix(100))
         var stem = DirectDownload.sanitize("\(author) - \(cut) [\(code)]")
         while stem.utf8.count > maxStemBytes, !cut.isEmpty {
             cut.removeLast()
             stem = DirectDownload.sanitize("\(author) - \(cut) [\(code)]")
         }
         return stem
+    }
+
+    /// Characters that direct the text around them instead of showing:
+    /// they can make a name read as another one ("gpj.exe" for "exe.jpg").
+    /// Listed one by one, because the wider "format" class also holds the
+    /// joiner that emoji sequences are built with.
+    private static let directionControls: Set<Unicode.Scalar> = [
+        "\u{200E}", "\u{200F}", "\u{202A}", "\u{202B}", "\u{202C}", "\u{202D}", "\u{202E}",
+        "\u{2066}", "\u{2067}", "\u{2068}", "\u{2069}",
+    ]
+
+    /// Display names and captions are whatever the account typed. Line and
+    /// paragraph breaks and tabs become spaces, like the newlines of an X
+    /// caption; every other control character and the direction controls are
+    /// dropped — in a file name they are invisible at best.
+    static func printable(_ text: String) -> String {
+        var scalars = String.UnicodeScalarView()
+        for scalar in text.unicodeScalars {
+            switch scalar {
+            case "\n", "\r", "\t", "\u{0B}", "\u{0C}", "\u{85}", "\u{2028}", "\u{2029}":
+                scalars.append(" ")
+            case _ where scalar.properties.generalCategory == .control || directionControls.contains(scalar):
+                continue
+            default:
+                scalars.append(scalar)
+            }
+        }
+        return String(scalars)
+    }
+
+    /// The author as the first part of a name. A leading "." would make the
+    /// saved file a hidden one: the row says Done and Finder shows nothing.
+    private static func leadingNamePart(_ author: String) -> String {
+        var name = Substring(printable(author).trimmingCharacters(in: .whitespacesAndNewlines))
+        while name.first == "." { name = name.dropFirst().drop(while: \.isWhitespace) }
+        return String(name)
     }
 
     /// Leaves room under the 255-byte limit for " #NN" and the extension.
@@ -569,7 +618,7 @@ enum ThreadsService {
     /// than by stripping the file name, which would have to guess where the
     /// code starts.
     static func displayTitle(author: String, text: String) -> String {
-        let title = DirectDownload.sanitize("\(author) - \(String(text.prefix(100)))")
+        let title = DirectDownload.sanitize("\(printable(author)) - \(String(printable(text).prefix(100)))")
         return title.hasSuffix("-") ? String(title.dropLast()).trimmingCharacters(in: .whitespaces) : title
     }
 

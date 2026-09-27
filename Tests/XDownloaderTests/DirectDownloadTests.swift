@@ -26,6 +26,8 @@ final class DirectDownloadTests: XCTestCase {
 
     override func tearDownWithError() throws {
         StubProtocol.removeAll()
+        // A test may have taken the folder's write permission away.
+        try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: downloads.path)
         try? FileManager.default.removeItem(at: root)
     }
 
@@ -322,6 +324,100 @@ final class DirectDownloadTests: XCTestCase {
         XCTAssertEqual(try contents(of: scratch), [])
     }
 
+    // MARK: - Answers that are not media
+
+    func testAnswerFromSomethingOtherThanAWebServerIsNotSaved() async throws {
+        // What a file:// address gives: content, and no status to check.
+        let url = stubURL("local.jpg")
+        StubProtocol.set(
+            .init(status: 200, headers: ["Content-Type": "text/plain"], body: Data("a file of this Mac".utf8), isHTTP: false), for: url)
+        let item = DownloadItem(url: "https://www.threads.com/@someone.invented/post/AbCdEfGhIjK")
+        item.status = .downloading
+
+        let outcome = await DirectDownload.download(
+            url, to: downloads, baseName: "Invented Author - hello [AbCdEfGhIjK]", fallbackExtension: "jpg",
+            item: item, fileIndex: 0, fileCount: 1, session: stubSession(), temporaryDirectory: scratch)
+
+        guard case .failed(.transport) = outcome else { return XCTFail("expected .transport, got \(outcome)") }
+        XCTAssertEqual(try contents(of: downloads), [])
+        XCTAssertEqual(try contents(of: scratch), [])
+        XCTAssertEqual(item.progress, 0)
+    }
+
+    // MARK: - Saving into the download folder
+
+    func testNameTakenDuringTheTransferCountsAsSaved() async throws {
+        // A second row for the same post saved the file while this transfer
+        // ran. The caller's re-download check came before either finished,
+        // so only the move finds out.
+        let url = stubURL("twice.jpg")
+        StubProtocol.set(.init(status: 200, headers: ["Content-Type": "image/jpeg"], body: Data([0xFF, 0xD8, 0xFF, 0xE0, 2])), for: url)
+        let first = downloads.appendingPathComponent("Invented Author - hello [AbCdEfGhIjK].jpg")
+        let firstBody = Data([0xFF, 0xD8, 0xFF, 0xE0, 1])
+        try firstBody.write(to: first)
+        let item = DownloadItem(url: "https://www.threads.com/@someone.invented/post/AbCdEfGhIjK")
+        item.status = .downloading
+
+        let outcome = await DirectDownload.download(
+            url, to: downloads, baseName: "Invented Author - hello [AbCdEfGhIjK]", fallbackExtension: "jpg",
+            item: item, fileIndex: 0, fileCount: 1, session: stubSession(), temporaryDirectory: scratch)
+
+        guard case .saved(let saved) = outcome else { return XCTFail("expected .saved, got \(outcome)") }
+        XCTAssertEqual(saved.lastPathComponent, first.lastPathComponent)
+        // The file that was there is left as it is.
+        XCTAssertEqual(try Data(contentsOf: first), firstBody)
+        XCTAssertEqual(try contents(of: downloads), [first.lastPathComponent])
+        XCTAssertEqual(try contents(of: scratch), [])
+        XCTAssertEqual(item.progress, 1.0, accuracy: 0.0001)
+    }
+
+    func testUnwritableFolderFailsAsALocalCauseAndLeavesNoScratchFile() async throws {
+        let url = stubURL("nowhere.jpg")
+        StubProtocol.set(.init(status: 200, headers: ["Content-Type": "image/jpeg"], body: Data([0xFF, 0xD8, 0xFF, 0xE0])), for: url)
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: downloads.path)
+        let item = DownloadItem(url: "https://www.threads.com/@someone.invented/post/AbCdEfGhIjK")
+        item.status = .downloading
+
+        let outcome = await DirectDownload.download(
+            url, to: downloads, baseName: "Invented Author - hello [AbCdEfGhIjK]", fallbackExtension: "jpg",
+            item: item, fileIndex: 0, fileCount: 1, session: stubSession(), temporaryDirectory: scratch)
+
+        guard case .failed(.move(let error)) = outcome else { return XCTFail("expected .move, got \(outcome)") }
+        XCTAssertTrue(DirectDownload.isDiskWriteError(error), "\(error)")
+        XCTAssertEqual(DirectDownload.zeroSavedFailureMessage(lastFailure: .move(error)), DirectDownload.diskUnwritableMessage)
+        XCTAssertEqual(try contents(of: downloads), [])
+        XCTAssertEqual(try contents(of: scratch), [])
+        XCTAssertEqual(item.progress, 0)
+    }
+
+    func testEveryExtensionAFileCanBeSavedUnderIsKnownToTheReDownloadCheck() {
+        // `existingFile` only looks for the extensions of MediaExtensions: a
+        // file saved under any other would be fetched again on every run,
+        // and the second save would fail on the name being taken.
+        for (contentType, ext) in DirectDownload.extensionsByContentType {
+            XCTAssertTrue(MediaExtensions.all.contains(ext), "\(contentType) → \(ext)")
+        }
+        let signatures: [Data] = [
+            Data([0xFF, 0xD8, 0xFF, 0xE0]),
+            Data([0x89, 0x50, 0x4E, 0x47]),
+            Data([0x1A, 0x45, 0xDF, 0xA3]),
+            Data("GIF89a".utf8),
+            Data("RIFF".utf8) + Data([0, 0, 0, 0]) + Data("WEBP".utf8),
+            Data([0, 0, 0, 0x20]) + Data("ftypisom".utf8),
+            Data([0, 0, 0, 0x20]) + Data("ftypavif".utf8),
+            Data([0, 0, 0, 0x20]) + Data("ftypavis".utf8),
+            Data([0, 0, 0, 0x20]) + Data("ftypqt  ".utf8),
+        ]
+        var sniffed: Set<String> = []
+        for bytes in signatures {
+            let ext = DirectDownload.fileExtension(contentType: nil, leadingBytes: bytes)
+            XCTAssertNotNil(ext)
+            if let ext { sniffed.insert(ext) }
+        }
+        XCTAssertEqual(sniffed, ["jpg", "png", "webm", "gif", "webp", "mp4", "avif", "mov"])
+        XCTAssertTrue(sniffed.isSubset(of: MediaExtensions.all))
+    }
+
     // MARK: - Helpers
 
     private func stubURL(_ name: String) -> URL {
@@ -341,7 +437,7 @@ final class DirectDownloadTests: XCTestCase {
 
 /// Answers requests from a table instead of the network. Registered on the
 /// injected session only, so no other test's traffic can reach it. Shared
-/// with ThreadsRunTests.
+/// with ThreadsRunTests and ThreadsDownloadManagerTests.
 final class StubProtocol: URLProtocol {
 
     struct Stub {
@@ -359,14 +455,25 @@ final class StubProtocol: URLProtocol {
         /// The body arrives in this many pieces, `pause` seconds apart.
         var pieces = 1
         var pause: TimeInterval = 0
+        /// Answers with a redirect to this address instead of a body; the
+        /// session then requests the address, which needs a stub of its own.
+        var redirect: URL?
+        /// Answers the way a source that is no web server does (a file://
+        /// address, say): a response without status or headers.
+        var isHTTP = true
+
+        static func redirect(to url: URL) -> Stub {
+            Stub(status: 302, headers: ["Location": url.absoluteString], body: Data(), redirect: url)
+        }
     }
 
-    private let stopped = NSLock()
+    private let stopLock = NSLock()
     private var isStopped = false
 
     private static let lock = NSLock()
     private static var stubs: [URL: [Stub]] = [:]
     private static var requests: [URLRequest] = []
+    private static var stopped: [URL] = []
 
     static func set(_ stub: Stub, for url: URL) {
         set([stub], for: url)
@@ -385,6 +492,15 @@ final class StubProtocol: URLProtocol {
         defer { lock.unlock() }
         stubs.removeAll()
         requests.removeAll()
+        stopped.removeAll()
+    }
+
+    /// True once the session has stopped a request to `url`. For a stub
+    /// that never ends, that can only be a cancel (or the timeout).
+    static func wasStopped(_ url: URL) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return stopped.contains(url)
     }
 
     /// Every request made to `url` so far, in order.
@@ -409,12 +525,22 @@ final class StubProtocol: URLProtocol {
 
     override func startLoading() {
         guard let url = request.url, let stub = Self.take(request),
-            let response = HTTPURLResponse(url: url, statusCode: stub.status, httpVersion: "HTTP/1.1", headerFields: stub.headers)
+            let http = HTTPURLResponse(url: url, statusCode: stub.status, httpVersion: "HTTP/1.1", headerFields: stub.headers)
         else {
             // An address nobody stubbed must fail, never reach the network.
             client?.urlProtocol(self, didFailWithError: URLError(.unsupportedURL))
             return
         }
+        if let target = stub.redirect {
+            var next = request
+            next.url = target
+            client?.urlProtocol(self, wasRedirectedTo: next, redirectResponse: http)
+            return
+        }
+        let response =
+            stub.isHTTP
+            ? http
+            : URLResponse(url: url, mimeType: stub.headers["Content-Type"], expectedContentLength: stub.body.count, textEncodingName: nil)
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         guard stub.pieces > 1 else {
             client?.urlProtocol(self, didLoad: stub.body)
@@ -436,14 +562,19 @@ final class StubProtocol: URLProtocol {
     }
 
     override func stopLoading() {
-        stopped.lock()
-        defer { stopped.unlock() }
+        if let url = request.url {
+            Self.lock.lock()
+            Self.stopped.append(url)
+            Self.lock.unlock()
+        }
+        stopLock.lock()
+        defer { stopLock.unlock() }
         isStopped = true
     }
 
     private var stoppedLoading: Bool {
-        stopped.lock()
-        defer { stopped.unlock() }
+        stopLock.lock()
+        defer { stopLock.unlock() }
         return isStopped
     }
 

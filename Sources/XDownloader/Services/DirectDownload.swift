@@ -117,7 +117,10 @@ enum DirectDownload {
         return fileExtension(leadingBytes: leadingBytes)
     }
 
-    private static let extensionsByContentType: [String: String] = [
+    /// Internal (not private) so a test can hold every extension in it
+    /// against `MediaExtensions`: a file saved under an extension the
+    /// re-download check doesn't know would be fetched again on every run.
+    static let extensionsByContentType: [String: String] = [
         "image/jpeg": "jpg",
         "image/jpg": "jpg",
         "image/png": "png",
@@ -285,16 +288,24 @@ enum DirectDownload {
 
         let ext = fileExtension(contentType: fetched.contentType, leadingBytes: fetched.leadingBytes) ?? fallbackExtension
         let destination = directory.appendingPathComponent("\(baseName).\(ext)")
+        var saved = destination
         do {
             try FileManager.default.moveItem(at: scratch.file, to: destination)
         } catch {
-            return .failed(.move(error))
+            // The name was free when the caller checked and is taken now:
+            // another row for the same post (one post has several link
+            // forms) saved it while this transfer ran. The file is on disk,
+            // which is all this download was for — not a failure to report.
+            guard let existing = existingFile(baseName: baseName, in: directory) else {
+                return .failed(.move(error))
+            }
+            saved = existing
         }
         if case .downloading = item.status {
             item.progress = min(Double(fileIndex + 1) / Double(files), 1)
             item.totalSize = sizeText(fetched.byteCount)
         }
-        return .saved(destination)
+        return .saved(saved)
     }
 
     // MARK: - Private
@@ -368,7 +379,14 @@ enum DirectDownload {
         } catch {
             return .failure(isCancellation(error) ? .cancelled : .failed(.transport(error)))
         }
-        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+        guard let http = response as? HTTPURLResponse else {
+            // Not an answer from a web server: a file:// address, say, reads
+            // a file of this Mac. Media only ever comes from the network, so
+            // nothing else is saved.
+            bytes.task.cancel()
+            return .failure(.failed(.transport(URLError(.badServerResponse))))
+        }
+        if !(200..<300).contains(http.statusCode) {
             // The CDN answered with an error page, not the file — saving it
             // would masquerade as media.
             bytes.task.cancel()
