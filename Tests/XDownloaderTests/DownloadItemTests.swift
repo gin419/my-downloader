@@ -39,6 +39,19 @@ final class DownloadItemTests: XCTestCase {
         XCTAssertEqual(item.extractorBreakage, .none)
     }
 
+    func testResetForReattemptClearsTheResolvedAddressAndStem() {
+        // Looked up again on every attempt: what an earlier one found must
+        // not be there for the next to download.
+        let item = DownloadItem(url: "https://video.dmm.co.jp/cinema/content/?id=test00123")
+        item.resolvedAddress = "https://cc3001.dmm.co.jp/pv/SYNTHETICtoken/test00123hhb.mp4"
+        item.resolvedFileStem = "Synthetic Maker - Synthetic Sample Title [test00123]"
+
+        item.resetForReattempt()
+
+        XCTAssertNil(item.resolvedAddress)
+        XCTAssertNil(item.resolvedFileStem)
+    }
+
     func testTotalBytesParsesUnits() {
         let item = DownloadItem(url: "x")
         item.totalSize = "5 MB"

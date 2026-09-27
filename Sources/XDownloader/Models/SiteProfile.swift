@@ -69,14 +69,26 @@ struct SiteProfile {
     /// needs no external tool, or nothing could ever download it. Declared
     /// last and defaulted so every other profile stays as written.
     var usesYtDlp: Bool = true
+    /// True: the link names a page, not a file, and the address yt-dlp is to
+    /// download is looked up in-app before every run (see
+    /// `DmmPreviewResolver`). The row keeps the page link as its identity;
+    /// the address is never stored. Defaulted like `usesYtDlp`.
+    var resolvesAddressBeforeDownload: Bool = false
+    /// False: nothing of the browser login goes to this site — yt-dlp is
+    /// started without cookie arguments and the cookies file is not looked
+    /// up. For a site whose downloads are what it serves every logged-out
+    /// visitor. Defaulted like `usesYtDlp`.
+    var receivesBrowserCookies: Bool = true
 
 }
 
 /// The single registry of known sites. Order matters: specific profiles first,
-/// the `other` catch-all last (first match wins). `threads` leads because the
-/// other profiles match by substring: a Threads link whose username ends in
-/// "x.com" ("/@fox.com/post/…") contains "x.com/" and would be claimed by
-/// `twitter`.
+/// the `other` catch-all last (first match wins). `threads` and `dmm` lead
+/// because the other profiles match by substring: a Threads link whose
+/// username ends in "x.com" ("/@fox.com/post/…") contains "x.com/" and would
+/// be claimed by `twitter`, and so would a work page link carrying such text
+/// in its query. The two match by host, so neither can claim the other's
+/// links or anyone else's.
 enum SiteRegistry {
 
     static let twitter = SiteProfile(
@@ -187,6 +199,27 @@ enum SiteRegistry {
         usesYtDlp: false
     )
 
+    /// Work pages whose preview clip is found in-app first: the page holds no
+    /// media yt-dlp could read, so the clip's address is resolved and yt-dlp
+    /// downloads that, logged out. Matching is by exact host, never by
+    /// substring or suffix: the hosts that serve the files themselves, and
+    /// every other host of the domain, stay with `other`, where their direct
+    /// links have always downloaded.
+    static let dmm = SiteProfile(
+        id: "dmm",
+        matches: { DmmPreviewResolver.isSiteHost($0) },
+        fallbacks: [],
+        supportsSubtitles: false,
+        usesYouTubeFormatSelector: false,
+        outputTemplateSuffix: "",
+        extractorTitleIncludesUploader: false,
+        detectsExternalRedirect: false,
+        galleryDlArgs: [],
+        imageSweepArgs: nil,
+        resolvesAddressBeforeDownload: true,
+        receivesBrowserCookies: false
+    )
+
     /// Catch-all: the generic yt-dlp extractor with no fallbacks. The only
     /// profile that matches by default, so it must stay last.
     static let other = SiteProfile(
@@ -202,7 +235,7 @@ enum SiteRegistry {
         imageSweepArgs: nil
     )
 
-    static let all: [SiteProfile] = [threads, twitter, youtube, reddit, instagram, other]
+    static let all: [SiteProfile] = [threads, dmm, twitter, youtube, reddit, instagram, other]
 
     static func profile(for url: String) -> SiteProfile {
         all.first { $0.matches(url) } ?? other

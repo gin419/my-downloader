@@ -72,8 +72,8 @@ class DownloadManager: ObservableObject {
     /// True once the active run records a run-level failure (nil tweet id),
     /// which blocks auto-resolving the account's prior run-level rows.
     private var likesRunRecordedRunLevelFailure = false
-    /// In-flight in-app resolvers (FxTwitterService, ThreadsService) —
-    /// URLSession Tasks, so they need Task.cancel() rather than
+    /// In-flight in-app resolvers (FxTwitterService, ThreadsService,
+    /// DmmPreviewResolver) — URLSession Tasks, so they need Task.cancel() rather than
     /// Process.terminate() when the user hits Stop. (The Threads resolver's
     /// signed-in try also has a Process, in `activeProcesses`.)
     private var activeResolverTasks: [UUID: Task<Bool, Never>] = [:]
@@ -123,6 +123,9 @@ class DownloadManager: ObservableObject {
     /// The line the signed-in Threads requests stand in: one at a time,
     /// app-wide. A seam for tests, which bring a line without the pause.
     private let threadsSignedInTurn: ThreadsSignedInTurn
+    /// What the preview resolver asks with. A seam for tests; the default
+    /// keeps and sends no cookies.
+    private let dmmSession: URLSession
     /// Probes tool health on the app-lifecycle cadence; views reach it for
     /// forced refreshes (install sheet) and it feeds `toolHealths` above.
     let toolHealth: ToolHealthMonitor
@@ -153,6 +156,7 @@ class DownloadManager: ObservableObject {
         },
         threadsSession: URLSession = DirectDownload.session,
         threadsSignedInTurn: ThreadsSignedInTurn? = nil,
+        dmmSession: URLSession = DirectDownload.session,
         toolHealthMonitor: ToolHealthMonitor? = nil
     ) {
         self.history = history ?? HistoryStore()
@@ -164,6 +168,7 @@ class DownloadManager: ObservableObject {
         self.ytDlpPathProvider = ytDlpPathProvider
         self.threadsSession = threadsSession
         self.threadsSignedInTurn = threadsSignedInTurn ?? .shared
+        self.dmmSession = dmmSession
         self.toolHealth = toolHealthMonitor ?? ToolHealthMonitor()
         let downloads =
             FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
@@ -280,7 +285,7 @@ class DownloadManager: ObservableObject {
     func capture(text: String, source: CaptureSource) -> CaptureResult {
         var urls: [String] = []
         var seen: Set<String> = []
-        for url in Self.extractURLs(from: text).map(Self.stripTrackingParams)
+        for url in Self.extractURLs(from: text).map(Self.storedLink)
         where seen.insert(url).inserted {
             urls.append(url)
         }
@@ -512,10 +517,28 @@ class DownloadManager: ObservableObject {
     /// (threads.net, no www, "/t/<code>", a trailing "/media", and a
     /// username the server doesn't even check), and only the code names it.
     /// Two rows for one post would save to the same file names at once.
+    /// Work pages likewise: the content id alone names the work and its
+    /// file, whatever section the link puts it under.
     nonisolated static func isSameDownload(_ link: String, _ other: String) -> Bool {
         if link == other { return true }
+        if let contentID = DmmPreviewResolver.parseLink(link)?.contentID {
+            return contentID == DmmPreviewResolver.parseLink(other)?.contentID
+        }
         guard let code = ThreadsService.parseLink(link)?.code else { return false }
         return code == ThreadsService.parseLink(other)?.code
+    }
+
+    /// The most recent completed download of what `link` names. History is
+    /// looked up by the link as text; a work page is also looked up by its
+    /// content id, since the same work under another section saves to the
+    /// same file.
+    private func priorDownload(of link: String) -> HistoryEntry? {
+        if let prior = history.mostRecentCompleted(for: link) { return prior }
+        guard let work = DmmPreviewResolver.parseLink(link) else { return nil }
+        let prior = history.mostRecentCompleted(
+            urlPrefix: DmmPreviewResolver.pageLinkPrefix, urlSuffix: DmmPreviewResolver.pageLinkSuffix(for: work))
+        guard let prior, Self.isSameDownload(prior.url, link) else { return nil }
+        return prior
     }
 
     private enum AddOutcome {
@@ -529,13 +552,13 @@ class DownloadManager: ObservableObject {
     private func add(urlString: String, skipHistoryCheck: Bool) -> AddOutcome? {
         let trimmed = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
-        let stripped = Self.stripTrackingParams(trimmed)
+        let stripped = Self.storedLink(trimmed)
 
         if let existing = items.first(where: { Self.isSameDownload($0.url, stripped) }) {
             return .alreadyInList(existing.id)
         }
 
-        if saveHistoryEnabled, !skipHistoryCheck, let prior = history.mostRecentCompleted(for: stripped) {
+        if saveHistoryEnabled, !skipHistoryCheck, let prior = priorDownload(of: stripped) {
             let fileExists = prior.outputPath.map { FileManager.default.fileExists(atPath: $0) } ?? false
             return .needsConfirmation(
                 DuplicateConfirmation(url: stripped, priorEntry: prior, priorFileExists: fileExists))
@@ -1524,6 +1547,10 @@ class DownloadManager: ObservableObject {
             // message wording — arms the one-shot auto-retry below.
             item.emptySuccessFailure = true
             item.status = .failed(ytDlpEmptySuccessMessage)
+        } else if SiteRegistry.profile(for: item.url).resolvesAddressBeforeDownload {
+            // The exit code names no cause and the last warning may quote
+            // the resolved address, which is not to reach the row or history.
+            item.status = .failed(YtDlpService.resolvedAddressFailedMessage)
         } else {
             item.status = .failed(
                 ytDlpFailureMessage(
@@ -1696,44 +1723,60 @@ class DownloadManager: ObservableObject {
         item.status = .fetching
         if youtubeFormat == .audioOnly { item.mediaCategory = .audio }
 
+        let profile = SiteRegistry.profile(for: item.url)
+        // The address comes first: without it there is nothing to hand
+        // yt-dlp. Every run asks again — a first run, a Retry, a Resume and
+        // the re-runs below all pass through here.
+        if profile.resolvesAddressBeforeDownload, await !resolveAddress(for: item) { return }
+        // The row's title is the resolver's. yt-dlp would name it after the
+        // file, id included.
+        let resolvedTitle = profile.resolvesAddressBeforeDownload ? item.title : nil
+
         // A prior run hit a subtitle 429 and aborted before saving the video —
         // drop subtitles on the retry so the video itself can download.
         let effectiveSubtitleLanguage: SubtitleLanguage = item.subtitlesDisabled ? .none : subtitleLanguage
 
-        let profile = SiteRegistry.profile(for: item.url)
         // A site that skips yt-dlp takes no cookies for its download, so the
         // cookies file is not looked up for it here. (Threads looks it up
         // itself, and only for a post that needs the signed-in second try.)
-        let cookies: (path: String?, granted: URL?) = profile.usesYtDlp ? resolveCookiesForDownload() : (nil, nil)
+        // Neither is it for a site that is never sent cookies: nothing of
+        // the login is read, granted or passed on for it.
+        let sendsCookies = profile.usesYtDlp && profile.receivesBrowserCookies
+        let cookies: (path: String?, granted: URL?) = sendsCookies ? resolveCookiesForDownload() : (nil, nil)
         var ytResult = ProcessResult(code: 0, wasSignal: false)
-        if profile.usesYtDlp {
-            await cookieAccess.withScope(for: item.id, file: cookies.path, grantedURL: cookies.granted) {
-                let args = YtDlpService.buildArguments(
-                    for: item,
-                    outputDirectory: outputDirectory,
-                    format: youtubeFormat,
-                    videoQuality: videoQuality,
-                    audioQuality: audioQuality,
-                    subtitleLanguage: effectiveSubtitleLanguage,
-                    embedSubtitles: embedSubtitles,
-                    cookieBrowser: cookieBrowser,
-                    cookieBrowserProfile: cookieBrowserProfile,
-                    cookiesFile: cookies.path
-                )
+        let runYtDlp = { [self] () async -> ProcessResult in
+            let args = YtDlpService.buildArguments(
+                for: item,
+                outputDirectory: outputDirectory,
+                format: youtubeFormat,
+                videoQuality: videoQuality,
+                audioQuality: audioQuality,
+                subtitleLanguage: effectiveSubtitleLanguage,
+                embedSubtitles: embedSubtitles,
+                cookieBrowser: cookieBrowser,
+                cookieBrowserProfile: cookieBrowserProfile,
+                cookiesFile: cookies.path
+            )
 
-                ytResult = await ProcessRunner.run(
-                    executablePath: ytdlpPath,
-                    arguments: args,
-                    item: item,
-                    register: { [weak self] p in self?.activeProcesses[item.id] = p },
-                    unregister: { [weak self] in self?.activeProcesses.removeValue(forKey: item.id) },
-                    lineParser: { [weak self] line, item in
-                        YtDlpService.parseLine(line, item: item) {
-                            self?.activeProcesses[item.id]?.terminate()
-                        }
+            return await ProcessRunner.run(
+                executablePath: ytdlpPath,
+                arguments: args,
+                item: item,
+                register: { [weak self] p in self?.activeProcesses[item.id] = p },
+                unregister: { [weak self] in self?.activeProcesses.removeValue(forKey: item.id) },
+                lineParser: { [weak self] line, item in
+                    YtDlpService.parseLine(line, item: item) {
+                        self?.activeProcesses[item.id]?.terminate()
                     }
-                )
+                }
+            )
+        }
+        if sendsCookies {
+            await cookieAccess.withScope(for: item.id, file: cookies.path, grantedURL: cookies.granted) {
+                ytResult = await runYtDlp()
             }
+        } else if profile.usesYtDlp {
+            ytResult = await runYtDlp()
         }
 
         // The row's ✕ terminated this process mid-run: the user cancelled.
@@ -1780,6 +1823,7 @@ class DownloadManager: ObservableObject {
             // Destination lines are ignored, so fill any zero left when only
             // intermediates were seen (or refresh the title off the final path).
             YtDlpService.ensureFinalMediaCounts(item)
+            if let resolvedTitle { item.title = resolvedTitle }
             await runImageSweepIfNeeded(item)
             if cookieSaveOnlyFailure { surfaceCookieSaveFeedback() }
             item.markCompleted()
@@ -2050,6 +2094,43 @@ class DownloadManager: ObservableObject {
         return .success(ThreadsSignedInSource(cookies: cookies, cookieArguments: cookieArguments, tool: tool))
     }
 
+    /// Looks up the address a work page's preview clip is served from and
+    /// puts it on the row for yt-dlp to download. One request, made logged
+    /// out, run as a resolver task so Stop and the row's ✕ reach it. Returns
+    /// false when the run ends here: the row was removed (nothing is
+    /// touched), stopped (paused), or no address was found — then the row
+    /// fails under the cause's own message and yt-dlp is never started.
+    private func resolveAddress(for item: DownloadItem) async -> Bool {
+        // Whatever an earlier run found is not trusted, only looked up again.
+        item.resolvedAddress = nil
+        item.resolvedFileStem = nil
+        let session = dmmSession
+        let stopped = await runResolverTask(item) {
+            switch await DmmPreviewResolver.resolve(link: item.url, session: session) {
+            case .resolved(let preview):
+                item.resolvedAddress = preview.address.absoluteString
+                item.resolvedFileStem = DmmPreviewResolver.fileStem(
+                    maker: preview.maker, title: preview.title, contentID: preview.contentID)
+                item.title = DmmPreviewResolver.displayTitle(maker: preview.maker, title: preview.title)
+                return true
+            case .failed(let failure):
+                item.emptySuccessFailure = false
+                item.status = .failed(DmmPreviewResolver.message(for: failure))
+                return false
+            case .cancelled:
+                return false
+            }
+        }
+        // After the await the row may be gone (✕) or stopped; both outrank
+        // whatever the request came back with.
+        guard stillInList(item) else { return false }
+        if stopped { return false }
+        if item.resolvedAddress != nil { return true }
+        Self.ensureTerminalStatus(item)
+        finalize(item)
+        return false
+    }
+
     /// Last-resort fallback: X's GraphQL APIs sometimes hide tweets from
     /// spam-flagged accounts while the media stays publicly served from the twimg
     /// CDN — fxtwitter still resolves those. Keeps the prior (gallery-dl)
@@ -2241,6 +2322,21 @@ class DownloadManager: ObservableObject {
     private static let trackingParamsExact = Set([
         "si", "s", "t", "ref", "ref_src", "ref_url", "fbclid", "gclid", "msclkid", "igsh", "igshid", "xmt", "slof",
     ])
+
+    /// The form a captured link is kept in — the row's identity in the list
+    /// and in history. Tracking parameters go; a work page link is kept in
+    /// its one canonical spelling, and a wrapper link is replaced by the
+    /// work page link it wraps, so however a work's link was pasted it is
+    /// recognised as the same download.
+    static func storedLink(_ urlString: String) -> String {
+        if let inner = DmmPreviewResolver.unwrapWrapperLink(urlString) { return inner }
+        if let work = DmmPreviewResolver.parseLink(urlString),
+            let canonical = DmmPreviewResolver.canonicalURL(for: work)
+        {
+            return canonical.absoluteString
+        }
+        return stripTrackingParams(urlString)
+    }
 
     static func stripTrackingParams(_ urlString: String) -> String {
         guard var c = URLComponents(string: urlString) else { return urlString }

@@ -1,0 +1,17 @@
+{
+  "data": {
+    "ipInfo": {
+      "accessStatus": "ALLOW"
+    },
+    "ppvContent": {
+      "id": "test00123",
+      "title": "Synthetic Sample Title",
+      "isAllowForeign": true,
+      "maker": {
+        "name": "Synthetic Maker"
+      },
+      "sample2DMovie": null,
+      "sampleVRMovie": null
+    }
+  }
+}

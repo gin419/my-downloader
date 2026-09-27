@@ -89,4 +89,13 @@ final class URLExtractionTests: XCTestCase {
         XCTAssertEqual(DownloadManager.extractURLs(from: "node.js"), [])
         XCTAssertEqual(DownloadManager.extractURLs(from: "notes.txt"), [])
     }
+
+    func testWorkPageLinkIsExtractedFromPastedText() {
+        XCTAssertEqual(
+            DownloadManager.extractURLs(from: "see https://video.dmm.co.jp/cinema/content/?id=test00123, thanks"),
+            ["https://video.dmm.co.jp/cinema/content/?id=test00123"])
+        XCTAssertEqual(
+            DownloadManager.extractURLs(from: "video.dmm.co.jp/cinema/content/?id=test00123"),
+            ["https://video.dmm.co.jp/cinema/content/?id=test00123"])
+    }
 }

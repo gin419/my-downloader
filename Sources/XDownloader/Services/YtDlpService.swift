@@ -4,6 +4,7 @@ enum YtDlpService {
 
     // MARK: - Argument building
 
+    @MainActor
     static func buildArguments(
         for item: DownloadItem,
         outputDirectory: URL,
@@ -23,13 +24,19 @@ enum YtDlpService {
         // bytes (a yt-dlp template-parser limitation) — new suffixes must use
         // the `{0}` replacement syntax instead (see the instagram profile).
         let profile = SiteRegistry.profile(for: item.url)
+        // A resolved address names its file after the server's storage, so
+        // the name comes from the resolver instead of the extractor's fields.
+        // Both travel together: a stem without its address is not used.
+        let resolvedStem = item.resolvedAddress == nil ? nil : item.resolvedFileStem
         let stem =
-            profile.extractorTitleIncludesUploader
-            ? "%(title)s" : "%(uploader)s - %(title)s"
+            resolvedStem.map(Self.literalTemplateText)
+            ?? (profile.extractorTitleIncludesUploader ? "%(title)s" : "%(uploader)s - %(title)s")
         let outputTemplate = outputDirectory.path + "/\(stem)\(profile.outputTemplateSuffix).%(ext)s"
         var args: [String] = []
-        args += CookieArgs.make(
-            browser: cookieBrowser, profile: cookieBrowserProfile, file: cookiesFile)
+        if profile.receivesBrowserCookies {
+            args += CookieArgs.make(
+                browser: cookieBrowser, profile: cookieBrowserProfile, file: cookiesFile)
+        }
 
         let hf = videoQuality.heightFilter ?? ""  // e.g. "[height<=1080]" or ""
 
@@ -82,10 +89,24 @@ enum YtDlpService {
             "--socket-timeout", "10",
             "--progress",
             "--newline",
-            item.url,
         ]
+        // A resolved address names one file. Should it ever answer with a
+        // list instead, the list is not walked.
+        if item.resolvedAddress != nil { args += ["--no-playlist"] }
+        args.append(item.resolvedAddress ?? item.url)
 
         return args
+    }
+
+    /// Text that is to appear in the output template as written. "%" opens
+    /// a field there ("%(title)s"), so a name holding one — "50% …" — would
+    /// be read as a broken field; doubled, it is a plain percent sign.
+    /// "$" opens an environment variable ("$HOME", "${USER}"), which yt-dlp
+    /// expands in the template, slashes and all. It has no escape — a
+    /// doubled one still expands — so it is written as its full-width twin,
+    /// which opens nothing.
+    static func literalTemplateText(_ text: String) -> String {
+        text.replacingOccurrences(of: "%", with: "%%").replacingOccurrences(of: "$", with: "＄")
     }
 
     // MARK: - Failure messages
@@ -119,10 +140,32 @@ enum YtDlpService {
         "YouTube rejected the download (HTTP 403) — this usually means yt-dlp is outdated. Update it, then Retry."
     static let genericHttp403Message =
         "The site rejected the download (HTTP 403) — Retry; if it persists, the media may need different cookies."
+    /// The same rejection on a site that is never sent cookies: other
+    /// cookies can't be the fix there, so the copy doesn't point at them.
+    static let http403WithoutCookiesMessage =
+        "The site rejected the download (HTTP 403) — Retry; if it persists, the file may no longer be offered."
     static let cookieDatabaseMessage =
         "Couldn't read the selected browser's cookies — pick the browser and profile you actually use in Settings → Cookies."
     static let ffmpegMissingMessage =
         "ffmpeg is required to convert or merge media — install it (brew install ffmpeg), then Retry."
+
+    /// A download of an address resolved in-app failed, and the tool's own
+    /// line says nothing the row can use.
+    static let resolvedAddressFailedMessage =
+        "The preview clip couldn't be downloaded — Retry; if it persists, update XDownloader."
+
+    /// The message for an ERROR line of a run that downloads a resolved
+    /// address. Never the line itself: the tool quotes the address it was
+    /// given, and that address is not to reach the row, a notification or
+    /// history. An address that turns out to be no media file is the site
+    /// having changed what it hands out.
+    static func resolvedAddressFailureMessage(for line: String, profileID: String) -> String {
+        let lower = line.lowercased()
+        if lower.contains("http error 403") { return http403WithoutCookiesMessage }
+        if lower.contains("unsupported url") { return DmmPreviewResolver.changedFormatMessage }
+        if let mapped = mappedErrorMessage(for: line, profileID: profileID), mapped == ffmpegMissingMessage { return mapped }
+        return resolvedAddressFailedMessage
+    }
 
     /// Known raw ERROR lines → app-native copy. Compound (multi-substring)
     /// patterns come first so the most specific match wins; nil keeps the
@@ -142,7 +185,9 @@ enum YtDlpService {
         if lower.contains("unable to download video data"), lower.contains("403") {
             // The stale-tool diagnosis is a YouTube pattern; on other sites a
             // 403 usually means a cookie/session problem, not an old yt-dlp.
-            return profileID == "youtube" ? http403Message : genericHttp403Message
+            if profileID == "youtube" { return http403Message }
+            let sendsCookies = SiteRegistry.all.first { $0.id == profileID }?.receivesBrowserCookies ?? true
+            return sendsCookies ? genericHttp403Message : http403WithoutCookiesMessage
         }
         // yt-dlp relays YouTube's own phrasing, which uses a right single
         // quote ("you’re") — accept the plain apostrophe too.
@@ -213,6 +258,15 @@ enum YtDlpService {
             if let marker = body.range(of: " has already been downloaded", options: .backwards) {
                 Self.recordMediaPath(String(body[..<marker.lowerBound]), on: item)
             }
+            return
+        }
+
+        // A Destination line whose file name holds a '%' — checked BEFORE
+        // the progress branch for the same reason as the skip notice above:
+        // it would parse as progress, the path would go unrecorded and a
+        // finished download would read as an "empty success".
+        if line.hasPrefix("[download] Destination: "), line.contains("%") {
+            Self.recordMediaPath(String(line.dropFirst("[download] Destination: ".count)), on: item)
             return
         }
 
@@ -339,7 +393,12 @@ enum YtDlpService {
         let lower = line.lowercased()
         if lower.contains("error:") {
             if case .failed = item.status { return }
-            if line.contains("Requested format is not available") {
+            let profile = SiteRegistry.profile(for: item.url)
+            if profile.resolvesAddressBeforeDownload {
+                // Ahead of every branch below: each of them reads the line
+                // for what it says about a page link, and this run has none.
+                item.status = .failed(Self.resolvedAddressFailureMessage(for: line, profileID: profile.id))
+            } else if line.contains("Requested format is not available") {
                 // With no tell recorded this is almost always a transient
                 // YouTube extractor hiccup — the permissive `bv*+ba/b` tail
                 // of the selector should absorb most of these; if it still

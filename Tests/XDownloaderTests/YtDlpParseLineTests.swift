@@ -200,4 +200,53 @@ final class YtDlpParseLineTests: XCTestCase {
         XCTAssertFalse(YtDlpService.isIntermediateFormatPath("/tmp/a.mp4"))
         XCTAssertFalse(YtDlpService.isIntermediateFormatPath("/tmp/a [01].mp4"))
     }
+
+    /// A run that downloads a resolved address never puts the tool's own
+    /// line on the row: the tool quotes the address it was given, and the
+    /// row's message goes on to notifications and history.
+    func testErrorLinesOfAResolvedAddressRunNeverReachTheRow() {
+        let address = "https://cc3001.dmm.co.jp/pv/SYNTHETICtokenAAAA/test00123hhb.mp4"
+        let cases: [(line: String, expected: String)] = [
+            ("ERROR: Unsupported URL: \(address)", DmmPreviewResolver.changedFormatMessage),
+            ("ERROR: [generic] Unable to download webpage: HTTP Error 403: Forbidden (\(address))", YtDlpService.http403WithoutCookiesMessage),
+            ("ERROR: unable to download video data: HTTP Error 403: Forbidden", YtDlpService.http403WithoutCookiesMessage),
+            ("ERROR: [generic] \(address): Requested format is not available", YtDlpService.resolvedAddressFailedMessage),
+            ("ERROR: [generic] Unable to download webpage: \(address) subtitle timed out", YtDlpService.resolvedAddressFailedMessage),
+            ("ERROR: Postprocessing: ffmpeg not found. Please install or provide the path", YtDlpService.ffmpegMissingMessage),
+        ]
+        for c in cases {
+            let item = DownloadItem(url: "https://video.dmm.co.jp/cinema/content/?id=test00123")
+            item.resolvedAddress = address
+            parse(c.line, into: item)
+            XCTAssertEqual(item.status, .failed(c.expected), c.line)
+            guard case .failed(let message) = item.status else { continue }
+            XCTAssertFalse(message.contains("cc3001"), message)
+            XCTAssertFalse(message.contains("SYNTHETICtoken"), message)
+            XCTAssertFalse(message.lowercased().contains("cookie"), message)
+        }
+        XCTAssertEqual(
+            YtDlpService.resolvedAddressFailedMessage,
+            "The preview clip couldn't be downloaded — Retry; if it persists, update XDownloader.")
+
+        // Every other link keeps the tool's line, as it always has.
+        let direct = DownloadItem(url: address)
+        parse("ERROR: Unsupported URL: \(address)", into: direct)
+        XCTAssertEqual(direct.status, .failed("ERROR: Unsupported URL: \(address)"))
+    }
+
+    /// The output template keeps a literal '%' from a title. Such a
+    /// Destination line must record its path, not parse as progress — the
+    /// run would end with no file known and read as an "empty success".
+    func testDestinationLineWithPercentInFilenameRecordsThePath() {
+        let item = DownloadItem(url: "https://example.com/p")
+        parse("[download] Destination: /tmp/out/maker - 50% more [test00123].mp4", into: item)
+        XCTAssertEqual(item.outputPath, "/tmp/out/maker - 50% more [test00123].mp4")
+        XCTAssertEqual(item.videoPath, "/tmp/out/maker - 50% more [test00123].mp4")
+        XCTAssertEqual(item.videoCount, 1)
+        XCTAssertEqual(item.progress, 0)
+
+        parse("[download]  45.3% of  15.42MiB at  2.34MiB/s ETA 00:05", into: item)
+        XCTAssertEqual(item.progress, 0.453, accuracy: 0.0001)
+        XCTAssertEqual(item.outputPath, "/tmp/out/maker - 50% more [test00123].mp4")
+    }
 }

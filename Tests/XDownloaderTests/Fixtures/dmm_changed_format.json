@@ -1,0 +1,11 @@
+{
+  "errors": [
+    {
+      "message": "synthetic: Cannot query field",
+      "extensions": {
+        "code": "GRAPHQL_VALIDATION_FAILED"
+      }
+    }
+  ],
+  "data": null
+}

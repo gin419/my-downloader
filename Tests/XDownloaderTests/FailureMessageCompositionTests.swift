@@ -239,6 +239,25 @@ final class FailureMessageCompositionTests: XCTestCase {
         XCTAssertTrue(item.emptySuccessFailure)
     }
 
+    /// The last warning may quote the address the tool was given. For a
+    /// run that downloads a resolved address it is not cited.
+    func testExitFailureOfAResolvedAddressRunCitesNoWarning() {
+        let item = DownloadItem(url: "https://video.dmm.co.jp/cinema/content/?id=test00123")
+        item.status = .downloading
+        item.lastToolWarning = "[generic] Falling back on generic information extractor: https://cc3001.dmm.co.jp/pv/SYNTHETICtoken/a.mp4"
+
+        DownloadManager.settleOutcomeWithoutFallback(item, ranYtDlp: true, ytResult: ProcessResult(code: 1, wasSignal: false))
+
+        XCTAssertEqual(item.status, .failed(YtDlpService.resolvedAddressFailedMessage))
+
+        // Every other link cites it, as before.
+        let other = DownloadItem(url: "https://example.com/p")
+        other.status = .downloading
+        other.lastToolWarning = "synthetic warning"
+        DownloadManager.settleOutcomeWithoutFallback(other, ranYtDlp: true, ytResult: ProcessResult(code: 1, wasSignal: false))
+        XCTAssertEqual(other.status, .failed("yt-dlp exited with code 1 — last warning: synthetic warning"))
+    }
+
     func testAFailureAlreadyOnTheRowIsKept() {
         let item = DownloadItem(url: "https://www.threads.com/@someone.invented/post/AbCdEfGhIjK")
         item.status = .failed(ThreadsService.restrictedMessage)

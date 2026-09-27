@@ -1,0 +1,19 @@
+{
+  "data": {
+    "ipInfo": {
+      "accessStatus": "ALLOW"
+    },
+    "ppvContent": {
+      "id": "testvr00045",
+      "title": "Synthetic Sample Title",
+      "isAllowForeign": true,
+      "maker": {
+        "name": "Synthetic Maker"
+      },
+      "sample2DMovie": null,
+      "sampleVRMovie": {
+        "highestMovieUrl": "https://cc3001.dmm.co.jp/pv/SYNTHETICtokenDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD/testvr00045vruhq.mp4"
+      }
+    }
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "data": {
+    "ipInfo": {
+      "accessStatus": "DENY"
+    },
+    "ppvContent": {
+      "id": "test00123",
+      "title": "Synthetic Sample Title",
+      "isAllowForeign": true,
+      "maker": {
+        "name": "Synthetic Maker"
+      },
+      "sample2DMovie": {
+        "highestMovieUrl": "https://cc3001.dmm.co.jp/pv/SYNTHETICtokenAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/test00123hhb.mp4",
+        "hlsMovieUrl": "https://cc3001.dmm.co.jp/pv/SYNTHETICtokenBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB/playlist.m3u8"
+      },
+      "sampleVRMovie": null
+    }
+  }
+}
