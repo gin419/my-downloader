@@ -26,13 +26,18 @@ Entries before _Unreleased_ were back-filled from git history.
 - **Threads posts that need sign-in** — every Threads download starts
   logged out. Only when Threads answers that the post is limited to
   signed-in visitors does the app try a second time with the login of the
-  browser (or cookies.txt) chosen in Settings → Cookies: one request for
-  the post's page, never repeated automatically. yt-dlp makes that request
-  and hands the page back, so no cookie file is written and XDownloader
-  never holds cookie contents; the photos and videos themselves are
-  fetched without cookies. Threads needs its own sign-in at threads.com —
-  an Instagram sign-in alone is not enough — and the message says so when
-  it is missing. Public posts never use the login and still need no tool.
+  browser (or cookies.txt) chosen in Settings → Cookies: one signed-in
+  try, never repeated automatically, asked at the post's own address so
+  that Threads answers it with a single page request. A short link
+  (`/t/…`) that Threads doesn't resolve to the post's address is not tried
+  with the login; the message asks for the full link instead. yt-dlp makes
+  the request and hands the page back, so XDownloader never holds cookie
+  contents and, with a browser as the source, no cookie file is written
+  (a cookies.txt chosen in Settings is updated by yt-dlp, as it is for
+  every other site); the photos and videos themselves are fetched without
+  cookies. Threads needs its own sign-in at threads.com — an Instagram
+  sign-in alone is not enough — and the message says so when it is
+  missing. Public posts never use the login and still need no tool.
 
 ### Changed
 - **Share-link cleanup** — Threads share parameters (`xmt`, `slof`) are

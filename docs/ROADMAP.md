@@ -108,8 +108,8 @@ These were not on the v1.7 / v2.0 lists. They are live and stay out of the
 - **Threads** *(unreleased)* — public Threads posts (photos, videos,
   multi-item posts) download through an in-app reader: no external tool,
   no login, yt-dlp skipped. A post that needs sign-in gets one second try
-  with the browser login (one page request through yt-dlp, no cookie file
-  written).
+  with the browser login (one signed-in try through yt-dlp; no cookie
+  file written when the source is a browser).
 
 ---
 
