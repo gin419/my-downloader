@@ -104,7 +104,7 @@ final class ThreadsDownloadManagerTests: XCTestCase {
         XCTAssertEqual(again.alreadyPresent, 1)
         XCTAssertEqual(manager.items.count, 1)
         let item = try XCTUnwrap(manager.items.first)
-        try await waitUntil("the transfer started") { item.status == .downloading }
+        try await waitUntilTheTransferIsUnderWay(item, from: post.media[0])
         manager.removeItem(item)
         try await waitUntil("the transfer was cancelled") { StubProtocol.wasStopped(post.media[0]) }
     }
@@ -120,7 +120,7 @@ final class ThreadsDownloadManagerTests: XCTestCase {
         let manager = try makeManager()
         manager.capture(text: post.link, source: .field)
         let item = try XCTUnwrap(manager.items.first)
-        try await waitUntil("the transfer started") { item.status == .downloading }
+        try await waitUntilTheTransferIsUnderWay(item, from: post.media[0])
 
         manager.pauseItem(item)
 
@@ -148,7 +148,7 @@ final class ThreadsDownloadManagerTests: XCTestCase {
         let manager = try makeManager()
         manager.capture(text: post.link, source: .field)
         let item = try XCTUnwrap(manager.items.first)
-        try await waitUntil("the transfer started") { item.status == .downloading }
+        try await waitUntilTheTransferIsUnderWay(item, from: post.media[0])
 
         manager.removeItem(item)
 
@@ -409,6 +409,16 @@ final class ThreadsDownloadManagerTests: XCTestCase {
         XCTAssertTrue(manager.items.isEmpty)
         XCTAssertTrue(manager.saveHistoryEnabled)
         return manager
+    }
+
+    /// The row reads downloading before its request is made, and a request
+    /// cancelled while the session is still setting it up may never be
+    /// started — so there is nothing for the session to stop. A test that
+    /// goes on to require the stop waits for the request itself.
+    private func waitUntilTheTransferIsUnderWay(_ item: DownloadItem, from address: URL, line: UInt = #line) async throws {
+        try await waitUntil("the transfer started", line: line) {
+            item.status == .downloading && !StubProtocol.requests(to: address).isEmpty
+        }
     }
 
     private func waitUntil(
