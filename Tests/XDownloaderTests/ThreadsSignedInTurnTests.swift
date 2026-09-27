@@ -43,16 +43,28 @@ final class ThreadsSignedInTurnTests: XCTestCase {
 
     func testRequestsStartedTogetherRunOneAtATimeAndThePauseApart() async throws {
         let turn = makeTurn()
+        let holder = Latch()
         var inFlight = 0
         var mostInFlight = 0
         var spans: [(began: Date, ended: Date)] = []
+        var order: [Int] = []
         var waited = 0
+        var inLine = 0
 
-        let tasks = (0..<5).map { _ in
-            Task {
-                await turn.run(whileWaiting: { waited += 1 }) {
+        var tasks: [Task<Void?, Never>] = []
+        for index in 0..<5 {
+            let task = Task {
+                await turn.run(
+                    whileWaiting: {
+                        waited += 1
+                        inLine = max(inLine, index)
+                    }
+                ) {
                     inFlight += 1
                     mostInFlight = max(mostInFlight, inFlight)
+                    order.append(index)
+                    // The first holds the turn until all the others wait.
+                    if index == 0 { await holder.opened() }
                     let began = self.clock.time
                     for _ in 0..<5 { await Task.yield() }
                     self.clock.time += 2
@@ -60,10 +72,16 @@ final class ThreadsSignedInTurnTests: XCTestCase {
                     inFlight -= 1
                 }
             }
+            tasks.append(task)
+            // Each has its place in line before the next is started.
+            try await waitUntil("request \(index) has its place") { index == 0 ? order == [0] : inLine == index }
         }
+        holder.open()
         for task in tasks { _ = await task.value }
 
         XCTAssertEqual(mostInFlight, 1)
+        // First come, first served, with four of them in line at once.
+        XCTAssertEqual(order, [0, 1, 2, 3, 4])
         XCTAssertEqual(spans.count, 5)
         for (earlier, later) in zip(spans, spans.dropFirst()) {
             XCTAssertEqual(later.began.timeIntervalSince(earlier.ended), 3)
@@ -250,6 +268,52 @@ final class ThreadsSignedInTurnTests: XCTestCase {
         XCTAssertEqual(try toolRuns(), ["begin", "begin"])
         XCTAssertEqual(waiting[0].status, .paused)
         XCTAssertEqual(history.count(), 0)
+    }
+
+    func testLoginSwitchedOffWhileARowWaitsIsNotSent() async throws {
+        let pages = try (1...2).map { try restrictedPage($0) }
+        let manager = try makeManager(tool: "exec sleep 30\n")
+        manager.maxConcurrent = 5
+        let holder = try start(pages[0], in: manager)
+        try await waitUntil("the tool started") { (try? self.toolRuns()) == ["begin"] }
+        let waiting = try start(pages[1], in: manager)
+        try await waitUntil("the row waits for its turn") {
+            StubProtocol.requests(to: pages[1].address).count == 1 && waiting.status == .queued
+        }
+
+        manager.cookieBrowser = .none
+        manager.removeItem(holder)
+
+        // Its turn comes with no login to send: the tool is not started.
+        try await waitUntil("the waiting row has its outcome", seconds: 5) { self.history.count() == 1 }
+        XCTAssertEqual(waiting.status, .failed(ThreadsService.restrictedMessage))
+        XCTAssertEqual(try toolRuns(), ["begin"])
+        XCTAssertEqual(try lastToolArguments().last, pages[0].address.absoluteString)
+    }
+
+    func testLoginChangedWhileARowWaitsIsTheOneSent() async throws {
+        let pages = try (1...2).map { try restrictedPage($0) }
+        let manager = try makeManager(tool: "exec sleep 30\n")
+        manager.maxConcurrent = 5
+        let holder = try start(pages[0], in: manager)
+        try await waitUntil("the tool started") { (try? self.toolRuns()) == ["begin"] }
+        XCTAssertTrue(try lastToolArguments().contains("chrome"))
+        let waiting = try start(pages[1], in: manager)
+        try await waitUntil("the row waits for its turn") {
+            StubProtocol.requests(to: pages[1].address).count == 1 && waiting.status == .queued
+        }
+
+        manager.cookieBrowser = .firefox
+        manager.removeItem(holder)
+
+        try await waitUntil("the tool started again", seconds: 5) { (try? self.toolRuns()) == ["begin", "begin"] }
+        let arguments = try lastToolArguments()
+        XCTAssertEqual(arguments.last, pages[1].address.absoluteString)
+        XCTAssertTrue(arguments.contains("firefox"))
+        XCTAssertFalse(arguments.contains("chrome"))
+
+        manager.removeItem(waiting)
+        try await waitUntil("the tool was terminated", seconds: 5) { !self.toolIsRunning() }
     }
 
     func testPublicRowsStartedAlongsideAreNotDelayed() async throws {

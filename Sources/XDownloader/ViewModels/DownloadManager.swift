@@ -2001,25 +2001,53 @@ class DownloadManager: ObservableObject {
     /// The requests take turns (see ThreadsSignedInTurn). A row that has to
     /// wait for its turn reads "Queued", which is what it is; cancelled
     /// while it waits, it leaves the line and the tool is never started.
+    ///
+    /// The login and the tool are read from Settings when the turn has
+    /// come, not when the row joined the line: a login switched off or
+    /// changed while the row waited is not sent. They are read before the
+    /// line as well, so a row with nothing to send never waits.
     private func fetchThreadsPageSignedIn(_ pageURL: URL, for item: DownloadItem) async -> ThreadsSignedInPage.Outcome {
-        let cookies = resolveCookiesForDownload()
-        let cookieArguments = CookieArgs.make(browser: cookieBrowser, profile: cookieBrowserProfile, file: cookies.path)
-        guard !cookieArguments.isEmpty else { return .noCookieSource }
-        guard let tool = ytDlpPathProvider() else { return .toolMissing }
+        if case .failure(let outcome) = threadsSignedInSource() { return outcome }
         let outcome = await threadsSignedInTurn.run(whileWaiting: { item.status = .queued }) {
+            let source: ThreadsSignedInSource
+            switch threadsSignedInSource() {
+            case .success(let current): source = current
+            case .failure(let outcome): return outcome
+            }
             if item.status == .queued { item.status = .fetching }
-            return await cookieAccess.withScope(for: item.id, file: cookies.path, grantedURL: cookies.granted) {
+            return await cookieAccess.withScope(for: item.id, file: source.cookies.path, grantedURL: source.cookies.granted) {
                 await ThreadsSignedInPage.fetch(
                     pageURL,
-                    executablePath: tool,
-                    cookieArguments: cookieArguments,
-                    usedCookiesFile: cookies.path != nil,
+                    executablePath: source.tool,
+                    cookieArguments: source.cookieArguments,
+                    usedCookiesFile: source.cookies.path != nil,
                     register: { [weak self] p in self?.activeProcesses[item.id] = p },
                     unregister: { [weak self] in self?.activeProcesses.removeValue(forKey: item.id) }
                 )
             }
         }
         return outcome ?? .cancelled
+    }
+
+    /// What a signed-in Threads request is made with, as Settings stand now.
+    private struct ThreadsSignedInSource {
+        let cookies: (path: String?, granted: URL?)
+        let cookieArguments: [String]
+        let tool: String
+    }
+
+    /// Why the signed-in request cannot be made, in place of the source.
+    private enum ThreadsSignedInSourceResult {
+        case success(ThreadsSignedInSource)
+        case failure(ThreadsSignedInPage.Outcome)
+    }
+
+    private func threadsSignedInSource() -> ThreadsSignedInSourceResult {
+        let cookies = resolveCookiesForDownload()
+        let cookieArguments = CookieArgs.make(browser: cookieBrowser, profile: cookieBrowserProfile, file: cookies.path)
+        guard !cookieArguments.isEmpty else { return .failure(.noCookieSource) }
+        guard let tool = ytDlpPathProvider() else { return .failure(.toolMissing) }
+        return .success(ThreadsSignedInSource(cookies: cookies, cookieArguments: cookieArguments, tool: tool))
     }
 
     /// Last-resort fallback: X's GraphQL APIs sometimes hide tweets from
