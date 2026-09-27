@@ -38,7 +38,8 @@ final class ThreadsSignedInPageTests: XCTestCase {
             arguments,
             [
                 "--cookies-from-browser", "firefox:Work",
-                "--ignore-config", "--no-cache-dir", "--skip-download", "--dump-pages",
+                "--ignore-config", "--no-plugin-dirs", "--use-extractors", "generic",
+                "--no-cache-dir", "--skip-download", "--dump-pages",
                 "--user-agent", ThreadsSignedInPage.userAgent,
                 "https://www.threads.com/@example_author/post/SYNrestrict1",
             ])
@@ -46,7 +47,7 @@ final class ThreadsSignedInPageTests: XCTestCase {
     }
 
     func testArgumentsNeverLogTrafficOrWriteAnything() throws {
-        let pageURL = try XCTUnwrap(URL(string: "https://www.threads.com/t/SYNrestrict1"))
+        let pageURL = try XCTUnwrap(URL(string: "https://www.threads.com/@example_author/post/SYNrestrict1"))
         let sources = [
             CookieArgs.make(browser: .safari, file: nil),
             CookieArgs.make(browser: .chrome, profile: "Default", file: nil),
@@ -58,13 +59,20 @@ final class ThreadsSignedInPageTests: XCTestCase {
             "--print-traffic", "-v", "--verbose", "--write-pages", "--dump-intermediate-pages",
             "--write-info-json", "--write-description", "--write-thumbnail", "--write-comments",
             "--load-info-json", "--config-locations", "--batch-file", "-a", "--download-archive",
-            "--print-to-file", "--exec", "-o", "--output", "-P", "--paths", "--cache-dir",
+            "--print-to-file", "--exec", "-o", "--output", "-P", "--paths", "--cache-dir", "--plugin-dirs",
         ]
         for cookies in sources {
             let arguments = ThreadsSignedInPage.arguments(cookieArguments: cookies, pageURL: pageURL)
             XCTAssertEqual(Array(arguments.prefix(cookies.count)), cookies)
             XCTAssertEqual(Set(arguments).intersection(forbidden), [], "\(arguments)")
             XCTAssertTrue(arguments.contains("--ignore-config"))
+            // No plugin and no extractor but the generic page reader: both
+            // could make requests of their own with the login.
+            XCTAssertTrue(arguments.contains("--no-plugin-dirs"))
+            let extractors = try XCTUnwrap(arguments.firstIndex(of: "--use-extractors"))
+            XCTAssertEqual(arguments[extractors + 1], "generic")
+            XCTAssertEqual(arguments.filter { $0 == "--use-extractors" || $0 == "--ies" }.count, 1)
+            XCTAssertFalse(arguments.contains("--plugin-dirs"))
             XCTAssertTrue(arguments.contains("--no-cache-dir"))
             XCTAssertTrue(arguments.contains("--skip-download"))
             XCTAssertEqual(arguments.last, pageURL.absoluteString)
@@ -84,6 +92,7 @@ final class ThreadsSignedInPageTests: XCTestCase {
 
         XCTAssertEqual(page.html, html)
         XCTAssertEqual(page.finalURL?.absoluteString, "https://www.threads.com/@example_author/post/SYNlinked001")
+        XCTAssertFalse(page.redirected)
         guard case .success(let post) = ThreadsService.resolve(html: page.html, finalURL: page.finalURL, code: "SYNlinked001") else {
             return XCTFail("the decoded page must resolve")
         }
@@ -96,11 +105,11 @@ final class ThreadsSignedInPageTests: XCTestCase {
         // its messages can land between the marker and the page.
         let html = "<html><body>synthetic page</body></html>"
         let lines = [
-            "[generic] Extracting URL: https://www.threads.com/t/SYNrestrict1",
-            "[generic] Dumping request to https://www.threads.com/t/SYNrestrict1",
+            "[generic] Extracting URL: https://www.threads.com/@example_author/post/SYNrestrict1",
+            "[generic] Dumping request to https://www.threads.com/@example_author/post/SYNrestrict1",
             "WARNING: [generic] Falling back on generic information extractor",
             Data(html.utf8).base64EncodedString(),
-            "ERROR: Unsupported URL: https://www.threads.com/t/SYNrestrict1",
+            "ERROR: Unsupported URL: https://www.threads.com/@example_author/post/SYNrestrict1",
         ]
 
         XCTAssertEqual(try ThreadsSignedInPage.extractPage(from: lines).get().html, html)
@@ -109,33 +118,87 @@ final class ThreadsSignedInPageTests: XCTestCase {
     func testOnlyTheFirstPageIsKept() throws {
         let first = "<html><body>first synthetic page</body></html>"
         let lines =
-            toolOutput(page: first, endingAt: "https://www.threads.com/t/SYNrestrict1")
+            toolOutput(page: first, endingAt: "https://www.threads.com/@example_author/post/SYNrestrict1")
             + toolOutput(page: "<html><body>second</body></html>", endingAt: "https://www.threads.com/login/")
 
         let page = try ThreadsSignedInPage.extractPage(from: lines).get()
 
         XCTAssertEqual(page.html, first)
-        XCTAssertEqual(page.finalURL?.absoluteString, "https://www.threads.com/t/SYNrestrict1")
+        XCTAssertEqual(page.finalURL?.absoluteString, "https://www.threads.com/@example_author/post/SYNrestrict1")
+        // Two requests were announced: not a clean run.
+        XCTAssertTrue(page.redirected)
+    }
+
+    func testRedirectedRunIsToldFromACleanOne() throws {
+        // The tool's lines for an address Threads redirects: a request, the
+        // redirect, a second request, and only then the page.
+        let html = "<html><body>synthetic page</body></html>"
+        let landing = "https://www.threads.com/@example_author/post/SYNrestrict1"
+        let redirected = [
+            "[generic] Extracting URL: https://www.threads.com/t/SYNrestrict1",
+            "[generic] SYNrestrict1: Downloading webpage",
+            "[redirect] Following redirect to \(landing)",
+            "[generic] Extracting URL: \(landing)",
+            "[generic] SYNrestrict1: Downloading webpage",
+            "[generic] Dumping request to \(landing)",
+            Data(html.utf8).base64EncodedString(),
+            "WARNING: [generic] Falling back on generic information extractor",
+            "ERROR: Unsupported URL: \(landing)",
+        ]
+
+        let page = try ThreadsSignedInPage.extractPage(from: redirected).get()
+
+        XCTAssertEqual(page.html, html)
+        XCTAssertEqual(page.finalURL?.absoluteString, landing)
+        XCTAssertTrue(page.redirected)
+
+        // Either sign is enough on its own, and neither is in a clean run.
+        let byLine = redirected.filter { !$0.hasSuffix("Downloading webpage") }
+        XCTAssertTrue(try ThreadsSignedInPage.extractPage(from: byLine).get().redirected)
+        let byCount = redirected.filter { !$0.hasPrefix("[redirect]") }
+        XCTAssertTrue(try ThreadsSignedInPage.extractPage(from: byCount).get().redirected)
+        XCTAssertFalse(try ThreadsSignedInPage.extractPage(from: toolOutput(page: html, endingAt: landing)).get().redirected)
+    }
+
+    func testHTTPErrorStatusIsReadFromTheToolsError() {
+        var refused = ThreadsSignedInPage.Collector()
+        refused.take("[generic] Extracting URL: https://www.threads.com/@example_author/post/SYNrestrict1")
+        refused.take("ERROR: [generic] Unable to download webpage: HTTP Error 429: Too Many Requests (caused by <HTTPError 429>)")
+        refused.take("ERROR: [generic] Unable to download webpage: HTTP Error 503: Service Unavailable")
+        XCTAssertEqual(refused.httpStatus, 429)
+        XCTAssertEqual(refused.page(), .failure(.noPage))
+
+        // Not a status, and not an error of the tool's.
+        for line in [
+            "ERROR: [generic] Unable to download webpage: timed out",
+            "ERROR: [generic] HTTP Error 99999: synthetic",
+            "ERROR: [generic] HTTP Error : synthetic",
+            "WARNING: HTTP Error 500: synthetic",
+        ] {
+            var collector = ThreadsSignedInPage.Collector()
+            collector.take(line)
+            XCTAssertNil(collector.httpStatus, line)
+        }
     }
 
     func testMissingMarkerAndMalformedPageAreDifferentFailures() {
         // The request failed: the tool printed no page at all. A base64
         // line alone is not a page — nothing announced it.
         let noMarker = [
-            "[generic] Extracting URL: https://www.threads.com/t/SYNrestrict1",
+            "[generic] Extracting URL: https://www.threads.com/@example_author/post/SYNrestrict1",
             "ERROR: [generic] Unable to download webpage: timed out",
             Data("<html></html>".utf8).base64EncodedString(),
         ]
         XCTAssertEqual(ThreadsSignedInPage.extractPage(from: noMarker), .failure(.noPage))
         XCTAssertEqual(ThreadsSignedInPage.extractPage(from: []), .failure(.noPage))
         XCTAssertEqual(
-            ThreadsSignedInPage.extractPage(from: ["[generic] Dumping request to https://www.threads.com/t/SYNrestrict1"]),
+            ThreadsSignedInPage.extractPage(from: ["[generic] Dumping request to https://www.threads.com/@example_author/post/SYNrestrict1"]),
             .failure(.noPage))
 
         let malformed = [
-            "[generic] Dumping request to https://www.threads.com/t/SYNrestrict1",
+            "[generic] Dumping request to https://www.threads.com/@example_author/post/SYNrestrict1",
             "PGh0bWw-not*base64!",
-            "ERROR: Unsupported URL: https://www.threads.com/t/SYNrestrict1",
+            "ERROR: Unsupported URL: https://www.threads.com/@example_author/post/SYNrestrict1",
         ]
         XCTAssertEqual(ThreadsSignedInPage.extractPage(from: malformed), .failure(.undecodable))
         XCTAssertNotEqual(ThreadsSignedInPage.ExtractionFailure.noPage, .undecodable)
@@ -150,7 +213,7 @@ final class ThreadsSignedInPageTests: XCTestCase {
         let html = "<html><body>\(filler)<p>the end of the page</p></body></html>"
         let encoded = Data(html.utf8).base64EncodedString()
         XCTAssertGreaterThan(encoded.count, 2_000_000)
-        let pageURL = try XCTUnwrap(URL(string: "https://www.threads.com/t/SYNrestrict1"))
+        let pageURL = try XCTUnwrap(URL(string: "https://www.threads.com/@example_author/post/SYNrestrict1"))
         let tool = try makeTool(printing: html, endingAt: pageURL.absoluteString)
         var registered = 0
         var unregistered = 0
@@ -171,7 +234,7 @@ final class ThreadsSignedInPageTests: XCTestCase {
 
     func testToolExitingWithAnErrorAfterThePageIsASuccess() async throws {
         // The script ends like the real tool: "Unsupported URL", exit 1.
-        let pageURL = try XCTUnwrap(URL(string: "https://www.threads.com/t/SYNrestrict1"))
+        let pageURL = try XCTUnwrap(URL(string: "https://www.threads.com/@example_author/post/SYNrestrict1"))
         let tool = try makeTool(printing: "<html><body>synthetic page</body></html>", endingAt: pageURL.absoluteString)
 
         let outcome = await fetch(pageURL, tool: tool)
@@ -182,7 +245,7 @@ final class ThreadsSignedInPageTests: XCTestCase {
     }
 
     func testToolFailuresAreToldApart() async throws {
-        let pageURL = try XCTUnwrap(URL(string: "https://www.threads.com/t/SYNrestrict1"))
+        let pageURL = try XCTUnwrap(URL(string: "https://www.threads.com/@example_author/post/SYNrestrict1"))
 
         let silent = try makeTool(script: "echo 'ERROR: [generic] Unable to download webpage: timed out' >&2\nexit 1\n")
         let noPage = await fetch(pageURL, tool: silent)
@@ -192,6 +255,17 @@ final class ThreadsSignedInPageTests: XCTestCase {
         let unreadable = await fetch(pageURL, tool: noCookies)
         XCTAssertEqual(unreadable, .failed(.cookiesUnreadable))
 
+        let refused = try makeTool(
+            script: "echo 'ERROR: [generic] Unable to download webpage: HTTP Error 429: Too Many Requests' >&2\nexit 1\n")
+        let tooMany = await fetch(pageURL, tool: refused)
+        XCTAssertEqual(tooMany, .httpStatus(429))
+
+        // An older tool turns an option down before it requests anything.
+        let old = try makeTool(
+            script: "echo 'Usage: yt-dlp [OPTIONS] URL [URL...]' >&2\necho 'yt-dlp: error: no such option: --no-plugin-dirs' >&2\nexit 2\n")
+        let outdated = await fetch(pageURL, tool: old)
+        XCTAssertEqual(outdated, .failed(.toolOutdated))
+
         let garbled = try makeTool(script: "echo '[generic] Dumping request to \(pageURL.absoluteString)'\necho '%%%%'\nexit 1\n")
         let undecodable = await fetch(pageURL, tool: garbled)
         XCTAssertEqual(undecodable, .failed(.undecodable))
@@ -200,8 +274,31 @@ final class ThreadsSignedInPageTests: XCTestCase {
         XCTAssertEqual(missing, .failed(.toolNotStarted))
     }
 
+    func testRedirectedToolRunIsHandedBackMarked() async throws {
+        let asked = try XCTUnwrap(URL(string: "https://www.threads.com/@old_name/post/SYNrestrict1"))
+        let landing = try XCTUnwrap(URL(string: "https://www.threads.com/@example_author/post/SYNrestrict1"))
+        let html = "<html><body>synthetic page</body></html>"
+        let tool = try makeTool(
+            script: """
+                echo '[generic] Extracting URL: \(asked.absoluteString)'
+                echo '[generic] SYNrestrict1: Downloading webpage'
+                echo '[redirect] Following redirect to \(landing.absoluteString)'
+                echo '[generic] Extracting URL: \(landing.absoluteString)'
+                echo '[generic] SYNrestrict1: Downloading webpage'
+                echo '[generic] Dumping request to \(landing.absoluteString)'
+                echo '\(Data(html.utf8).base64EncodedString())'
+                echo 'ERROR: Unsupported URL: \(landing.absoluteString)' >&2
+                exit 1
+
+                """)
+
+        let outcome = await fetch(asked, tool: tool)
+
+        XCTAssertEqual(outcome, .page(.init(html: html, finalURL: landing, redirected: true), usedCookiesFile: false))
+    }
+
     func testStuckToolIsTerminatedAtTheTimeout() async throws {
-        let pageURL = try XCTUnwrap(URL(string: "https://www.threads.com/t/SYNrestrict1"))
+        let pageURL = try XCTUnwrap(URL(string: "https://www.threads.com/@example_author/post/SYNrestrict1"))
         let tool = try makeTool(script: "exec sleep 30\n")
         let started = Date()
 
@@ -212,7 +309,7 @@ final class ThreadsSignedInPageTests: XCTestCase {
     }
 
     func testCancelTerminatesTheTool() async throws {
-        let pageURL = try XCTUnwrap(URL(string: "https://www.threads.com/t/SYNrestrict1"))
+        let pageURL = try XCTUnwrap(URL(string: "https://www.threads.com/@example_author/post/SYNrestrict1"))
         let tool = try makeTool(script: "exec sleep 30\n")
         var process: Process?
         let started = Date()
@@ -312,6 +409,146 @@ final class ThreadsSignedInPageTests: XCTestCase {
         XCTAssertEqual(asked, 1)
     }
 
+    // MARK: - The run: which address the login is sent to
+
+    func testShortLinkIsAskedForAtTheAddressThreadsMovedItTo() async throws {
+        // Logged out, Threads moves /t/<code> to the post's own address and
+        // answers there. The signed-in try asks at that address, where no
+        // redirect follows.
+        let post = try restrictedPost()
+        let short = try XCTUnwrap(URL(string: "https://www.threads.com/t/SYNlinked001"))
+        StubProtocol.set(.redirect(to: post.pageURL), for: short)
+        StubProtocol.set(page(post.restrictedHTML), for: post.pageURL)
+        StubProtocol.set(mp4(), for: post.media)
+        let item = DownloadItem(url: "https://www.threads.net/t/SYNlinked001?xmt=synthetic")
+        var asked: [URL] = []
+
+        let finished = await ThreadsService.run(item: item, outputDirectory: downloads, session: stubSession()) { url in
+            asked.append(url)
+            return .page(.init(html: post.signedInHTML, finalURL: url), usedCookiesFile: false)
+        }
+
+        XCTAssertTrue(finished)
+        XCTAssertEqual(item.status, .completed)
+        XCTAssertEqual(asked, [post.pageURL])
+    }
+
+    func testWrongUsernameIsAskedForAtTheAddressThreadsMovedItTo() async throws {
+        let post = try restrictedPost()
+        let typed = try XCTUnwrap(URL(string: "https://www.threads.com/@old_name/post/SYNlinked001"))
+        StubProtocol.set(.redirect(to: post.pageURL), for: typed)
+        StubProtocol.set(page(post.restrictedHTML), for: post.pageURL)
+        StubProtocol.set(mp4(), for: post.media)
+        let item = DownloadItem(url: typed.absoluteString)
+        var asked: [URL] = []
+
+        let finished = await ThreadsService.run(item: item, outputDirectory: downloads, session: stubSession()) { url in
+            asked.append(url)
+            return .page(.init(html: post.signedInHTML, finalURL: url), usedCookiesFile: false)
+        }
+
+        XCTAssertTrue(finished)
+        XCTAssertEqual(asked, [post.pageURL])
+    }
+
+    func testShortLinkWithNoPostAddressNeverUsesTheLogin() async throws {
+        // The login page, or the restriction answered at /t/<code> itself:
+        // nothing names the author, so every address would be redirected.
+        let short = try XCTUnwrap(URL(string: "https://www.threads.com/t/SYNlinked001"))
+        let landing = try XCTUnwrap(URL(string: "https://www.threads.com/login/?next=https%3A%2F%2Fwww.threads.com%2F"))
+        let restrictedHTML = try fixtureHTML("threads_fail_restricted_audience.html")
+        let answers: [[URL: StubProtocol.Stub]] = [
+            [short: .redirect(to: landing), landing: page(try fixtureHTML("threads_fail_login_redirect.html"))],
+            [short: page(restrictedHTML)],
+        ]
+        for answer in answers {
+            StubProtocol.removeAll()
+            for (url, stub) in answer { StubProtocol.set(stub, for: url) }
+            let item = DownloadItem(url: short.absoluteString)
+            item.emptySuccessFailure = true
+            var asked = 0
+
+            let finished = await ThreadsService.run(item: item, outputDirectory: downloads, session: stubSession()) { _ in
+                asked += 1
+                return .cancelled
+            }
+
+            XCTAssertFalse(finished)
+            XCTAssertEqual(item.status, .failed(ThreadsService.signedInNeedsFullLinkMessage))
+            XCTAssertEqual(asked, 0)
+            XCTAssertFalse(item.emptySuccessFailure)
+            XCTAssertFalse(DownloadManager.shouldAutoRetryEmptySuccess(item))
+        }
+        XCTAssertEqual(try contents(of: downloads), [])
+    }
+
+    func testSignedInAddressIsOnlyEverAPostAddressOfThisPost() throws {
+        let named = try XCTUnwrap(ThreadsService.parseLink("https://www.threads.com/@old_name/post/SYNlinked001"))
+        let short = try XCTUnwrap(ThreadsService.parseLink("https://www.threads.com/t/SYNlinked001"))
+        let typed = try XCTUnwrap(ThreadsService.canonicalURL(for: named))
+        let shortURL = try XCTUnwrap(ThreadsService.canonicalURL(for: short))
+        let own = "https://www.threads.com/@example_author/post/SYNlinked001"
+
+        func address(_ link: ThreadsService.PostLink, _ requested: URL, _ end: String?) -> String? {
+            ThreadsService.signedInAddress(for: link, requested: requested, loggedOutEnd: end.flatMap(URL.init(string:)))?
+                .absoluteString
+        }
+
+        XCTAssertEqual(address(named, typed, own), own)
+        XCTAssertEqual(address(short, shortURL, own), own)
+        // Share parameters are not part of the address.
+        XCTAssertEqual(address(short, shortURL, own + "?xmt=synthetic"), own)
+        // Another post, another site, no post at all: not used.
+        for end in [
+            "https://www.threads.com/@example_author/post/SYNother0001",
+            "https://example.com/@example_author/post/SYNlinked001",
+            "http://www.threads.com/@example_author/post/SYNlinked001",
+            "https://www.threads.com/login/?next=https%3A%2F%2Fwww.threads.com%2F",
+            "https://www.threads.com/t/SYNlinked001",
+            nil,
+        ] {
+            XCTAssertEqual(address(named, typed, end), typed.absoluteString, end ?? "nil")
+            XCTAssertNil(address(short, shortURL, end), end ?? "nil")
+        }
+    }
+
+    func testRedirectedSignedInRunIsNotADownload() async throws {
+        let post = try restrictedPost()
+        StubProtocol.set(page(post.restrictedHTML), for: post.pageURL)
+        StubProtocol.set(mp4(), for: post.media)
+        let item = DownloadItem(url: post.link)
+        item.emptySuccessFailure = true
+        var asked = 0
+
+        let finished = await ThreadsService.run(item: item, outputDirectory: downloads, session: stubSession()) { url in
+            asked += 1
+            return .page(.init(html: post.signedInHTML, finalURL: url, redirected: true), usedCookiesFile: false)
+        }
+
+        XCTAssertFalse(finished)
+        XCTAssertEqual(item.status, .failed(ThreadsService.signedInRedirectedMessage))
+        XCTAssertEqual(asked, 1)
+        XCTAssertFalse(item.emptySuccessFailure)
+        XCTAssertFalse(DownloadManager.shouldAutoRetryEmptySuccess(item))
+        XCTAssertEqual(StubProtocol.requests(to: post.media).count, 0)
+        XCTAssertEqual(try contents(of: downloads), [])
+    }
+
+    func testRedirectToTheLoginPageStillAsksForTheThreadsSignIn() async throws {
+        let post = try restrictedPost()
+        let landing = try XCTUnwrap(URL(string: "https://www.threads.com/login/?next=https%3A%2F%2Fwww.threads.com%2F"))
+        let loginHTML = try fixtureHTML("threads_fail_login_redirect.html")
+        StubProtocol.set(page(post.restrictedHTML), for: post.pageURL)
+        let item = DownloadItem(url: post.link)
+
+        let finished = await ThreadsService.run(item: item, outputDirectory: downloads, session: stubSession()) { _ in
+            .page(.init(html: loginHTML, finalURL: landing, redirected: true), usedCookiesFile: false)
+        }
+
+        XCTAssertFalse(finished)
+        XCTAssertEqual(item.status, .failed(ThreadsService.signInMissingInBrowserMessage))
+    }
+
     func testPublicPostNeverUsesTheLogin() async throws {
         let html = try fixtureHTML("threads_linked_inline_video.html")
         let post = try restrictedPost()
@@ -393,7 +630,10 @@ final class ThreadsSignedInPageTests: XCTestCase {
             (.toolMissing, ThreadsService.signedInToolMissingMessage),
             (.failed(.toolNotStarted), ThreadsService.signedInToolNotStartedMessage),
             (.failed(.cookiesUnreadable), YtDlpService.cookieDatabaseMessage),
+            (.failed(.toolOutdated), ThreadsService.signedInToolOutdatedMessage),
             (.failed(.timedOut), ThreadsService.signedInTimedOutMessage),
+            (.httpStatus(429), ThreadsService.signedInHTTPStatusMessage(429)),
+            (.httpStatus(503), ThreadsService.signedInHTTPStatusMessage(503)),
             (.failed(.noPage), ThreadsService.signedInNoPageMessage),
             (.failed(.undecodable), ThreadsService.signedInUndecodableMessage),
             // Signed in, the page came without the post: logged out that
@@ -477,8 +717,30 @@ final class ThreadsSignedInPageTests: XCTestCase {
             "Threads only shows this post to signed-in visitors — yt-dlp, which reads it with your sign-in, couldn't be started. "
                 + "Reinstall yt-dlp, then Retry.")
         XCTAssertEqual(
+            ThreadsService.signedInToolOutdatedMessage,
+            "Threads only shows this post to signed-in visitors — the installed yt-dlp is too old to read it with your sign-in. "
+                + "Update yt-dlp, then Retry.")
+        XCTAssertEqual(
             ThreadsService.signedInTimedOutMessage,
-            "Couldn't load the post from Threads with your sign-in — no answer in time. Check the connection, then Retry.")
+            "Couldn't load the post from Threads with your sign-in — no answer in time. "
+                + "If macOS is asking for permission to read the browser's cookie storage, allow it; "
+                + "otherwise check the connection. Then Retry.")
+        XCTAssertEqual(
+            ThreadsService.signedInNeedsFullLinkMessage,
+            "Threads only shows this post to signed-in visitors, and a short link can't be read with your sign-in — "
+                + "open the post on threads.com and paste its full link (the one with the author's name) instead.")
+        XCTAssertEqual(
+            ThreadsService.signedInRedirectedMessage,
+            "Threads moved this link to another address, so the post wasn't downloaded with your sign-in — "
+                + "open the post on threads.com and paste its link from there instead.")
+        XCTAssertEqual(
+            ThreadsService.signedInHTTPStatusMessage(429),
+            "Couldn't load the post from Threads with your sign-in — the server returned HTTP 429. "
+                + "Threads is limiting requests: wait a few minutes before you Retry.")
+        XCTAssertEqual(
+            ThreadsService.signedInHTTPStatusMessage(503),
+            "Couldn't load the post from Threads with your sign-in — the server returned HTTP 503. "
+                + "Check the connection, then Retry.")
         XCTAssertEqual(
             ThreadsService.signedInNoPageMessage,
             "Couldn't load the post from Threads with your sign-in — check the connection, then Retry.")

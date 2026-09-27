@@ -3,11 +3,18 @@ import Foundation
 /// The signed-in second try for a Threads post that Threads withholds from
 /// logged-out visitors. yt-dlp — the tool the app already hands the browser
 /// login to — requests the post's page with that login and prints the page;
-/// the app takes the page from the tool's output, in memory. No cookie file
-/// is written and the app never holds a cookie value: yt-dlp reads the
-/// browser's cookies in its own process, as it does for every other download.
+/// the app takes the page from the tool's output, in memory. The app never
+/// holds a cookie value and writes no cookie file: yt-dlp reads the
+/// browser's cookies in its own process, as it does for every other
+/// download. (A cookies.txt chosen in Settings is the tool's to update, as
+/// it is for every other site.)
 ///
-/// One run is one request. Nothing here repeats it.
+/// One run is one signed-in try, and nothing here repeats it. It is one
+/// request as long as Threads answers at the address asked for: the tool
+/// follows a redirect with a request of its own, so the caller hands in an
+/// address Threads is known not to redirect (see
+/// ThreadsService.signedInAddress), and a run that was redirected all the
+/// same says so in `Page.redirected`.
 enum ThreadsSignedInPage {
 
     /// A page handed back by the tool. `finalURL` is the address the request
@@ -15,6 +22,9 @@ enum ThreadsSignedInPage {
     struct Page: Equatable {
         let html: String
         let finalURL: URL?
+        /// True when the tool followed a redirect, which took more than the
+        /// one request: the run must not pass for a clean one.
+        var redirected = false
     }
 
     /// Why the tool's output held no usable page.
@@ -34,6 +44,8 @@ enum ThreadsSignedInPage {
         /// yt-dlp is not installed: nothing was started.
         case toolMissing
         case failed(FetchFailure)
+        /// Threads answered the request with this HTTP error status.
+        case httpStatus(Int)
         /// Stop, or the row's ✕: the tool was terminated.
         case cancelled
     }
@@ -41,6 +53,9 @@ enum ThreadsSignedInPage {
     enum FetchFailure: Equatable, CaseIterable {
         case toolNotStarted
         case cookiesUnreadable
+        /// The installed tool does not know an option it was given. It
+        /// stopped before any request.
+        case toolOutdated
         case timedOut
         case noPage
         case undecodable
@@ -54,13 +69,17 @@ enum ThreadsSignedInPage {
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
 
     /// The app's own cookie arguments, then: no user configuration (it could
-    /// add logging or output options), no cache, no download, and the page
-    /// printed to the tool's output. Never an option that logs the traffic
-    /// or writes the page to a file — both would put the login on disk.
+    /// add logging or output options), no plugins and no extractor but the
+    /// generic page reader (anything else could make requests of its own
+    /// with the login), no cache, no download, and the page printed to the
+    /// tool's output. Never an option that logs the traffic or writes the
+    /// page to a file — both would put the login on disk.
     static func arguments(cookieArguments: [String], pageURL: URL) -> [String] {
         cookieArguments
             + [
                 "--ignore-config",
+                "--no-plugin-dirs",
+                "--use-extractors", "generic",
                 "--no-cache-dir",
                 "--skip-download",
                 "--dump-pages",
@@ -76,6 +95,13 @@ enum ThreadsSignedInPage {
     /// rely on.
     static let pageMarker = "] Dumping request to "
 
+    /// "[redirect] Following redirect to <address>": the tool starts over
+    /// at the new address, with a second request.
+    static let redirectMarker = "] Following redirect to "
+
+    /// "[generic] <name>: Downloading webpage", once per request.
+    static let requestMarker = ": Downloading webpage"
+
     /// Takes the tool's lines as they arrive and keeps the first page among
     /// them, encoded as it came. Everything else is dropped on the spot:
     /// nothing of the tool's output is kept, shown or logged.
@@ -83,9 +109,23 @@ enum ThreadsSignedInPage {
         private var sawMarker = false
         private var finalURL: URL?
         private var encoded: String?
+        private var requests = 0
+        private(set) var redirected = false
         private(set) var cookiesUnreadable = false
+        private(set) var toolOutdated = false
+        /// The status of the first "HTTP Error <n>" among the tool's errors.
+        private(set) var httpStatus: Int?
 
         mutating func take(_ line: String) {
+            if line.contains(redirectMarker) {
+                redirected = true
+                return
+            }
+            if line.hasSuffix(requestMarker) {
+                requests += 1
+                if requests > 1 { redirected = true }
+                return
+            }
             if encoded == nil {
                 // The page is the line after the marker on the tool's
                 // standard output. Both outputs arrive through one handler,
@@ -101,9 +141,21 @@ enum ThreadsSignedInPage {
                     return
                 }
             }
-            guard line.hasPrefix("ERROR:") else { return }
             let lower = line.lowercased()
+            // Printed by the option parser, which knows no "ERROR:" prefix.
+            if lower.contains("error: no such option") { toolOutdated = true }
+            guard line.hasPrefix("ERROR:") else { return }
             if lower.contains("could not find"), lower.contains("cookies database") { cookiesUnreadable = true }
+            if httpStatus == nil { httpStatus = Self.httpStatus(in: line) }
+        }
+
+        /// The number after "HTTP Error", when it is a status. Only the
+        /// number is taken: none of the tool's text is kept.
+        private static func httpStatus(in line: String) -> Int? {
+            guard let marker = line.range(of: "HTTP Error ") else { return nil }
+            let digits = line[marker.upperBound...].prefix(while: \.isNumber)
+            guard let status = Int(digits), (400..<600).contains(status) else { return nil }
+            return status
         }
 
         /// Decodes the page. The tool exits with an error even when it has
@@ -112,7 +164,7 @@ enum ThreadsSignedInPage {
         func page() -> Result<Page, ExtractionFailure> {
             guard sawMarker, let encoded else { return .failure(.noPage) }
             guard let data = Data(base64Encoded: encoded), !data.isEmpty else { return .failure(.undecodable) }
-            return .success(Page(html: String(decoding: data, as: UTF8.self), finalURL: finalURL))
+            return .success(Page(html: String(decoding: data, as: UTF8.self), finalURL: finalURL, redirected: redirected))
         }
     }
 
@@ -126,8 +178,9 @@ enum ThreadsSignedInPage {
     // MARK: - Running the tool
 
     /// The tool gives up on a connection after 20 seconds by itself, and
-    /// reading the browser's cookies comes before that; past this it is
-    /// stuck, and the row must not be.
+    /// reading the browser's cookies comes before that — which can wait on
+    /// a macOS permission prompt for as long as it stays unanswered. Past
+    /// this the tool is stuck, and the row must not be.
     static let timeout: TimeInterval = 90
 
     /// State of one run, touched on the main actor only.
@@ -138,7 +191,7 @@ enum ThreadsSignedInPage {
         var timedOut = false
     }
 
-    /// One request for `pageURL` with the login `cookieArguments` name.
+    /// One signed-in try for `pageURL` with the login `cookieArguments` name.
     /// `register` and `unregister` are DownloadManager's process registry:
     /// that is where Stop and the row's ✕ find the tool to terminate. The
     /// line handler is this function's own and never touches a row.
@@ -184,7 +237,10 @@ enum ThreadsSignedInPage {
         case .failure(.undecodable):
             return .failed(.undecodable)
         case .failure(.noPage):
-            return .failed(run.collector.cookiesUnreadable ? .cookiesUnreadable : .noPage)
+            if run.collector.toolOutdated { return .failed(.toolOutdated) }
+            if run.collector.cookiesUnreadable { return .failed(.cookiesUnreadable) }
+            if let status = run.collector.httpStatus { return .httpStatus(status) }
+            return .failed(.noPage)
         }
     }
 }

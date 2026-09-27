@@ -6,7 +6,7 @@ import Foundation
 /// as JSON inside a `<script type="application/json">` tag, so one page
 /// fetch resolves it. Everything but `run` is a pure function of the fetched
 /// page. The page is requested logged out; only when Threads withholds the
-/// post from logged-out visitors is it requested once more with the owner's
+/// post from logged-out visitors is there one more try with the owner's
 /// browser login (see ThreadsSignedInPage). The files themselves are always
 /// fetched without cookies, and nothing resolved is ever stored, because the
 /// media addresses are signed and expire within days.
@@ -50,20 +50,26 @@ enum ThreadsService {
         switch await fetchPost(at: pageURL, code: link.code, session: session) {
         case .resolved(let resolved): post = resolved
         case .cancelled: return false
-        case .failed(let message, let mayBeTransient, let failure):
+        case .failed(let message, let mayBeTransient, let failure, let endedAt):
             guard let failure, needsSignIn(failure), let signedInPage else {
                 item.emptySuccessFailure = mayBeTransient
                 item.status = .failed(message)
                 return false
             }
-            // The one signed-in request of this run. Whatever it ends in is
+            // No address Threads is known to answer without a redirect: the
+            // login is not sent at all.
+            guard let address = signedInAddress(for: link, requested: pageURL, loggedOutEnd: endedAt) else {
+                item.status = .failed(signedInNeedsFullLinkMessage)
+                return false
+            }
+            // The one signed-in try of this run. Whatever it ends in is
             // final: the auto-retry stays off, or it would send the login a
             // second time without being asked.
             usedSignIn = true
-            switch signedInOutcome(await signedInPage(pageURL), code: link.code, loggedOutMessage: message) {
+            switch signedInOutcome(await signedInPage(address), code: link.code, loggedOutMessage: message) {
             case .resolved(let resolved): post = resolved
             case .cancelled: return false
-            case .failed(let message, _, _):
+            case .failed(let message, _, _, _):
                 item.status = .failed(message)
                 return false
             }
@@ -179,12 +185,14 @@ enum ThreadsService {
 
     private enum PageOutcome {
         case resolved(ResolvedPost)
-        /// `failure` is nil when the request itself failed.
-        case failed(message: String, mayBeTransient: Bool, failure: Failure?)
+        /// `failure` is nil when the request itself failed. `endedAt` is
+        /// the address the request's redirects ended at.
+        case failed(message: String, mayBeTransient: Bool, failure: Failure?, endedAt: URL? = nil)
         case cancelled
     }
 
-    /// Requests the post's page with the owner's login, once. Supplied by
+    /// Requests the page at the address given with the owner's login, once.
+    /// The address is `signedInAddress`'s, not the link's. Supplied by
     /// DownloadManager, which owns the settings, the tool and the process
     /// registry; a seam for tests.
     typealias SignedInPageFetch = @MainActor (URL) async -> ThreadsSignedInPage.Outcome
@@ -196,6 +204,23 @@ enum ThreadsService {
         case .restricted, .loginRequired: return true
         case .notFound, .blockedShell, .noPostData, .noMedia: return false
         }
+    }
+
+    /// The address the signed-in try asks for, nil when there is none it can
+    /// ask for safely. yt-dlp answers a redirect with a second request, and
+    /// the login travels with both, so the address must be one Threads
+    /// answers in place. That is the post address the logged-out request
+    /// ENDED at: Threads moves `/t/<code>` and a wrong or changed username
+    /// there. When the logged-out request ended somewhere else (the login
+    /// page), the link's own address stands in if it names the author; a
+    /// `/t/<code>` link has nothing to stand in.
+    static func signedInAddress(for link: PostLink, requested: URL, loggedOutEnd: URL?) -> URL? {
+        if let loggedOutEnd, loggedOutEnd.scheme?.lowercased() == "https", loggedOutEnd.host?.lowercased() == "www.threads.com",
+            let ended = parseLink(loggedOutEnd.absoluteString), ended.code == link.code, ended.username != nil
+        {
+            return canonicalURL(for: ended)
+        }
+        return link.username == nil ? nil : requested
     }
 
     /// What the signed-in try leaves. `loggedOutMessage` stands when the
@@ -212,12 +237,20 @@ enum ThreadsService {
             return .failed(message: signedInToolMissingMessage, mayBeTransient: false, failure: nil)
         case .failed(let failure):
             return .failed(message: message(for: failure), mayBeTransient: false, failure: nil)
+        case .httpStatus(let status):
+            return .failed(message: signedInHTTPStatusMessage(status), mayBeTransient: false, failure: nil)
         case .page(let page, let usedCookiesFile):
             switch resolve(html: page.html, finalURL: page.finalURL, code: code) {
             case .success(let post):
+                // Redirected after all: that took more than the one
+                // request, and a download must not make it look like the
+                // link is fine to use again.
+                if page.redirected { return .failed(message: signedInRedirectedMessage, mayBeTransient: false, failure: nil) }
                 return .resolved(post)
             case .failure(let failure):
                 // Still withheld: the login has no Threads sign-in in it.
+                // A redirected run keeps these messages: where Threads sent
+                // the request is the reason (its login page, for one).
                 let text =
                     needsSignIn(failure)
                     ? (usedCookiesFile ? signInMissingInCookiesFileMessage : signInMissingInBrowserMessage)
@@ -248,7 +281,8 @@ enum ThreadsService {
         case .success(let post):
             return .resolved(post)
         case .failure(let failure):
-            return .failed(message: message(for: failure), mayBeTransient: mayBeTransient(failure), failure: failure)
+            return .failed(
+                message: message(for: failure), mayBeTransient: mayBeTransient(failure), failure: failure, endedAt: response.url)
         }
     }
 
@@ -286,8 +320,22 @@ enum ThreadsService {
     static let signedInToolNotStartedMessage =
         "Threads only shows this post to signed-in visitors — yt-dlp, which reads it with your sign-in, couldn't be started. "
         + "Reinstall yt-dlp, then Retry."
+    static let signedInToolOutdatedMessage =
+        "Threads only shows this post to signed-in visitors — the installed yt-dlp is too old to read it with your sign-in. "
+        + "Update yt-dlp, then Retry."
+    // Reading the browser's cookies can wait on a macOS prompt; the tool
+    // cannot tell that apart from a server that does not answer.
     static let signedInTimedOutMessage =
-        "Couldn't load the post from Threads with your sign-in — no answer in time. Check the connection, then Retry."
+        "Couldn't load the post from Threads with your sign-in — no answer in time. "
+        + "If macOS is asking for permission to read the browser's cookie storage, allow it; otherwise check the connection. Then Retry."
+    // The link carries no author, so there is no address the login could
+    // be sent to without Threads redirecting it.
+    static let signedInNeedsFullLinkMessage =
+        "Threads only shows this post to signed-in visitors, and a short link can't be read with your sign-in — "
+        + "open the post on threads.com and paste its full link (the one with the author's name) instead."
+    static let signedInRedirectedMessage =
+        "Threads moved this link to another address, so the post wasn't downloaded with your sign-in — "
+        + "open the post on threads.com and paste its link from there instead."
     static let signedInNoPageMessage =
         "Couldn't load the post from Threads with your sign-in — check the connection, then Retry."
     static let signedInUndecodableMessage =
@@ -304,6 +352,18 @@ enum ThreadsService {
         "Couldn't load the post from Threads — \(DirectDownload.shortReason(for: failure)). Check the connection, then Retry."
     }
 
+    /// The signed-in request was answered with an HTTP error status. Too
+    /// many requests is the one status where a Retry right away makes
+    /// things worse.
+    static func signedInHTTPStatusMessage(_ status: Int) -> String {
+        let reason = DirectDownload.shortReason(for: .httpStatus(status))
+        guard status != 429 else {
+            return "Couldn't load the post from Threads with your sign-in — \(reason). "
+                + "Threads is limiting requests: wait a few minutes before you Retry."
+        }
+        return "Couldn't load the post from Threads with your sign-in — \(reason). Check the connection, then Retry."
+    }
+
     /// The post resolved, but not one of its files could be saved. A Retry
     /// resolves the post again, so it also gets fresh media addresses.
     static func nothingSavedMessage(lastFailure: DirectDownload.FileFailure?) -> String {
@@ -317,6 +377,7 @@ enum ThreadsService {
         switch failure {
         case .toolNotStarted: return signedInToolNotStartedMessage
         case .cookiesUnreadable: return YtDlpService.cookieDatabaseMessage
+        case .toolOutdated: return signedInToolOutdatedMessage
         case .timedOut: return signedInTimedOutMessage
         case .noPage: return signedInNoPageMessage
         case .undecodable: return signedInUndecodableMessage
