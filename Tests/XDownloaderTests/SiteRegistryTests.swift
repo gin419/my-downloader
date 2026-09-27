@@ -23,6 +23,82 @@ final class SiteRegistryTests: XCTestCase {
         XCTAssertEqual(SiteRegistry.profile(for: "https://instagr.am/p/Daoe_4TTVY0/").id, "instagram")
     }
 
+    /// Threads is matched by HOST. The other profiles match by substring,
+    /// which is why `threads` leads the registry: "/@fox.com/post/…"
+    /// contains "x.com/".
+    func testThreadsProfileMatching() {
+        let threads = [
+            "https://www.threads.com/@someone.invented/post/AbCdEfGhIjK",
+            "https://www.threads.net/@user/post/CODE",
+            "https://threads.net/t/CODE",
+            "https://WWW.THREADS.COM/@a/post/B",
+            "https://www.threads.com/@fox.com/post/CODE",
+            "https://www.threads.com/@netflix.com/post/CODE",
+            "https://www.threads.com/@user/post/CODE/media",
+            "https://www.threads.com/@user/post/CODE?xmt=AQF0abc&slof=1",
+            // Not a post, but still this site's to turn down.
+            "https://www.threads.com/@someone.invented",
+        ]
+        for link in threads {
+            XCTAssertEqual(SiteRegistry.profile(for: link).id, "threads", link)
+        }
+
+        let other = [
+            // A look-alike domain.
+            "https://somethreads.com/a",
+            "https://threads.com.example.org/@a/post/B",
+            // A Threads link carried in another site's query string.
+            "https://example.com/?u=https://www.threads.com/@a/post/B",
+            "https://example.com/threads.com/@a/post/B",
+        ]
+        for link in other {
+            XCTAssertEqual(SiteRegistry.profile(for: link).id, "other", link)
+        }
+
+        XCTAssertEqual(SiteRegistry.profile(for: "https://x.com/a/status/1").id, "twitter")
+        XCTAssertEqual(SiteRegistry.profile(for: "https://www.instagram.com/p/Daoe_4TTVY0/").id, "instagram")
+    }
+
+    func testThreadsLeadsTheRegistryAndTheCatchAllEndsIt() {
+        XCTAssertEqual(SiteRegistry.all.first?.id, "threads")
+        XCTAssertEqual(SiteRegistry.all.last?.id, "other")
+        XCTAssertEqual(SiteRegistry.all.map(\.id), ["threads", "twitter", "youtube", "reddit", "instagram", "other"])
+    }
+
+    /// Threads: the in-app resolver is the only downloader. yt-dlp has no
+    /// extractor for the site, so it is skipped; no external tool is involved
+    /// and there is no photo sweep to run.
+    func testThreadsProfileDeclaration() {
+        let threads = SiteRegistry.threads
+        XCTAssertEqual(threads.fallbacks, [.threads])
+        XCTAssertFalse(threads.usesYtDlp)
+        XCTAssertNil(threads.imageSweepArgs)
+        XCTAssertEqual(threads.galleryDlArgs, [])
+        XCTAssertEqual(threads.outputTemplateSuffix, "")
+        XCTAssertFalse(threads.supportsSubtitles)
+        XCTAssertFalse(threads.usesYouTubeFormatSelector)
+        XCTAssertFalse(threads.extractorTitleIncludesUploader)
+        XCTAssertFalse(threads.detectsExternalRedirect)
+    }
+
+    func testEveryOtherProfileStillRunsYtDlp() {
+        for profile in SiteRegistry.all where profile.id != "threads" {
+            XCTAssertTrue(profile.usesYtDlp, profile.id)
+        }
+    }
+
+    /// A site that skips yt-dlp has only its fallbacks. If all of them were
+    /// external tools, a Mac without those tools could never download the
+    /// site, and the run would end with no downloader having run at all.
+    func testEverySiteThatSkipsYtDlpHasAFallbackNeedingNoExternalTool() {
+        for profile in SiteRegistry.all where !profile.usesYtDlp {
+            XCTAssertTrue(profile.fallbacks.contains { !$0.needsExternalTool }, profile.id)
+        }
+        XCTAssertTrue(SiteProfile.Fallback.galleryDl.needsExternalTool)
+        XCTAssertFalse(SiteProfile.Fallback.fxTwitter.needsExternalTool)
+        XCTAssertFalse(SiteProfile.Fallback.threads.needsExternalTool)
+    }
+
     func testCapabilityFlags() {
         let yt = SiteRegistry.profile(for: "https://www.youtube.com/watch?v=x")
         XCTAssertTrue(yt.supportsSubtitles)

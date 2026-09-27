@@ -20,6 +20,8 @@ let package = Package(
             name: "XDownloaderTests",
             dependencies: ["XDownloader"],
             path: "Tests/XDownloaderTests",
+            // Synthetic Threads pages (invented values only), read by ThreadsResolverTests.
+            resources: [.copy("Fixtures")],
             linkerSettings: [.linkedLibrary("sqlite3")]
         )
     ]

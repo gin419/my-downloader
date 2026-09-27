@@ -65,6 +65,21 @@ final class URLExtractionTests: XCTestCase {
         XCTAssertEqual(DownloadManager.extractURLs(from: "see x.com/a/status/1 today"), [])
     }
 
+    func testBareThreadsLinkIsAcceptedDespiteTheAtSignInItsPath() {
+        XCTAssertEqual(
+            DownloadManager.extractURLs(from: "www.threads.com/@someone.invented/post/AbCdEfGhIjK"),
+            ["https://www.threads.com/@someone.invented/post/AbCdEfGhIjK"]
+        )
+        XCTAssertEqual(
+            DownloadManager.extractURLs(from: "threads.net/t/AbCdEfGhIjK"),
+            ["https://threads.net/t/AbCdEfGhIjK"]
+        )
+        // "@" before the path is still an e-mail address or a login, never
+        // a link to download.
+        XCTAssertEqual(DownloadManager.extractURLs(from: "user@example.com/inbox"), [])
+        XCTAssertEqual(DownloadManager.extractURLs(from: "user:secret@example.com/@a/post/b"), [])
+    }
+
     func testEmailAndPlainWordsAreNotBareURLs() {
         XCTAssertEqual(DownloadManager.extractURLs(from: "user@example.com"), [])
         XCTAssertEqual(DownloadManager.extractURLs(from: "hello"), [])

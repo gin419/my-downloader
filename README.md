@@ -7,8 +7,8 @@
 **Paste a link. Get the file. That's it.**
 
 A native macOS app for downloading videos and images from X (Twitter), YouTube,
-Instagram, and 1,000+ other sites — powered by `yt-dlp` and `gallery-dl`,
-wrapped in a clean SwiftUI front end.
+Instagram, Threads, and 1,000+ other sites — powered by `yt-dlp` and
+`gallery-dl`, wrapped in a clean SwiftUI front end.
 
 [![Latest release](https://img.shields.io/github/v/release/gin419/my-downloader?style=flat-square&color=000)](https://github.com/gin419/my-downloader/releases/latest)
 [![macOS 14+ Universal](https://img.shields.io/badge/macOS-14%2B%20Universal-000?style=flat-square&logo=apple)](#requirements)
@@ -135,6 +135,7 @@ After `./build.sh`, drag the resulting `XDownloader.app` to `/Applications/`.
 - **X / Twitter videos** via `yt-dlp` + your browser cookies
 - **X / Twitter images** via `gallery-dl` fallback (multi-image aware)
 - **Instagram** — Reels, videos & video carousels via `yt-dlp`, image & mixed carousels via the `gallery-dl` fallback (sign in to Instagram in your cookie-source browser)
+- **Threads** — photos, videos & multi-item posts from public posts, read by the app itself (no extra tool, no login; posts that need sign-in are not supported yet)
 - **YouTube** and any other `yt-dlp`-supported site
 - **Smart fallback** when `yt-dlp` follows an external link out of a tweet
 - **Tracking parameter stripping** before download

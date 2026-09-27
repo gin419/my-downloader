@@ -161,74 +161,31 @@ enum FxTwitterService {
 
     // MARK: - Per-file outcome truth
 
-    /// Why one file of the tweet's media set failed to reach the download
-    /// folder. The loop keeps the LAST one: with several failed files it is
-    /// the freshest evidence, and a disk-full cascade fails every move the
-    /// same way.
-    enum FileFailure {
-        /// The CDN answered, but not with the file (e.g. a twimg 404 for
-        /// since-removed media).
-        case httpStatus(Int)
-        /// The transfer itself failed (offline, timeout, dropped connection).
-        case transport(Error)
-        /// The downloaded bytes couldn't be moved into the download folder.
-        case move(Error)
-    }
+    // The per-file outcome logic is shared with the other in-app resolvers
+    // and lives in DirectDownload; these names forward to it so the wording
+    // stays one thing in one place.
 
-    /// True for the CocoaError codes `moveItem` throws when the destination
-    /// volume is full or not writable — a LOCAL cause no retry against the
-    /// CDN can fix, and one the tweet must never be blamed for.
+    typealias FileFailure = DirectDownload.FileFailure
+
     static func isDiskWriteError(_ error: Error) -> Bool {
-        let nsError = error as NSError
-        guard nsError.domain == NSCocoaErrorDomain else { return false }
-        return nsError.code == CocoaError.fileWriteOutOfSpace.rawValue
-            || nsError.code == CocoaError.fileWriteNoPermission.rawValue
+        DirectDownload.isDiskWriteError(error)
     }
 
-    /// Zero files saved AND every byte already downloaded had nowhere to go:
-    /// name the disk, not the tweet.
-    static let diskUnwritableMessage =
-        "The download folder's disk is full or not writable — free space or fix permissions, then Retry."
+    static let diskUnwritableMessage = DirectDownload.diskUnwritableMessage
 
-    /// Short human-readable cause embedded in the partial-failure message.
     static func shortReason(for failure: FileFailure) -> String {
-        switch failure {
-        case .httpStatus(let code):
-            return "the server returned HTTP \(code)"
-        case .transport(let error):
-            let nsError = error as NSError
-            guard nsError.domain == NSURLErrorDomain else {
-                return "a network error interrupted the transfer"
-            }
-            switch nsError.code {
-            case NSURLErrorTimedOut: return "the connection timed out"
-            case NSURLErrorNotConnectedToInternet: return "the network is offline"
-            case NSURLErrorNetworkConnectionLost: return "the connection was lost mid-transfer"
-            default: return "a network error interrupted the transfer"
-            }
-        case .move(let error):
-            return isDiskWriteError(error)
-                ? "the download folder's disk is full or not writable"
-                : "the file couldn't be saved to the download folder"
-        }
+        DirectDownload.shortReason(for: failure)
     }
 
-    /// Some of the tweet's files are on disk, some aren't. `saved` counts
-    /// what is ON DISK (this run's downloads AND dedupe-skipped files from
-    /// earlier runs) — so the verb is "Saved", never "Downloaded": a retry
-    /// that skipped 3 existing files and failed the 4th downloaded nothing.
-    /// Retry is dedup-safe — existing files are skipped — so it only fetches
-    /// the rest.
     static func partialFailureMessage(saved: Int, attempted: Int, lastFailure: FileFailure) -> String {
-        "Saved \(saved) of \(attempted) files — \(shortReason(for: lastFailure)). Retry fetches the rest."
+        DirectDownload.partialFailureMessage(saved: saved, attempted: attempted, lastFailure: lastFailure)
     }
 
     /// Zero files saved: only a disk write error is a LOCAL cause that must
     /// replace the restored (tweet-blaming) prior message; anything else
     /// returns nil and keeps the prior, more informative failure.
     static func zeroSavedFailureMessage(lastFailure: FileFailure?) -> String? {
-        guard case .move(let error)? = lastFailure, isDiskWriteError(error) else { return nil }
-        return diskUnwritableMessage
+        DirectDownload.zeroSavedFailureMessage(lastFailure: lastFailure)
     }
 
     // MARK: - Private
@@ -252,11 +209,8 @@ enum FxTwitterService {
     }
 
     /// Keep filenames in step with what gallery-dl produces for the same
-    /// tweet: path separators become "_", newlines collapse to spaces.
+    /// tweet (see DirectDownload.sanitize).
     static func sanitize(_ s: String) -> String {
-        s.replacingOccurrences(of: "/", with: "_")
-            .replacingOccurrences(of: "\n", with: " ")
-            .replacingOccurrences(of: "\r", with: " ")
-            .trimmingCharacters(in: .whitespaces)
+        DirectDownload.sanitize(s)
     }
 }

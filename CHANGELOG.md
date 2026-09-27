@@ -6,6 +6,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Entries before _Unreleased_ were back-filled from git history.
 
+## [Unreleased]
+
+### Added
+- **Threads** — paste a link to a public Threads post (threads.com or
+  threads.net) and its photos and videos download: single images, videos,
+  and multi-item posts in their original order. The app reads the post
+  itself, so no extra tool is involved and yt-dlp is skipped for these
+  links. Files are named like X downloads —
+  `<author> - <text> [<post code>]`, numbered for multi-file posts — and
+  files already in the folder are not fetched again. The row shows a live
+  progress bar with size and speed. A post with no media of its own that
+  quotes or reposts another post downloads that post's media, named after
+  its original author.
+- **Threads failures say what happened** — a profile or search link is
+  turned down (the app never downloads a whole account), and a deleted
+  post, a post without photo or video, and a post Threads only shows to
+  signed-in visitors each get their own message. Signed-in Threads posts
+  are not supported yet: downloads run logged out and use no browser
+  cookies.
+
+### Changed
+- **Share-link cleanup** — Threads share parameters (`xmt`, `slof`) are
+  stripped like the other tracking parameters, so a shared link is
+  recognised as the same post as its plain link.
+
 ## [1.11.0] — 2026-08-17
 
 ### Added

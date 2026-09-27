@@ -199,6 +199,80 @@ final class FailureMessageCompositionTests: XCTestCase {
         XCTAssertNil(item.externalRedirectURL)
         XCTAssertEqual(item.status, .queued)
     }
+
+    // MARK: - Sites that skip yt-dlp
+
+    func testSkippedYtDlpWithNoResultFailsWithoutBlamingYtDlp() {
+        // yt-dlp never ran, so the result the manager holds for it is the
+        // untouched initial value (exit 0). Read as a real exit it would say
+        // "yt-dlp reported success…" and re-run the item after 5 seconds.
+        // Built like the tests above: a manager on temporary stores, and an
+        // item that is NOT in its list, so nothing is spawned or fetched.
+        let manager = makeManager()
+        XCTAssertTrue(manager.items.isEmpty)
+        let item = DownloadItem(url: "https://www.threads.com/@someone.invented/post/AbCdEfGhIjK")
+        let profile = SiteRegistry.profile(for: item.url)
+        XCTAssertFalse(profile.usesYtDlp)
+        item.status = .fetching
+
+        DownloadManager.settleOutcomeWithoutFallback(
+            item, ranYtDlp: profile.usesYtDlp, ytResult: ProcessResult(code: 0, wasSignal: false))
+        DownloadManager.ensureTerminalStatus(item)
+
+        XCTAssertEqual(item.status, .failed(DownloadManager.noDownloaderRanMessage))
+        XCTAssertEqual(
+            DownloadManager.noDownloaderRanMessage,
+            "Nothing on this Mac could download this link — update XDownloader, then Retry.")
+        XCTAssertNotEqual(item.status, .failed(DownloadManager.ytDlpEmptySuccessMessage))
+        if case .failed(let message) = item.status { XCTAssertFalse(message.contains("yt-dlp"), message) }
+        XCTAssertFalse(item.emptySuccessFailure)
+        XCTAssertFalse(DownloadManager.shouldAutoRetryEmptySuccess(item), "a run that never happened must not be re-run")
+    }
+
+    func testSitesThatRunYtDlpKeepTheirEmptySuccessOutcome() {
+        let item = DownloadItem(url: "https://example.com/p")
+        item.status = .fetching
+
+        DownloadManager.settleOutcomeWithoutFallback(item, ranYtDlp: true, ytResult: ProcessResult(code: 0, wasSignal: false))
+
+        XCTAssertEqual(item.status, .failed(DownloadManager.ytDlpEmptySuccessMessage))
+        XCTAssertTrue(item.emptySuccessFailure)
+    }
+
+    func testAFailureAlreadyOnTheRowIsKept() {
+        let item = DownloadItem(url: "https://www.threads.com/@someone.invented/post/AbCdEfGhIjK")
+        item.status = .failed(ThreadsService.restrictedMessage)
+
+        DownloadManager.settleOutcomeWithoutFallback(item, ranYtDlp: false, ytResult: ProcessResult(code: 0, wasSignal: false))
+        DownloadManager.ensureTerminalStatus(item)
+
+        XCTAssertEqual(item.status, .failed(ThreadsService.restrictedMessage))
+    }
+
+    func testARunCanNeverEndInANonTerminalStatus() {
+        // A row left "fetching" is never written to history and is queued
+        // again on every launch.
+        for status in [DownloadStatus.queued, .fetching, .downloading, .paused] {
+            let item = DownloadItem(url: "https://www.threads.com/@someone.invented/post/AbCdEfGhIjK")
+            item.status = status
+            item.eta = "5 minutes (rate limited)"
+            item.speed = "1.00MiB/s"
+            item.emptySuccessFailure = true
+
+            DownloadManager.ensureTerminalStatus(item)
+
+            XCTAssertEqual(item.status, .failed(DownloadManager.noOutcomeMessage))
+            XCTAssertNil(item.eta)
+            XCTAssertNil(item.speed)
+            XCTAssertFalse(DownloadManager.shouldAutoRetryEmptySuccess(item))
+        }
+        XCTAssertEqual(DownloadManager.noOutcomeMessage, "The download stopped without a result — Retry.")
+
+        let done = DownloadItem(url: "https://www.threads.com/@someone.invented/post/AbCdEfGhIjK")
+        done.markCompleted()
+        DownloadManager.ensureTerminalStatus(done)
+        XCTAssertEqual(done.status, .completed)
+    }
 }
 
 // The former EmptySuccessMatcherTests pinned the string predicate
