@@ -1724,6 +1724,16 @@ class DownloadManager: ObservableObject {
         if youtubeFormat == .audioOnly { item.mediaCategory = .audio }
 
         let profile = SiteRegistry.profile(for: item.url)
+        // A link its site turns down ends here, before anything is looked
+        // up or started — cookies included. Every run passes through, so a
+        // row restored from the queue is judged like one just pasted, and
+        // the flag is cleared so that nothing re-runs it unasked.
+        if let message = SiteRegistry.refusalMessage(for: item.url) {
+            item.emptySuccessFailure = false
+            item.status = .failed(message)
+            finalize(item)
+            return
+        }
         // The address comes first: without it there is nothing to hand
         // yt-dlp. Every run asks again — a first run, a Retry, a Resume and
         // the re-runs below all pass through here.
