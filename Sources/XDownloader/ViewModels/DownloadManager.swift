@@ -74,7 +74,8 @@ class DownloadManager: ObservableObject {
     private var likesRunRecordedRunLevelFailure = false
     /// In-flight in-app resolvers (FxTwitterService, ThreadsService) —
     /// URLSession Tasks, so they need Task.cancel() rather than
-    /// Process.terminate() when the user hits Stop.
+    /// Process.terminate() when the user hits Stop. (The Threads resolver's
+    /// signed-in try also has a Process, in `activeProcesses`.)
     private var activeResolverTasks: [UUID: Task<Bool, Never>] = [:]
     private var downloadQueue: [DownloadItem] = []
     /// Overflow behind `pendingDuplicates`: each capture's duplicates present
@@ -1691,8 +1692,9 @@ class DownloadManager: ObservableObject {
         let effectiveSubtitleLanguage: SubtitleLanguage = item.subtitlesDisabled ? .none : subtitleLanguage
 
         let profile = SiteRegistry.profile(for: item.url)
-        // A site that skips yt-dlp runs no tool that takes cookies, so the
-        // cookies file is not even looked up for it.
+        // A site that skips yt-dlp takes no cookies for its download, so the
+        // cookies file is not looked up for it here. (Threads looks it up
+        // itself, and only for a post that needs the signed-in second try.)
         let cookies: (path: String?, granted: URL?) = profile.usesYtDlp ? resolveCookiesForDownload() : (nil, nil)
         var ytResult = ProcessResult(code: 0, wasSignal: false)
         if profile.usesYtDlp {
@@ -1832,8 +1834,10 @@ class DownloadManager: ObservableObject {
                 ranFallback = true
                 let directory = outputDirectory
                 let session = threadsSession
-                let stopped = await runResolverTask(item) {
-                    await ThreadsService.run(item: item, outputDirectory: directory, session: session)
+                let stopped = await runResolverTask(item) { [weak self] in
+                    await ThreadsService.run(item: item, outputDirectory: directory, session: session) { pageURL in
+                        await self?.fetchThreadsPageSignedIn(pageURL, for: item) ?? .cancelled
+                    }
                 }
                 if stopped { return }  // user pressed Stop mid-run
             }
@@ -1977,6 +1981,28 @@ class DownloadManager: ObservableObject {
         // file, so the next fallback never inherits a stale
         // "rate limited — resuming in 14 minutes" note.
         if item.outputPath == nil { item.eta = nil }
+    }
+
+    /// The signed-in second try for a Threads post (see ThreadsSignedInPage):
+    /// yt-dlp requests the page with the login Settings name. Runs inside
+    /// the resolver's Task, and the tool is registered in `activeProcesses`,
+    /// so Stop and the row's ✕ reach both. The cookies file is looked up
+    /// only here — a public post never gets this far.
+    private func fetchThreadsPageSignedIn(_ pageURL: URL, for item: DownloadItem) async -> ThreadsSignedInPage.Outcome {
+        let cookies = resolveCookiesForDownload()
+        let cookieArguments = CookieArgs.make(browser: cookieBrowser, profile: cookieBrowserProfile, file: cookies.path)
+        guard !cookieArguments.isEmpty else { return .noCookieSource }
+        guard let tool = ytDlpPathProvider() else { return .toolMissing }
+        return await cookieAccess.withScope(for: item.id, file: cookies.path, grantedURL: cookies.granted) {
+            await ThreadsSignedInPage.fetch(
+                pageURL,
+                executablePath: tool,
+                cookieArguments: cookieArguments,
+                usedCookiesFile: cookies.path != nil,
+                register: { [weak self] p in self?.activeProcesses[item.id] = p },
+                unregister: { [weak self] in self?.activeProcesses.removeValue(forKey: item.id) }
+            )
+        }
     }
 
     /// Last-resort fallback: X's GraphQL APIs sometimes hide tweets from

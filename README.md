@@ -135,7 +135,7 @@ After `./build.sh`, drag the resulting `XDownloader.app` to `/Applications/`.
 - **X / Twitter videos** via `yt-dlp` + your browser cookies
 - **X / Twitter images** via `gallery-dl` fallback (multi-image aware)
 - **Instagram** — Reels, videos & video carousels via `yt-dlp`, image & mixed carousels via the `gallery-dl` fallback (sign in to Instagram in your cookie-source browser)
-- **Threads** — photos, videos & multi-item posts from public posts, read by the app itself (no extra tool, no login; posts that need sign-in are not supported yet)
+- **Threads** — photos, videos & multi-item posts from public posts, read by the app itself (no extra tool, no login). A post Threads only shows to signed-in visitors gets one second try with your browser login, through `yt-dlp`: a single request, no cookie file written (sign in at threads.com in your cookie-source browser — an Instagram sign-in alone is not enough)
 - **YouTube** and any other `yt-dlp`-supported site
 - **Smart fallback** when `yt-dlp` follows an external link out of a tweet
 - **Tracking parameter stripping** before download

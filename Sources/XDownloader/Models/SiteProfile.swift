@@ -166,7 +166,10 @@ enum SiteRegistry {
     )
 
     /// Threads: neither yt-dlp nor gallery-dl can read it, so the in-app
-    /// resolver is the only downloader and yt-dlp is skipped. Matching is by
+    /// resolver is the only downloader and yt-dlp is skipped. (For a post
+    /// Threads withholds from logged-out visitors the resolver has yt-dlp
+    /// request the page once with the browser login; public posts need no
+    /// tool.) Matching is by
     /// host, never by substring: a substring test claims "somethreads.com"
     /// and any link that merely carries a Threads address in its query, and
     /// misses an uppercase host.

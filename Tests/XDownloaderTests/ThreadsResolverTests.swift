@@ -543,11 +543,12 @@ final class ThreadsResolverTests: XCTestCase {
             "Threads post not found — it may be deleted, or the link may be incomplete; check the link, then Retry.")
         XCTAssertEqual(
             ThreadsService.loginRequiredMessage,
-            "This post needs sign-in at threads.com — XDownloader can't download signed-in Threads posts yet, so Retry won't help for now.")
+            "This post needs sign-in at threads.com — choose your browser in Settings → Cookies and sign in at threads.com there "
+                + "(an Instagram sign-in alone is not enough), then Retry.")
         XCTAssertEqual(
             ThreadsService.restrictedMessage,
-            "Threads limits who can see this post — it needs sign-in at threads.com, which XDownloader can't use yet, "
-                + "so Retry won't help for now.")
+            "Threads limits who can see this post — choose your browser in Settings → Cookies and sign in at threads.com there "
+                + "(an Instagram sign-in alone is not enough), then Retry.")
         XCTAssertEqual(
             ThreadsService.blockedShellMessage,
             "Threads returned an empty page — the link may be malformed, or Threads changed its site; check the link, then Retry.")
@@ -568,11 +569,11 @@ final class ThreadsResolverTests: XCTestCase {
         XCTAssertEqual(ThreadsService.message(for: .blockedShell), ThreadsService.blockedShellMessage)
         XCTAssertEqual(ThreadsService.message(for: .noPostData), ThreadsService.noPostDataMessage)
         XCTAssertEqual(ThreadsService.message(for: .noMedia), ThreadsService.noMediaMessage)
-        // Both sign-in failures name the site to sign in to, and neither
-        // sends the owner to Settings → Cookies: this build reads no cookies.
+        // Both sign-in failures name the site to sign in to, and where the
+        // browser to sign in with is chosen.
         for message in [ThreadsService.restrictedMessage, ThreadsService.loginRequiredMessage] {
-            XCTAssertTrue(message.contains("sign-in at threads.com"))
-            XCTAssertFalse(message.contains("Settings"))
+            XCTAssertTrue(message.contains("sign in at threads.com"))
+            XCTAssertTrue(message.contains("Settings → Cookies"))
         }
     }
 }

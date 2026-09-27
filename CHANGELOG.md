@@ -22,9 +22,17 @@ Entries before _Unreleased_ were back-filled from git history.
 - **Threads failures say what happened** — a profile or search link is
   turned down (the app never downloads a whole account), and a deleted
   post, a post without photo or video, and a post Threads only shows to
-  signed-in visitors each get their own message. Signed-in Threads posts
-  are not supported yet: downloads run logged out and use no browser
-  cookies.
+  signed-in visitors each get their own message.
+- **Threads posts that need sign-in** — every Threads download starts
+  logged out. Only when Threads answers that the post is limited to
+  signed-in visitors does the app try a second time with the login of the
+  browser (or cookies.txt) chosen in Settings → Cookies: one request for
+  the post's page, never repeated automatically. yt-dlp makes that request
+  and hands the page back, so no cookie file is written and XDownloader
+  never holds cookie contents; the photos and videos themselves are
+  fetched without cookies. Threads needs its own sign-in at threads.com —
+  an Instagram sign-in alone is not enough — and the message says so when
+  it is missing. Public posts never use the login and still need no tool.
 
 ### Changed
 - **Share-link cleanup** — Threads share parameters (`xmt`, `slof`) are

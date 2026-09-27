@@ -5,8 +5,11 @@ import Foundation
 /// every carousel child, original-resolution images and a progressive MP4 —
 /// as JSON inside a `<script type="application/json">` tag, so one page
 /// fetch resolves it. Everything but `run` is a pure function of the fetched
-/// page. No cookies are read or sent, and nothing resolved is ever stored,
-/// because the media addresses are signed and expire within days.
+/// page. The page is requested logged out; only when Threads withholds the
+/// post from logged-out visitors is it requested once more with the owner's
+/// browser login (see ThreadsSignedInPage). The files themselves are always
+/// fetched without cookies, and nothing resolved is ever stored, because the
+/// media addresses are signed and expire within days.
 enum ThreadsService {
 
     // MARK: - Running a download
@@ -21,8 +24,14 @@ enum ThreadsService {
     /// sets the paused state, or the row is already gone.
     ///
     /// `session` is a seam for tests; the default keeps and sends no cookies.
+    /// `signedInPage` is the signed-in second try, nil where there is none
+    /// to offer. It is called at most once per run, and only after the
+    /// logged-out page came back restricted or as the login page.
     @MainActor
-    static func run(item: DownloadItem, outputDirectory: URL, session: URLSession = DirectDownload.session) async -> Bool {
+    static func run(
+        item: DownloadItem, outputDirectory: URL, session: URLSession = DirectDownload.session,
+        signedInPage: SignedInPageFetch? = nil
+    ) async -> Bool {
         item.status = .fetching
         // While fetching, any eta is shown as a rate-limit wait.
         item.eta = nil
@@ -37,13 +46,27 @@ enum ThreadsService {
         }
 
         let post: ResolvedPost
+        var usedSignIn = false
         switch await fetchPost(at: pageURL, code: link.code, session: session) {
         case .resolved(let resolved): post = resolved
         case .cancelled: return false
-        case .failed(let message, let mayBeTransient):
-            item.emptySuccessFailure = mayBeTransient
-            item.status = .failed(message)
-            return false
+        case .failed(let message, let mayBeTransient, let failure):
+            guard let failure, needsSignIn(failure), let signedInPage else {
+                item.emptySuccessFailure = mayBeTransient
+                item.status = .failed(message)
+                return false
+            }
+            // The one signed-in request of this run. Whatever it ends in is
+            // final: the auto-retry stays off, or it would send the login a
+            // second time without being asked.
+            usedSignIn = true
+            switch signedInOutcome(await signedInPage(pageURL), code: link.code, loggedOutMessage: message) {
+            case .resolved(let resolved): post = resolved
+            case .cancelled: return false
+            case .failed(let message, _, _):
+                item.status = .failed(message)
+                return false
+            }
         }
 
         let stem = fileStem(author: post.author, text: post.text, code: post.code)
@@ -81,7 +104,9 @@ enum ThreadsService {
                     // The signed address ran out (or was refused): resolve
                     // the post afresh, once, and try this file again. A
                     // second refusal is reported like any other failure.
-                    if case .httpStatus(403) = failure, !resolvedAgain {
+                    // (Not for a post only the login could see: logged out
+                    // the answer is known, and the login is used once.)
+                    if case .httpStatus(403) = failure, !resolvedAgain, !usedSignIn {
                         resolvedAgain = true
                         item.status = .fetching
                         item.speed = nil
@@ -154,8 +179,52 @@ enum ThreadsService {
 
     private enum PageOutcome {
         case resolved(ResolvedPost)
-        case failed(message: String, mayBeTransient: Bool)
+        /// `failure` is nil when the request itself failed.
+        case failed(message: String, mayBeTransient: Bool, failure: Failure?)
         case cancelled
+    }
+
+    /// Requests the post's page with the owner's login, once. Supplied by
+    /// DownloadManager, which owns the settings, the tool and the process
+    /// registry; a seam for tests.
+    typealias SignedInPageFetch = @MainActor (URL) async -> ThreadsSignedInPage.Outcome
+
+    /// The two answers a login can change. Every other failure is the same
+    /// signed in, so the login is not sent for it.
+    static func needsSignIn(_ failure: Failure) -> Bool {
+        switch failure {
+        case .restricted, .loginRequired: return true
+        case .notFound, .blockedShell, .noPostData, .noMedia: return false
+        }
+    }
+
+    /// What the signed-in try leaves. `loggedOutMessage` stands when the
+    /// try could not be made at all.
+    private static func signedInOutcome(
+        _ outcome: ThreadsSignedInPage.Outcome, code: String, loggedOutMessage: String
+    ) -> PageOutcome {
+        switch outcome {
+        case .cancelled:
+            return .cancelled
+        case .noCookieSource:
+            return .failed(message: loggedOutMessage, mayBeTransient: false, failure: nil)
+        case .toolMissing:
+            return .failed(message: signedInToolMissingMessage, mayBeTransient: false, failure: nil)
+        case .failed(let failure):
+            return .failed(message: message(for: failure), mayBeTransient: false, failure: nil)
+        case .page(let page, let usedCookiesFile):
+            switch resolve(html: page.html, finalURL: page.finalURL, code: code) {
+            case .success(let post):
+                return .resolved(post)
+            case .failure(let failure):
+                // Still withheld: the login has no Threads sign-in in it.
+                let text =
+                    needsSignIn(failure)
+                    ? (usedCookiesFile ? signInMissingInCookiesFileMessage : signInMissingInBrowserMessage)
+                    : message(for: failure)
+                return .failed(message: text, mayBeTransient: false, failure: failure)
+            }
+        }
     }
 
     /// One page request, redirects followed. The address the redirects END
@@ -169,17 +238,17 @@ enum ThreadsService {
             (data, response) = try await session.data(for: DirectDownload.request(for: pageURL, headers: pageHeaders))
         } catch {
             if Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled { return .cancelled }
-            return .failed(message: pageUnreachableMessage(.transport(error)), mayBeTransient: false)
+            return .failed(message: pageUnreachableMessage(.transport(error)), mayBeTransient: false, failure: nil)
         }
         if Task.isCancelled { return .cancelled }
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-            return .failed(message: pageUnreachableMessage(.httpStatus(http.statusCode)), mayBeTransient: false)
+            return .failed(message: pageUnreachableMessage(.httpStatus(http.statusCode)), mayBeTransient: false, failure: nil)
         }
         switch resolve(html: String(decoding: data, as: UTF8.self), finalURL: response.url, code: code) {
         case .success(let post):
             return .resolved(post)
         case .failure(let failure):
-            return .failed(message: message(for: failure), mayBeTransient: mayBeTransient(failure))
+            return .failed(message: message(for: failure), mayBeTransient: mayBeTransient(failure), failure: failure)
         }
     }
 
@@ -194,10 +263,35 @@ enum ThreadsService {
         "This Threads link isn't a single post — open the post on threads.com and paste its own link instead."
     static let notFoundMessage =
         "Threads post not found — it may be deleted, or the link may be incomplete; check the link, then Retry."
+    // These two stand when no login could be tried: Settings name no
+    // browser and no cookies.txt.
     static let loginRequiredMessage =
-        "This post needs sign-in at threads.com — XDownloader can't download signed-in Threads posts yet, so Retry won't help for now."
+        "This post needs sign-in at threads.com — choose your browser in Settings → Cookies and sign in at threads.com there "
+        + "(an Instagram sign-in alone is not enough), then Retry."
     static let restrictedMessage =
-        "Threads limits who can see this post — it needs sign-in at threads.com, which XDownloader can't use yet, so Retry won't help for now."
+        "Threads limits who can see this post — choose your browser in Settings → Cookies and sign in at threads.com there "
+        + "(an Instagram sign-in alone is not enough), then Retry."
+    // The login was tried and Threads still withheld the post. The browser
+    // is the one in Settings, whichever that is.
+    static let signInMissingInBrowserMessage =
+        "Threads still hides this post — sign in at threads.com in the browser selected in Settings → Cookies "
+        + "(an Instagram sign-in alone is not enough), then Retry."
+    static let signInMissingInCookiesFileMessage =
+        "Threads still hides this post — the cookies.txt chosen in Settings → Cookies has no Threads sign-in. "
+        + "Clear it to use your browser, or export it again after signing in at threads.com "
+        + "(an Instagram sign-in alone is not enough), then Retry."
+    static let signedInToolMissingMessage =
+        "Threads only shows this post to signed-in visitors — reading it with your sign-in needs yt-dlp, which is not installed. "
+        + "Install yt-dlp, then Retry."
+    static let signedInToolNotStartedMessage =
+        "Threads only shows this post to signed-in visitors — yt-dlp, which reads it with your sign-in, couldn't be started. "
+        + "Reinstall yt-dlp, then Retry."
+    static let signedInTimedOutMessage =
+        "Couldn't load the post from Threads with your sign-in — no answer in time. Check the connection, then Retry."
+    static let signedInNoPageMessage =
+        "Couldn't load the post from Threads with your sign-in — check the connection, then Retry."
+    static let signedInUndecodableMessage =
+        "Couldn't read the page yt-dlp returned for this Threads post — update yt-dlp, then Retry."
     static let blockedShellMessage =
         "Threads returned an empty page — the link may be malformed, or Threads changed its site; check the link, then Retry."
     static let noPostDataMessage =
@@ -215,6 +309,18 @@ enum ThreadsService {
     static func nothingSavedMessage(lastFailure: DirectDownload.FileFailure?) -> String {
         guard let lastFailure else { return "None of this post's files could be saved — Retry." }
         return "None of this post's files could be saved — \(DirectDownload.shortReason(for: lastFailure)). Retry fetches them again."
+    }
+
+    /// The message a failed signed-in try puts on the row. Always one of
+    /// the app's own: nothing the tool printed is ever shown.
+    static func message(for failure: ThreadsSignedInPage.FetchFailure) -> String {
+        switch failure {
+        case .toolNotStarted: return signedInToolNotStartedMessage
+        case .cookiesUnreadable: return YtDlpService.cookieDatabaseMessage
+        case .timedOut: return signedInTimedOutMessage
+        case .noPage: return signedInNoPageMessage
+        case .undecodable: return signedInUndecodableMessage
+        }
     }
 
     /// The message a resolve failure puts on the row.
