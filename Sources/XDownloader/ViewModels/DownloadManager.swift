@@ -120,6 +120,9 @@ class DownloadManager: ObservableObject {
     /// What the Threads resolver fetches with. A seam for tests, like the
     /// two path providers above; the default keeps and sends no cookies.
     private let threadsSession: URLSession
+    /// The line the signed-in Threads requests stand in: one at a time,
+    /// app-wide. A seam for tests, which bring a line without the pause.
+    private let threadsSignedInTurn: ThreadsSignedInTurn
     /// Probes tool health on the app-lifecycle cadence; views reach it for
     /// forced refreshes (install sheet) and it feeds `toolHealths` above.
     let toolHealth: ToolHealthMonitor
@@ -149,6 +152,7 @@ class DownloadManager: ObservableObject {
             RequirementsService.ytdlp.installedPath
         },
         threadsSession: URLSession = DirectDownload.session,
+        threadsSignedInTurn: ThreadsSignedInTurn? = nil,
         toolHealthMonitor: ToolHealthMonitor? = nil
     ) {
         self.history = history ?? HistoryStore()
@@ -159,6 +163,7 @@ class DownloadManager: ObservableObject {
         self.galleryDlPathProvider = galleryDlPathProvider
         self.ytDlpPathProvider = ytDlpPathProvider
         self.threadsSession = threadsSession
+        self.threadsSignedInTurn = threadsSignedInTurn ?? .shared
         self.toolHealth = toolHealthMonitor ?? ToolHealthMonitor()
         let downloads =
             FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
@@ -742,6 +747,10 @@ class DownloadManager: ObservableObject {
     func pauseItem(_ item: DownloadItem) {
         switch item.status {
         case .downloading, .fetching:
+            break
+        case .queued where activeResolverTasks[item.id] != nil:
+            // A Threads row waiting for its signed-in turn: its run has
+            // started, and Stop takes it out of the line.
             break
         default:
             return
@@ -1988,21 +1997,29 @@ class DownloadManager: ObservableObject {
     /// the resolver's Task, and the tool is registered in `activeProcesses`,
     /// so Stop and the row's ✕ reach both. The cookies file is looked up
     /// only here — a public post never gets this far.
+    ///
+    /// The requests take turns (see ThreadsSignedInTurn). A row that has to
+    /// wait for its turn reads "Queued", which is what it is; cancelled
+    /// while it waits, it leaves the line and the tool is never started.
     private func fetchThreadsPageSignedIn(_ pageURL: URL, for item: DownloadItem) async -> ThreadsSignedInPage.Outcome {
         let cookies = resolveCookiesForDownload()
         let cookieArguments = CookieArgs.make(browser: cookieBrowser, profile: cookieBrowserProfile, file: cookies.path)
         guard !cookieArguments.isEmpty else { return .noCookieSource }
         guard let tool = ytDlpPathProvider() else { return .toolMissing }
-        return await cookieAccess.withScope(for: item.id, file: cookies.path, grantedURL: cookies.granted) {
-            await ThreadsSignedInPage.fetch(
-                pageURL,
-                executablePath: tool,
-                cookieArguments: cookieArguments,
-                usedCookiesFile: cookies.path != nil,
-                register: { [weak self] p in self?.activeProcesses[item.id] = p },
-                unregister: { [weak self] in self?.activeProcesses.removeValue(forKey: item.id) }
-            )
+        let outcome = await threadsSignedInTurn.run(whileWaiting: { item.status = .queued }) {
+            if item.status == .queued { item.status = .fetching }
+            return await cookieAccess.withScope(for: item.id, file: cookies.path, grantedURL: cookies.granted) {
+                await ThreadsSignedInPage.fetch(
+                    pageURL,
+                    executablePath: tool,
+                    cookieArguments: cookieArguments,
+                    usedCookiesFile: cookies.path != nil,
+                    register: { [weak self] p in self?.activeProcesses[item.id] = p },
+                    unregister: { [weak self] in self?.activeProcesses.removeValue(forKey: item.id) }
+                )
+            }
         }
+        return outcome ?? .cancelled
     }
 
     /// Last-resort fallback: X's GraphQL APIs sometimes hide tweets from

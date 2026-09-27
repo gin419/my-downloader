@@ -38,6 +38,10 @@ Entries before _Unreleased_ were back-filled from git history.
   cookies. Threads needs its own sign-in at threads.com — an Instagram
   sign-in alone is not enough — and the message says so when it is
   missing. Public posts never use the login and still need no tool.
+  Signed-in requests go out one at a time with a pause of about three
+  seconds between them, whatever the concurrency setting: several
+  restricted links pasted together wait their turn as "Queued" and can be
+  removed while they wait. Public posts and other sites are not held up.
 
 ### Changed
 - **Share-link cleanup** — Threads share parameters (`xmt`, `slof`) are
