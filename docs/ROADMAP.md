@@ -24,7 +24,7 @@ See [FEATURES.md](FEATURES.md) for the live feature list and
 
 ---
 
-## Shipped (current: v1.11.0)
+## Shipped (current: v1.12.0)
 
 Pillars 1 and 2 are live. Pillar 3 is live except the primed hero button:
 v1.11 added a brew-free first launch (standalone downloads, two-step
@@ -105,7 +105,7 @@ These were not on the v1.7 / v2.0 lists. They are live and stay out of the
   checkpoint) instead of a generic hiccup. Partial multi-file posts say
   "Saved N files — Retry fetches the rest". Rate-limit sleeps show
   "resuming in …" instead of looking hung.
-- **Threads** *(unreleased)* — public Threads posts (photos, videos,
+- **Threads** *(v1.12.0)* — public Threads posts (photos, videos,
   multi-item posts) download through an in-app reader: no external tool,
   no login, yt-dlp skipped. A post that needs sign-in gets one second try
   with the browser login (one signed-in try through yt-dlp; no cookie

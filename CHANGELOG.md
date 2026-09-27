@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Entries before _Unreleased_ were back-filled from git history.
 
-## [Unreleased]
+## [1.12.0] — 2026-09-28
 
 ### Added
 - **Threads** — paste a link to a public Threads post (threads.com or
@@ -55,6 +55,12 @@ Entries before _Unreleased_ were back-filled from git history.
 - **Share-link cleanup** — Threads share parameters (`xmt`, `slof`) are
   stripped like the other tracking parameters, so a shared link is
   recognised as the same post as its plain link.
+
+### Fixed
+- **A percent sign in a file name no longer reads as a failure** — when
+  the saved file's name contained `%`, yt-dlp's line naming the file was
+  mistaken for a progress line, so the path was lost and a download that
+  had finished was shown as having found nothing.
 
 ## [1.11.0] — 2026-08-17
 
