@@ -1,0 +1,218 @@
+[
+ {
+  "link": "https://www.threads.com/@example_author/post/SYNimage0001",
+  "fixture": "threads_single_image.html",
+  "expect_ok": true,
+  "expect_error": null,
+  "expect_media_source": "post",
+  "expect_media": [
+   {
+    "type": "image",
+    "url": "https://scontent.example.invalid/v/t51.00000-15/img_SYNimage0001_n.jpg?stp=dst-jpg_e35_tt6&_nc_cat=1&ccb=7-5&_nc_sid=000000&oh=00_SYNTHETIC&oe=7FFFFFFF",
+    "width": 1440,
+    "height": 1080
+   }
+  ],
+  "expect_author": "Example Author",
+  "expect_code": "SYNimage0001"
+ },
+ {
+  "link": "https://www.threads.com/@example_author/post/SYNwebp00001",
+  "fixture": "threads_single_image_webp_no_stp.html",
+  "expect_ok": true,
+  "expect_error": null,
+  "expect_media_source": "post",
+  "expect_media": [
+   {
+    "type": "image",
+    "url": "https://scontent.example.invalid/v/t51.00000-15/img_SYNwebp00001_n.webp?_nc_cat=1&ccb=7-5&oh=00_SYNTHETIC&oe=7FFFFFFF",
+    "width": 2160,
+    "height": 2700
+   }
+  ],
+  "expect_author": "Example Author",
+  "expect_code": "SYNwebp00001"
+ },
+ {
+  "link": "https://www.threads.com/@example_author/post/SYNcarousel1",
+  "fixture": "threads_image_carousel.html",
+  "expect_ok": true,
+  "expect_error": null,
+  "expect_media_source": "post",
+  "expect_media": [
+   {
+    "type": "image",
+    "url": "https://scontent.example.invalid/v/t51.00000-15/img_SYNc1a_n.jpg?stp=dst-jpg_e35_tt6&_nc_cat=1&ccb=7-5&_nc_sid=000000&oh=00_SYNTHETIC&oe=7FFFFFFF",
+    "width": 2048,
+    "height": 1184
+   },
+   {
+    "type": "image",
+    "url": "https://scontent.example.invalid/v/t51.00000-15/img_SYNc1b_n.jpg?stp=dst-jpg_e35_tt6&_nc_cat=1&ccb=7-5&_nc_sid=000000&oh=00_SYNTHETIC&oe=7FFFFFFF",
+    "width": 1984,
+    "height": 1440
+   },
+   {
+    "type": "image",
+    "url": "https://scontent.example.invalid/v/t51.00000-15/img_SYNc1c_n.jpg?stp=dst-jpg_e35_tt6&_nc_cat=1&ccb=7-5&_nc_sid=000000&oh=00_SYNTHETIC&oe=7FFFFFFF",
+    "width": 1440,
+    "height": 1440
+   }
+  ],
+  "expect_author": "Example Author",
+  "expect_code": "SYNcarousel1"
+ },
+ {
+  "link": "https://www.threads.com/@example_author/post/SYNvideo0001",
+  "fixture": "threads_single_video.html",
+  "expect_ok": true,
+  "expect_error": null,
+  "expect_media_source": "post",
+  "expect_media": [
+   {
+    "type": "video",
+    "url": "https://scontent.example.invalid/o1/v/t16/f2/m84/vid_SYNvideo0001.mp4?_nc_cat=1&_nc_sid=000000&ccb=17-1&oh=00_SYNTHETIC&oe=7FFFFFFF",
+    "width": null,
+    "height": null
+   }
+  ],
+  "expect_author": "Example Author",
+  "expect_code": "SYNvideo0001"
+ },
+ {
+  "link": "https://www.threads.com/@example_author/post/SYNmixed0001",
+  "fixture": "threads_mixed_carousel.html",
+  "expect_ok": true,
+  "expect_error": null,
+  "expect_media_source": "post",
+  "expect_media": [
+   {
+    "type": "image",
+    "url": "https://scontent.example.invalid/v/t51.00000-15/img_SYNm1a_n.jpg?stp=dst-jpg_e35_tt6&_nc_cat=1&ccb=7-5&_nc_sid=000000&oh=00_SYNTHETIC&oe=7FFFFFFF",
+    "width": 2160,
+    "height": 2700
+   },
+   {
+    "type": "video",
+    "url": "https://scontent.example.invalid/o1/v/t16/f2/m84/vid_SYNm1b.mp4?_nc_cat=1&_nc_sid=000000&ccb=17-1&oh=00_SYNTHETIC&oe=7FFFFFFF",
+    "width": null,
+    "height": null
+   },
+   {
+    "type": "image",
+    "url": "https://scontent.example.invalid/v/t51.00000-15/img_SYNm1c_n.jpg?stp=dst-jpg_e35_tt6&_nc_cat=1&ccb=7-5&_nc_sid=000000&oh=00_SYNTHETIC&oe=7FFFFFFF",
+    "width": 1638,
+    "height": 2048
+   }
+  ],
+  "expect_author": "Example Author",
+  "expect_code": "SYNmixed0001"
+ },
+ {
+  "link": "https://www.threads.com/@example_author/post/SYNtext00001",
+  "fixture": "threads_text_only.html",
+  "expect_ok": false,
+  "expect_error": "no_media",
+  "expect_media_source": null,
+  "expect_media": []
+ },
+ {
+  "link": "https://www.threads.com/@example_author/post/SYNquote0001",
+  "fixture": "threads_quote_with_video.html",
+  "expect_ok": true,
+  "expect_error": null,
+  "expect_media_source": "quoted_post",
+  "expect_media": [
+   {
+    "type": "video",
+    "url": "https://scontent.example.invalid/o1/v/t16/f2/m84/vid_SYNquoted001.mp4?_nc_cat=1&_nc_sid=000000&ccb=17-1&oh=00_SYNTHETIC&oe=7FFFFFFF",
+    "width": null,
+    "height": null
+   }
+  ],
+  "expect_author": "Other Person",
+  "expect_code": "SYNquoted001"
+ },
+ {
+  "link": "https://www.threads.com/@other_person/post/SYNreply0001",
+  "fixture": "threads_reply_with_image.html",
+  "expect_ok": true,
+  "expect_error": null,
+  "expect_media_source": "post",
+  "expect_media": [
+   {
+    "type": "image",
+    "url": "https://scontent.example.invalid/v/t51.00000-15/img_SYNreply0001_n.jpg?stp=dst-jpg_e35_tt6&_nc_cat=1&ccb=7-5&_nc_sid=000000&oh=00_SYNTHETIC&oe=7FFFFFFF",
+    "width": 2627,
+    "height": 1922
+   }
+  ],
+  "expect_author": "Other Person",
+  "expect_code": "SYNreply0001"
+ },
+ {
+  "link": "https://www.threads.com/@other_person/post/SYNgif000001",
+  "fixture": "threads_gif_placeholder.html",
+  "expect_ok": false,
+  "expect_error": "no_media",
+  "expect_media_source": null,
+  "expect_media": []
+ },
+ {
+  "link": "https://www.threads.com/@example_author/post/SYNlink00001",
+  "fixture": "threads_link_card_only.html",
+  "expect_ok": false,
+  "expect_error": "no_media",
+  "expect_media_source": null,
+  "expect_media": []
+ },
+ {
+  "link": "https://www.threads.com/@example_author/post/SYNlinked001",
+  "fixture": "threads_linked_inline_video.html",
+  "expect_ok": true,
+  "expect_error": null,
+  "expect_media_source": "linked_inline_media",
+  "expect_media": [
+   {
+    "type": "video",
+    "url": "https://scontent.example.invalid/o1/v/t16/f2/m84/vid_SYNreel00001.mp4?_nc_cat=1&_nc_sid=000000&ccb=17-1&oh=00_SYNTHETIC&oe=7FFFFFFF",
+    "width": null,
+    "height": null
+   }
+  ],
+  "expect_author": "Reel Maker",
+  "expect_code": "SYNreel00001"
+ },
+ {
+  "link": "https://www.threads.com/@example_author/post/SYNrestrict1",
+  "final_url": "https://www.threads.com/@example_author/post/SYNrestrict1",
+  "fixture": "threads_fail_restricted_audience.html",
+  "expect_ok": false,
+  "expect_error": "restricted_audience",
+  "expect_media": []
+ },
+ {
+  "link": "https://www.threads.com/@example_author/post/SYNdeleted01",
+  "final_url": "https://www.threads.com/?error=invalid_post",
+  "fixture": "threads_fail_not_found_invalid_post.html",
+  "expect_ok": false,
+  "expect_error": "not_found",
+  "expect_media": []
+ },
+ {
+  "link": "https://www.threads.com/@example_author/post/SYNshell0001",
+  "final_url": "https://www.threads.com/@example_author/post/SYNshell0001",
+  "fixture": "threads_fail_blocked_shell_404.html",
+  "expect_ok": false,
+  "expect_error": "blocked_shell",
+  "expect_media": []
+ },
+ {
+  "link": "https://www.threads.com/@example_author/post/SYNlogin0001",
+  "final_url": "https://www.threads.com/login/?next=https%3A%2F%2Fwww.threads.com%2F",
+  "fixture": "threads_fail_login_redirect.html",
+  "expect_ok": false,
+  "expect_error": "login_required",
+  "expect_media": []
+ }
+]
