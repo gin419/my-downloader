@@ -89,4 +89,113 @@ final class YtDlpServiceArgsTests: XCTestCase {
         let ytOutput = yt[yt.firstIndex(of: "--output")! + 1]
         XCTAssertTrue(ytOutput.hasPrefix("/out/%(uploader)s - %(title)s"), ytOutput)
     }
+
+    // MARK: - Resolved address
+
+    private let page = "https://video.dmm.co.jp/cinema/content/?id=test00123"
+    private let address = "https://cc3001.dmm.co.jp/pv/SYNTHETICtokenAAAAAAAAAAAAAAAAAAAA/test00123hhb.mp4"
+
+    private func resolvedItem(stem: String = "Synthetic Maker - Synthetic Sample Title [test00123]") -> DownloadItem {
+        let item = DownloadItem(url: page)
+        item.resolvedAddress = address
+        item.resolvedFileStem = stem
+        return item
+    }
+
+    func testResolvedAddressIsWhatTheToolDownloads() {
+        let a = args(resolvedItem())
+        XCTAssertEqual(a.last, address)
+        XCTAssertFalse(a.contains(page), "the page link holds no media for the tool to read")
+    }
+
+    func testResolvedStemNamesTheFile() {
+        let a = args(resolvedItem())
+        XCTAssertEqual(a[a.firstIndex(of: "--output")! + 1], "/out/Synthetic Maker - Synthetic Sample Title [test00123].%(ext)s")
+    }
+
+    /// "%" opens a field in the output template; a title holding one must
+    /// reach the file name as a plain percent sign.
+    func testPercentSignInAResolvedStemIsEscaped() {
+        let a = args(resolvedItem(stem: "Synthetic Maker - 100% Synthetic %(title)s [test00123]"))
+        XCTAssertEqual(
+            a[a.firstIndex(of: "--output")! + 1],
+            "/out/Synthetic Maker - 100%% Synthetic %%(title)s [test00123].%(ext)s")
+        XCTAssertEqual(YtDlpService.literalTemplateText("50% and 100%"), "50%% and 100%%")
+        XCTAssertEqual(YtDlpService.literalTemplateText("no sign"), "no sign")
+    }
+
+    /// "$" opens an environment variable in the output template, and the
+    /// tool expands it — slashes included — even when it is doubled. No
+    /// spelling of it may reach the template.
+    func testDollarSignInAResolvedStemNeverReachesTheTemplate() {
+        let a = args(resolvedItem(stem: "Synthetic Maker - Sale $HOME ${USER} $$PATH 5$ [test00123]"))
+        let template = a[a.firstIndex(of: "--output")! + 1]
+        XCTAssertEqual(template, "/out/Synthetic Maker - Sale ＄HOME ＄{USER} ＄＄PATH 5＄ [test00123].%(ext)s")
+        XCTAssertFalse(template.contains("$"), template)
+        XCTAssertEqual(YtDlpService.literalTemplateText("$HOME 50%"), "＄HOME 50%%")
+    }
+
+    /// The resolved address names one file; a list in its place is not
+    /// walked. Links that resolve nothing get no such argument (see
+    /// testArgumentsWithoutAResolvedAddressAreUnchanged).
+    func testResolvedAddressIsDownloadedAsOneFile() {
+        let a = args(resolvedItem())
+        XCTAssertEqual(Array(a.suffix(2)), ["--no-playlist", address])
+        XCTAssertFalse(args(DownloadItem(url: page)).contains("--no-playlist"))
+    }
+
+    func testNoCookieArgumentsForASiteThatIsNeverSentCookies() {
+        for a in [
+            args(resolvedItem(), browser: .chrome),
+            args(resolvedItem(), browser: .safari, file: "/c.txt"),
+            // Before anything is resolved, too.
+            args(DownloadItem(url: page), browser: .chrome, file: "/c.txt"),
+        ] {
+            XCTAssertFalse(a.contains("--cookies"), "\(a)")
+            XCTAssertFalse(a.contains("--cookies-from-browser"), "\(a)")
+            XCTAssertFalse(a.contains("/c.txt"), "\(a)")
+            XCTAssertEqual(a.first, "--format")
+        }
+    }
+
+    /// A stem travels with its address. Without one the name is the
+    /// extractor's, as for every other link.
+    func testStemWithoutAnAddressIsNotUsed() {
+        let item = DownloadItem(url: "https://example.com/p")
+        item.resolvedFileStem = "Synthetic Maker - Synthetic Sample Title [test00123]"
+        let a = args(item)
+        XCTAssertEqual(a[a.firstIndex(of: "--output")! + 1], "/out/%(uploader)s - %(title)s.%(ext)s")
+        XCTAssertEqual(a.last, "https://example.com/p")
+    }
+
+    /// Regression guard for every link that resolves nothing — direct
+    /// preview file links among them: the command line is, argument for
+    /// argument, the one it was before there was anything to resolve.
+    func testArgumentsWithoutAResolvedAddressAreUnchanged() {
+        let generic =
+            "bestvideo[vcodec^=avc][ext=mp4]+bestaudio[ext=m4a]/bestvideo[ext=mp4]+bestaudio[ext=m4a]"
+            + "/bestvideo+bestaudio/bestvideo+bestaudio/bv*+ba/b"
+        let single =
+            "bestvideo*[acodec!=none][ext=mp4][protocol^=https]/bestvideo*[acodec!=none][ext=mp4]/best[acodec!=none]/bv*+ba/b"
+        let tail = ["--socket-timeout", "10", "--progress", "--newline"]
+        let direct = "https://cc3001.dmm.co.jp/pv/SYNTHETICtokenAAAAAAAAAAAAAAAAAAAA/test00123hhb.mp4"
+        let stream = "https://cc3001.dmm.co.jp/pv/SYNTHETICtokenBBBBBBBBBBBBBBBBBBBB/playlist.m3u8"
+
+        XCTAssertEqual(
+            args(DownloadItem(url: direct), browser: .chrome),
+            ["--cookies-from-browser", "chrome", "--format", generic, "--merge-output-format", "mp4"]
+                + ["--output", "/out/%(uploader)s - %(title)s.%(ext)s"] + tail + [direct])
+        XCTAssertEqual(
+            args(DownloadItem(url: stream), format: .singleFile, browser: .safari, file: "/c.txt"),
+            ["--cookies", "/c.txt", "--format", single, "--merge-output-format", "mp4"]
+                + ["--output", "/out/%(uploader)s - %(title)s.%(ext)s"] + tail + [stream])
+        XCTAssertEqual(
+            args(DownloadItem(url: "https://x.com/u/status/1"), browser: .firefox),
+            ["--cookies-from-browser", "firefox", "--format", generic, "--merge-output-format", "mp4"]
+                + ["--output", "/out/%(title)s%(playlist_index& [{0:02d}]|)s.%(ext)s"] + tail + ["https://x.com/u/status/1"])
+        XCTAssertEqual(
+            args(DownloadItem(url: "https://www.youtube.com/watch?v=x"), format: .audioOnly, subtitle: .english),
+            ["--format", "bestaudio/best", "--extract-audio", "--audio-format", "mp3", "--audio-quality", AudioQuality.best.rawValue]
+                + ["--output", "/out/%(uploader)s - %(title)s.%(ext)s"] + tail + ["https://www.youtube.com/watch?v=x"])
+    }
 }

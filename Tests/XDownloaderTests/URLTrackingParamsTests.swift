@@ -78,6 +78,55 @@ final class URLTrackingParamsTests: XCTestCase {
             "https://x.com/a?id=9")
     }
 
+    func testWorkPageLinkKeepsItsIdParameter() {
+        // The id IS the link: stripping must leave it and take the rest.
+        XCTAssertEqual(
+            DownloadManager.stripTrackingParams("https://video.dmm.co.jp/cinema/content/?id=test00123&utm_source=share&ref=top"),
+            "https://video.dmm.co.jp/cinema/content/?id=test00123")
+        XCTAssertEqual(
+            DownloadManager.stripTrackingParams("https://video.dmm.co.jp/cinema/content/?id=test00123"),
+            "https://video.dmm.co.jp/cinema/content/?id=test00123")
+    }
+
+    func testOneWorkIsStoredUnderOneLinkWhateverWasPasted() {
+        let canonical = "https://video.dmm.co.jp/cinema/content/?id=test00123"
+        let same = [
+            canonical,
+            "https://video.dmm.co.jp/cinema/content?id=test00123",
+            "http://video.dmm.co.jp/cinema/content/?id=test00123",
+            "https://VIDEO.DMM.CO.JP/cinema/content/?id=TEST00123",
+            "https://video.dmm.co.jp/cinema/content/?id=test00123&utm_source=share&i3_ref=list&dmmref=top",
+            "https://video.dmm.co.jp/cinema/content/?utm_medium=x&id=test00123",
+            // The wrapper link wraps the page it was on the way to.
+            "https://www.dmm.co.jp\(DmmTestLinks.wrapper)?rurl=https%3A%2F%2Fvideo.dmm.co.jp%2Fcinema%2Fcontent%2F%3Fid%3Dtest00123",
+        ]
+        for link in same {
+            let stored = DownloadManager.storedLink(link)
+            XCTAssertEqual(stored, canonical, link)
+            XCTAssertEqual(SiteRegistry.profile(for: stored).id, "dmm", link)
+            XCTAssertTrue(DownloadManager.isSameDownload(stored, canonical), link)
+        }
+        XCTAssertNotEqual(DownloadManager.storedLink("https://video.dmm.co.jp/cinema/content/?id=test00124"), canonical)
+    }
+
+    func testStoredLinkLeavesEveryOtherLinkToTheStripping() {
+        let links = [
+            "https://x.com/a/b?utm_source=ig&si=abc&v=1",
+            "https://youtu.be/abc?si=track",
+            "https://www.threads.com/@someone.invented/post/AbCdEfGhIjK?xmt=AQF0abc",
+            // Direct preview file links, as pasted.
+            "https://cc3001.dmm.co.jp/pv/SYNTHETICtokenAAAAAAAAAAAAAAAAAAAA/test00123hhb.mp4",
+            "https://cc3001.dmm.co.jp/pv/SYNTHETICtokenBBBBBBBBBBBBBBBBBBBB/playlist.m3u8",
+            // On the site, but no work page: kept, and turned down by name.
+            "https://video.dmm.co.jp/cinema/list/?utm_source=share",
+            // A wrapper link that wraps something else.
+            "https://www.dmm.co.jp\(DmmTestLinks.wrapper)?rurl=https%3A%2F%2Fwww.dmm.co.jp%2Ftop%2F",
+        ]
+        for link in links {
+            XCTAssertEqual(DownloadManager.storedLink(link), DownloadManager.stripTrackingParams(link), link)
+        }
+    }
+
     func testOneThreadsPostIsOneDownloadWhateverTheLinkForm() {
         // The list's duplicate check: one post has many spellings, and two
         // rows for it would save to the same file names at the same time.

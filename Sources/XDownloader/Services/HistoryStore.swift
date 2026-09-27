@@ -112,6 +112,29 @@ final class HistoryStore {
         return readRow(stmt)
     }
 
+    /// Most recent *completed* entry whose URL starts and ends as given, for
+    /// a link that has more than one spelling in its middle. The two parts
+    /// are compared as text — no pattern is involved, so a "_" or "%" in
+    /// them means itself.
+    func mostRecentCompleted(urlPrefix: String, urlSuffix: String) -> HistoryEntry? {
+        let sql = """
+            SELECT id, url, title, site, media_category, output_path, file_size_bytes, status, error_message, started_at, finished_at
+            FROM download_history
+            WHERE substr(url, 1, length(?1)) = ?1 AND substr(url, -length(?2)) = ?2
+                AND length(url) >= length(?1) + length(?2) AND status = 'completed'
+            ORDER BY finished_at DESC
+            LIMIT 1;
+            """
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return nil }
+        defer { sqlite3_finalize(stmt) }
+
+        bindText(stmt, 1, urlPrefix)
+        bindText(stmt, 2, urlSuffix)
+        guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
+        return readRow(stmt)
+    }
+
     func count() -> Int {
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM download_history;", -1, &stmt, nil) == SQLITE_OK else { return 0 }

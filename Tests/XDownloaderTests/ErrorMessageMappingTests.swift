@@ -83,6 +83,24 @@ final class YtDlpErrorMappingTests: XCTestCase {
             "The site rejected the download (HTTP 403) — Retry; if it persists, the media may need different cookies.")
         XCTAssertFalse(message?.contains("YouTube") ?? true)
     }
+
+    /// A site that is never sent cookies can't be helped by other cookies:
+    /// its copy for the same line doesn't point at them.
+    func test403OnASiteThatIsNeverSentCookiesDoesNotSuggestCookies() {
+        let line = "ERROR: unable to download video data: HTTP Error 403: Forbidden"
+        let message = failureMessage(for: line, url: "https://video.dmm.co.jp/cinema/content/?id=test00123")
+        XCTAssertEqual(
+            message,
+            "The site rejected the download (HTTP 403) — Retry; if it persists, the file may no longer be offered.")
+        XCTAssertEqual(message, YtDlpService.http403WithoutCookiesMessage)
+        XCTAssertFalse(message?.lowercased().contains("cookie") ?? true)
+        XCTAssertFalse(message?.lowercased().contains("sign") ?? true)
+        // A direct file link is the generic profile's, with the copy it has
+        // always had.
+        XCTAssertEqual(
+            failureMessage(for: line, url: "https://cc3001.dmm.co.jp/pv/SYNTHETICtoken/test00123hhb.mp4"),
+            YtDlpService.genericHttp403Message)
+    }
 }
 
 /// Known raw gallery-dl error lines must be replaced with app-native copy,

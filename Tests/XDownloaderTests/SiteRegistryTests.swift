@@ -62,7 +62,90 @@ final class SiteRegistryTests: XCTestCase {
     func testThreadsLeadsTheRegistryAndTheCatchAllEndsIt() {
         XCTAssertEqual(SiteRegistry.all.first?.id, "threads")
         XCTAssertEqual(SiteRegistry.all.last?.id, "other")
-        XCTAssertEqual(SiteRegistry.all.map(\.id), ["threads", "twitter", "youtube", "reddit", "instagram", "other"])
+        XCTAssertEqual(SiteRegistry.all.map(\.id), ["threads", "dmm", "twitter", "youtube", "reddit", "instagram", "other"])
+    }
+
+    /// Work pages are matched by the exact HOST. Everything else of the
+    /// domain — the direct preview file links above all — stays with the
+    /// generic profile, where it has always downloaded.
+    func testDmmProfileMatching() {
+        let pages = [
+            "https://video.dmm.co.jp/cinema/content/?id=test00123",
+            "https://video.dmm.co.jp/anime/content/?id=test00123",
+            "https://video.dmm.co.jp/anime/content/?id=test00123",
+            "https://video.dmm.co.jp/cinema/content/?id=test00123",
+            "https://video.dmm.co.jp/cinema/content?id=test00123",
+            "http://video.dmm.co.jp/cinema/content/?id=test00123",
+            "https://VIDEO.DMM.CO.JP/cinema/content/?id=TEST00123",
+            "https://video.dmm.co.jp/cinema/content/?id=test00123&utm_source=share",
+            // Text another profile's substring test would claim.
+            "https://video.dmm.co.jp/cinema/content/?id=test00123&from=x.com/a",
+            // Not a work page, but still this site's to turn down.
+            "https://video.dmm.co.jp/cinema/list/",
+            "https://video.dmm.co.jp/",
+        ]
+        for link in pages {
+            XCTAssertEqual(SiteRegistry.profile(for: link).id, "dmm", link)
+        }
+
+        let generic = [
+            // Direct preview file links, in both container forms.
+            "https://cc3001.dmm.co.jp/pv/SYNTHETICtokenAAAAAAAAAAAAAAAAAAAA/test00123hhb.mp4",
+            "https://cc3001.dmm.co.jp/pv/SYNTHETICtokenBBBBBBBBBBBBBBBBBBBB/playlist.m3u8",
+            // Other hosts of the domain.
+            "https://www.dmm.co.jp/digital/video/-/detail/=/cid=test00123/",
+            "https://pics.dmm.co.jp/digital/video/test00123/test00123pl.jpg",
+            "https://api.video.dmm.co.jp/graphql",
+            "https://dmm.co.jp/",
+            // The wrapper link as such; capture unwraps it.
+            "https://www.dmm.co.jp\(DmmTestLinks.wrapper)?rurl=https%3A%2F%2Fvideo.dmm.co.jp%2Fcinema%2Fcontent%2F%3Fid%3Dtest00123",
+            // The general-audience sister domain.
+            "https://www.dmm.com/",
+            "https://tv.dmm.com/vod/detail/?season=test00123",
+            "https://video.dmm.com/cinema/content/?id=test00123",
+            // Look-alike domains.
+            "https://video.dmm.co.jp.example.com/cinema/content/?id=test00123",
+            "https://notvideo.dmm.co.jp/cinema/content/?id=test00123",
+            "https://video-dmm.co.jp/cinema/content/?id=test00123",
+            // A work page link carried inside another site's link.
+            "https://example.com/?u=https://video.dmm.co.jp/cinema/content/?id=test00123",
+            "https://example.com/video.dmm.co.jp/cinema/content/?id=test00123",
+            // Not a web link.
+            "ftp://video.dmm.co.jp/cinema/content/?id=test00123",
+        ]
+        for link in generic {
+            XCTAssertEqual(SiteRegistry.profile(for: link).id, "other", link)
+        }
+
+        XCTAssertEqual(SiteRegistry.profile(for: "https://x.com/a/status/1").id, "twitter")
+        XCTAssertEqual(SiteRegistry.profile(for: "https://www.youtube.com/watch?v=x").id, "youtube")
+        XCTAssertEqual(SiteRegistry.profile(for: "https://www.reddit.com/r/x/comments/y").id, "reddit")
+        XCTAssertEqual(SiteRegistry.profile(for: "https://www.instagram.com/p/Daoe_4TTVY0/").id, "instagram")
+        XCTAssertEqual(SiteRegistry.profile(for: "https://www.threads.com/@someone.invented/post/AbCdEfGhIjK").id, "threads")
+    }
+
+    /// The preview clip is resolved first and yt-dlp downloads it, logged
+    /// out: no fallback, no sweep, nothing of the browser login.
+    func testDmmProfileDeclaration() {
+        let dmm = SiteRegistry.dmm
+        XCTAssertTrue(dmm.usesYtDlp)
+        XCTAssertTrue(dmm.resolvesAddressBeforeDownload)
+        XCTAssertFalse(dmm.receivesBrowserCookies)
+        XCTAssertEqual(dmm.fallbacks, [])
+        XCTAssertNil(dmm.imageSweepArgs)
+        XCTAssertEqual(dmm.galleryDlArgs, [])
+        XCTAssertEqual(dmm.outputTemplateSuffix, "")
+        XCTAssertFalse(dmm.supportsSubtitles)
+        XCTAssertFalse(dmm.usesYouTubeFormatSelector)
+        XCTAssertFalse(dmm.detectsExternalRedirect)
+    }
+
+    /// The two new members are off for every profile that was there before.
+    func testEveryOtherProfileResolvesNothingAndStillSendsCookies() {
+        for profile in SiteRegistry.all where profile.id != "dmm" {
+            XCTAssertFalse(profile.resolvesAddressBeforeDownload, profile.id)
+            XCTAssertTrue(profile.receivesBrowserCookies, profile.id)
+        }
     }
 
     /// Threads: the in-app resolver is the only downloader. yt-dlp has no

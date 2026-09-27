@@ -229,6 +229,17 @@ class DownloadItem: Identifiable, ObservableObject {
     /// the headline instead of demoting it into a partial "Saved N files…".
     /// Cleared with the other per-attempt parse state in resetForReattempt().
     var newToolFileCount = 0
+    /// In-memory only (NOT persisted). The address yt-dlp downloads in place
+    /// of `url`, for a site that resolves it before the download (see
+    /// `SiteProfile.resolvesAddressBeforeDownload`). `url` stays the page
+    /// link — the row's identity in the list and in history. Looked up again
+    /// on every run, so it is cleared in resetForReattempt() and never
+    /// reaches the queue file.
+    var resolvedAddress: String?
+    /// In-memory only (NOT persisted). The file name, without extension,
+    /// that goes with `resolvedAddress`: the address names the file after
+    /// the server's own storage, not after the work. Cleared with it.
+    var resolvedFileStem: String?
 
     init(url: String, addedAt: Date = Date()) {
         self.url = url
@@ -263,6 +274,8 @@ class DownloadItem: Identifiable, ObservableObject {
         newToolFileCount = 0
         extractorBreakage = .none
         ffmpegMissingForMerge = false
+        resolvedAddress = nil
+        resolvedFileStem = nil
     }
 
     /// Mark this item finished: completed status, full progress, no live speed/eta.
