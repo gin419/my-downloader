@@ -14,7 +14,9 @@
         "highestMovieUrl": "https://cc3001.dmm.co.jp/pv/SYNTHETICtokenAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/test00123hhb.mp4",
         "hlsMovieUrl": "https://cc3001.dmm.co.jp/pv/SYNTHETICtokenBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB/playlist.m3u8"
       },
-      "sampleVRMovie": null
+      "sampleVRMovie": null,
+      "packageImage": null,
+      "sampleImages": []
     }
   }
 }

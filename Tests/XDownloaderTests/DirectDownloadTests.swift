@@ -344,6 +344,71 @@ final class DirectDownloadTests: XCTestCase {
         XCTAssertEqual(item.progress, 0)
     }
 
+    func testAnAnswerOfAnotherKindThanTheOneAcceptedIsNotSaved() async throws {
+        // A web page answered with success where a picture was expected, and
+        // a file that is not a picture at all.
+        let answers: [StubProtocol.Stub] = [
+            .init(status: 200, headers: ["Content-Type": "text/html"], body: Data("<!DOCTYPE html><title>Notice</title>".utf8)),
+            .init(status: 200, headers: ["Content-Type": "video/mp4"], body: Data([0, 0, 0, 0x20]) + Data("ftypisom".utf8)),
+        ]
+        for answer in answers {
+            let url = stubURL("picture.jpg")
+            StubProtocol.set(answer, for: url)
+            let item = DownloadItem(url: "https://video.dmm.co.jp/cinema/content/?id=test00123")
+            item.status = .downloading
+
+            let outcome = await DirectDownload.download(
+                url, to: downloads, baseName: "Synthetic Maker - Synthetic Sample Title [test00123] #1", fallbackExtension: nil,
+                accepting: MediaExtensions.image, item: item, fileIndex: 0, fileCount: 1, session: stubSession(),
+                temporaryDirectory: scratch)
+
+            guard case .failed(.unexpectedContent) = outcome else { return XCTFail("expected .unexpectedContent, got \(outcome)") }
+            XCTAssertEqual(try contents(of: downloads), [])
+            XCTAssertEqual(try contents(of: scratch), [])
+        }
+        XCTAssertEqual(
+            DirectDownload.partialFailureMessage(saved: 3, attempted: 4, lastFailure: .unexpectedContent),
+            "Saved 3 of 4 files — the server sent something other than the file. Retry fetches the rest.")
+    }
+
+    func testAnAcceptedKindIsSavedUnderWhatArrived() async throws {
+        let url = stubURL("picture.jpg")
+        let body = Data("RIFF".utf8) + Data([0x24, 0x00, 0x00, 0x00]) + Data("WEBPVP8 ".utf8)
+        StubProtocol.set(.init(status: 200, headers: ["Content-Type": "application/octet-stream"], body: body), for: url)
+        let item = DownloadItem(url: "https://video.dmm.co.jp/cinema/content/?id=test00123")
+        item.status = .downloading
+
+        let outcome = await DirectDownload.download(
+            url, to: downloads, baseName: "Synthetic Maker - Synthetic Sample Title [test00123] #1", fallbackExtension: nil,
+            accepting: MediaExtensions.image, item: item, fileIndex: 0, fileCount: 1, session: stubSession(),
+            temporaryDirectory: scratch)
+
+        guard case .saved(let saved) = outcome else { return XCTFail("expected .saved, got \(outcome)") }
+        XCTAssertEqual(saved.pathExtension, "webp")
+        XCTAssertEqual(try Data(contentsOf: saved), body)
+    }
+
+    func testARedirectRefusedByTheDelegateIsNotFollowed() async throws {
+        let url = stubURL("moved.jpg")
+        let elsewhere = try XCTUnwrap(URL(string: "https://elsewhere.example.invalid/picture.jpg"))
+        StubProtocol.set(.refusedRedirect(to: elsewhere), for: url)
+        StubProtocol.set(.init(status: 200, headers: ["Content-Type": "image/jpeg"], body: Data([0xFF, 0xD8, 0xFF, 0xE0])), for: elsewhere)
+        let item = DownloadItem(url: "https://video.dmm.co.jp/cinema/content/?id=test00123")
+        item.status = .downloading
+
+        let outcome = await DirectDownload.download(
+            url, to: downloads, baseName: "Synthetic Maker - Synthetic Sample Title [test00123] #1", fallbackExtension: nil,
+            accepting: MediaExtensions.image, item: item, fileIndex: 0, fileCount: 1, session: stubSession(),
+            delegate: DmmPreviewResolver.RedirectRefusal(), temporaryDirectory: scratch)
+
+        guard case .failed(.httpStatus(let code)) = outcome else { return XCTFail("expected .httpStatus, got \(outcome)") }
+        XCTAssertEqual(code, 302)
+        XCTAssertEqual(StubProtocol.requests(to: url).count, 1)
+        XCTAssertTrue(StubProtocol.requests(to: elsewhere).isEmpty, "the redirect was followed")
+        XCTAssertEqual(try contents(of: downloads), [])
+        XCTAssertEqual(try contents(of: scratch), [])
+    }
+
     // MARK: - Saving into the download folder
 
     func testNameTakenDuringTheTransferCountsAsSaved() async throws {
@@ -458,12 +523,23 @@ final class StubProtocol: URLProtocol {
         /// Answers with a redirect to this address instead of a body; the
         /// session then requests the address, which needs a stub of its own.
         var redirect: URL?
+        /// With `redirect`: a session that refuses the redirect is then
+        /// answered with the redirect itself, as a web server's answer is.
+        var answersRefusedRedirect = false
         /// Answers the way a source that is no web server does (a file://
         /// address, say): a response without status or headers.
         var isHTTP = true
 
         static func redirect(to url: URL) -> Stub {
             Stub(status: 302, headers: ["Location": url.absoluteString], body: Data(), redirect: url)
+        }
+
+        /// A redirect for a session that refuses it: the answer is the
+        /// redirect, and the address it names is never requested.
+        static func refusedRedirect(to url: URL) -> Stub {
+            var stub = redirect(to: url)
+            stub.answersRefusedRedirect = true
+            return stub
         }
     }
 
@@ -535,6 +611,9 @@ final class StubProtocol: URLProtocol {
             var next = request
             next.url = target
             client?.urlProtocol(self, wasRedirectedTo: next, redirectResponse: http)
+            guard stub.answersRefusedRedirect else { return }
+            client?.urlProtocol(self, didReceive: http, cacheStoragePolicy: .notAllowed)
+            finish(stub.ending)
             return
         }
         let response =

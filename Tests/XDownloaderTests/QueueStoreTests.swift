@@ -33,20 +33,26 @@ final class QueueStoreTests: XCTestCase {
         XCTAssertEqual(QueueStore(directory: dir).load().count, 1)
     }
 
-    /// A resolved address is looked up again on every run; neither it nor
-    /// the file name that goes with it may reach the queue file.
+    /// A resolved address is looked up again on every run; neither it, the
+    /// file name that goes with it nor the pictures may reach the queue file.
     func testResolvedAddressAndStemAreNotPersisted() throws {
         let dir = tempDir()
         let item = DownloadItem(url: "https://video.dmm.co.jp/cinema/content/?id=test00123")
         item.title = "Synthetic Maker - Synthetic Sample Title"
         item.resolvedAddress = "https://cc3001.dmm.co.jp/pv/SYNTHETICtokenAAAA/test00123hhb.mp4"
         item.resolvedFileStem = "Synthetic Maker - Synthetic Sample Title [test00123]"
+        item.resolvedPictures = [
+            .init(position: 1, address: try XCTUnwrap(URL(string: "https://awsimgsrc.dmm.co.jp/pics_dig/digital/video/test00123/SYNTHETIC-s1.jpg")))
+        ]
+        item.resolvedUnusableFiles = 1
 
         let persisted = item.toPersisted()
         let encoded = String(decoding: try JSONEncoder().encode(persisted), as: UTF8.self)
         XCTAssertFalse(encoded.contains("SYNTHETICtoken"), encoded)
         XCTAssertFalse(encoded.contains("cc3001"), encoded)
         XCTAssertFalse(encoded.contains("[test00123]"), encoded)
+        XCTAssertFalse(encoded.contains("awsimgsrc"), encoded)
+        XCTAssertFalse(encoded.contains("SYNTHETIC-s1"), encoded)
 
         let store = QueueStore(directory: dir)
         store.save([persisted])
@@ -60,5 +66,7 @@ final class QueueStoreTests: XCTestCase {
         XCTAssertEqual(restored.url, "https://video.dmm.co.jp/cinema/content/?id=test00123")
         XCTAssertNil(restored.resolvedAddress)
         XCTAssertNil(restored.resolvedFileStem)
+        XCTAssertEqual(restored.resolvedPictures, [])
+        XCTAssertEqual(restored.resolvedUnusableFiles, 0)
     }
 }

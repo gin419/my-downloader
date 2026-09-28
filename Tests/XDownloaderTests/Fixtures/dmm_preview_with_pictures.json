@@ -1,0 +1,36 @@
+{
+  "data": {
+    "ipInfo": {
+      "accessStatus": "ALLOW"
+    },
+    "ppvContent": {
+      "id": "test00124",
+      "title": "Synthetic Sample Title",
+      "isAllowForeign": true,
+      "maker": {
+        "name": "Synthetic Maker"
+      },
+      "sample2DMovie": {
+        "highestMovieUrl": "https://cc3001.dmm.co.jp/pv/SYNTHETICtokenEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE/test00124hhb.mp4",
+        "hlsMovieUrl": "https://cc3001.dmm.co.jp/pv/SYNTHETICtokenFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF/playlist.m3u8"
+      },
+      "sampleVRMovie": null,
+      "packageImage": {
+        "largeUrl": "https://awsimgsrc.dmm.co.jp/pics_dig/digital/video/test00124/SYNTHETICcover-large.jpg",
+        "mediumUrl": "https://awsimgsrc.dmm.co.jp/pics_dig/digital/video/test00124/SYNTHETICcover-medium.jpg"
+      },
+      "sampleImages": [
+        {
+          "number": 1,
+          "imageUrl": "https://awsimgsrc.dmm.co.jp/pics_dig/digital/video/test00124/SYNTHETICsample-1-thumb.jpg",
+          "largeImageUrl": "https://awsimgsrc.dmm.co.jp/pics_dig/digital/video/test00124/SYNTHETICsample-1-large.jpg"
+        },
+        {
+          "number": 2,
+          "imageUrl": "https://awsimgsrc.dmm.co.jp/pics_dig/digital/video/test00124/SYNTHETICsample-2-thumb.jpg",
+          "largeImageUrl": "https://awsimgsrc.dmm.co.jp/pics_dig/digital/video/test00124/SYNTHETICsample-2-large.jpg"
+        }
+      ]
+    }
+  }
+}

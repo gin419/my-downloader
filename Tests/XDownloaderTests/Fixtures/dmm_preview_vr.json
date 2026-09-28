@@ -13,7 +13,9 @@
       "sample2DMovie": null,
       "sampleVRMovie": {
         "highestMovieUrl": "https://cc3001.dmm.co.jp/pv/SYNTHETICtokenDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD/testvr00045vruhq.mp4"
-      }
+      },
+      "packageImage": null,
+      "sampleImages": []
     }
   }
 }

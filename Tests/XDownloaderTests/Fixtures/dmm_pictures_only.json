@@ -1,0 +1,38 @@
+{
+  "data": {
+    "ipInfo": {
+      "accessStatus": "ALLOW"
+    },
+    "ppvContent": {
+      "id": "testvr00046",
+      "title": "Synthetic Sample Title",
+      "isAllowForeign": true,
+      "maker": {
+        "name": "Synthetic Maker"
+      },
+      "sample2DMovie": null,
+      "sampleVRMovie": null,
+      "packageImage": {
+        "largeUrl": "https://awsimgsrc.dmm.co.jp/pics_dig/digital/video/testvr00046/SYNTHETICcover-large.jpg",
+        "mediumUrl": "https://awsimgsrc.dmm.co.jp/pics_dig/digital/video/testvr00046/SYNTHETICcover-medium.jpg"
+      },
+      "sampleImages": [
+        {
+          "number": 2,
+          "imageUrl": "https://awsimgsrc.dmm.co.jp/pics_dig/digital/video/testvr00046/SYNTHETICsample-2-thumb.jpg",
+          "largeImageUrl": "https://awsimgsrc.dmm.co.jp/pics_dig/digital/video/testvr00046/SYNTHETICsample-2-large.jpg"
+        },
+        {
+          "number": 3,
+          "imageUrl": "https://awsimgsrc.dmm.co.jp/pics_dig/digital/video/testvr00046/SYNTHETICsample-3-thumb.jpg",
+          "largeImageUrl": "https://awsimgsrc.dmm.co.jp/pics_dig/digital/video/testvr00046/SYNTHETICsample-3-large.jpg"
+        },
+        {
+          "number": 1,
+          "imageUrl": "https://awsimgsrc.dmm.co.jp/pics_dig/digital/video/testvr00046/SYNTHETICsample-1-thumb.jpg",
+          "largeImageUrl": "https://awsimgsrc.dmm.co.jp/pics_dig/digital/video/testvr00046/SYNTHETICsample-1-large.jpg"
+        }
+      ]
+    }
+  }
+}

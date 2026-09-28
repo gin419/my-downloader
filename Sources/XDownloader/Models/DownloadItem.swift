@@ -240,6 +240,15 @@ class DownloadItem: Identifiable, ObservableObject {
     /// that goes with `resolvedAddress`: the address names the file after
     /// the server's own storage, not after the work. Cleared with it.
     var resolvedFileStem: String?
+    /// In-memory only (NOT persisted). The pictures of the page, downloaded
+    /// in-app beside `resolvedAddress` or in its place, named after
+    /// `resolvedFileStem`. Looked up again on every run, like the address,
+    /// so cleared with it.
+    var resolvedPictures: [DmmPreviewResolver.Picture] = []
+    /// In-memory only (NOT persisted). Files the page offered that could not
+    /// be used; each counts as a failed file of the run. Cleared with the
+    /// address.
+    var resolvedUnusableFiles = 0
 
     init(url: String, addedAt: Date = Date()) {
         self.url = url
@@ -276,6 +285,8 @@ class DownloadItem: Identifiable, ObservableObject {
         ffmpegMissingForMerge = false
         resolvedAddress = nil
         resolvedFileStem = nil
+        resolvedPictures = []
+        resolvedUnusableFiles = 0
     }
 
     /// Mark this item finished: completed status, full progress, no live speed/eta.

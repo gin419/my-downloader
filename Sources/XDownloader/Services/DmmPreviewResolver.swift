@@ -1,16 +1,18 @@
 import Foundation
 
-/// Finds the free preview clip of a work page. The page itself carries no
-/// data (it is filled in by script), so the work's content id is read from
-/// the link and the site's data endpoint is asked once for the address of
-/// the preview clip it offers every logged-out visitor.
+/// Finds the free preview material of a work page: its preview clip and its
+/// sample pictures (the cover first). The page itself carries no data (it
+/// is filled in by script), so the work's content id is read from the link
+/// and the site's data endpoint is asked once for the addresses of what it
+/// shows every logged-out visitor.
 ///
-/// Only that clip is in scope. The answer's free-sample fields are the only
-/// ones asked for and the only ones read: purchased, rental and subscription
-/// videos are never looked up, tried or fallen back to, and a work without a
-/// preview ends with a message saying so. The request is made logged out —
-/// no cookie is stored or sent — and nothing resolved is kept: the address
-/// is asked for again on every run.
+/// Only that material is in scope. The answer's free-sample and picture
+/// fields are the only ones asked for and the only ones read: purchased,
+/// rental and subscription videos are never looked up, tried or fallen back
+/// to, and a work with neither a clip nor a picture ends with a message
+/// saying so. The request is made logged out — no cookie is stored or sent —
+/// and nothing resolved is kept: the addresses are asked for again on every
+/// run.
 enum DmmPreviewResolver {
 
     // MARK: - The data request (everything the site can change)
@@ -23,12 +25,14 @@ enum DmmPreviewResolver {
 
     static let operationName = "PreviewResolve"
 
-    /// Asks for the visitor's region status, the names the file is called
-    /// after, and the free-sample addresses. Nothing else of the work.
+    /// Asks for the visitor's region status, the names the files are called
+    /// after, the free-sample addresses and the addresses of the pictures the
+    /// page shows. Nothing else of the work.
     static let query =
         "query PreviewResolve($id: ID!) { ipInfo { accessStatus } "
         + "ppvContent(id: $id) { id title isAllowForeign maker { name } "
-        + "sample2DMovie { highestMovieUrl hlsMovieUrl } sampleVRMovie { highestMovieUrl } } }"
+        + "sample2DMovie { highestMovieUrl hlsMovieUrl } sampleVRMovie { highestMovieUrl } "
+        + "packageImage { largeUrl mediumUrl } sampleImages { number imageUrl largeImageUrl } } }"
 
     private enum Field {
         static let data = "data"
@@ -45,6 +49,13 @@ enum DmmPreviewResolver {
         static let vrSample = "sampleVRMovie"
         static let fileAddress = "highestMovieUrl"
         static let streamAddress = "hlsMovieUrl"
+        static let cover = "packageImage"
+        static let coverLarge = "largeUrl"
+        static let coverSmaller = "mediumUrl"
+        static let samplePictures = "sampleImages"
+        static let pictureNumber = "number"
+        static let pictureLarge = "largeImageUrl"
+        static let pictureSmaller = "imageUrl"
     }
 
     private enum RegionStatus {
@@ -90,21 +101,41 @@ enum DmmPreviewResolver {
 
     /// A work's free preview clip. `address` is handed to the downloader
     /// exactly as given.
-    struct Preview: Equatable {
+    struct Clip: Equatable {
         let address: URL
-        let title: String
-        let maker: String
-        let contentID: String
         let kind: Kind
     }
 
-    /// Why a link yielded no preview clip. One cause, one message.
+    /// One picture of the work's gallery. `position` is its place in the
+    /// gallery the page shows (1 is the cover when there is one): it numbers
+    /// the file, so a picture keeps its name whichever others fail.
+    struct Picture: Equatable {
+        let position: Int
+        let address: URL
+    }
+
+    /// Everything free a work page offers: at least a clip or one picture.
+    struct Preview: Equatable {
+        let clip: Clip?
+        /// In gallery order.
+        let pictures: [Picture]
+        /// What the answer offered that cannot be downloaded — an address
+        /// turned down, an entry of a type this resolver does not read. Each
+        /// counts as one file that failed: the row must not report a clean
+        /// finish with a silently smaller count.
+        let unusable: Int
+        let title: String
+        let maker: String
+        let contentID: String
+    }
+
+    /// Why a link yielded nothing to download. One cause, one message.
     enum Failure: Error, Equatable, CaseIterable {
         /// A link on the site that names no single work.
         case notAWorkPage
         /// The site knows no work by this content id.
         case notFound
-        /// The work exists and offers no free preview.
+        /// The work exists and offers no free preview clip and no picture.
         case noPreview
         /// The site does not serve this visitor's region.
         case regionBlocked
@@ -153,7 +184,8 @@ enum DmmPreviewResolver {
 
     /// Keeps the attempt at one request: a redirect is not followed, it is
     /// the answer. Following it would fetch a page this resolver has no use
-    /// for, only to learn where it was sent. Internal (not private) for tests.
+    /// for, only to learn where it was sent. The pictures' downloads refuse
+    /// redirects with it too. Internal (not private) for tests.
     final class RedirectRefusal: NSObject, URLSessionTaskDelegate {
         func urlSession(
             _ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
@@ -185,14 +217,13 @@ enum DmmPreviewResolver {
         return nil
     }
 
-    /// Reads the answer's free-sample fields. Preference: the standard
-    /// preview file, then the VR preview file, then the standard preview as
-    /// a stream. An address that is not the expected kind of address means
-    /// the format changed — nothing else is tried in its place. "No preview"
-    /// is said only of samples that are plainly empty: a sample or an
-    /// address of a type this resolver does not read is a changed format,
-    /// or every work would read as having no preview the day the site
-    /// reshapes them.
+    /// Reads the answer's free-sample and picture fields. The work resolves
+    /// when it offers a clip or at least one picture; "no preview" is said
+    /// only when everything is plainly empty. Anything of a type this
+    /// resolver does not read, or an address it turns down, is a changed
+    /// format when nothing else is left to download, and otherwise one
+    /// failed file among the ones that do download — or every work would
+    /// read as having nothing the day the site reshapes one field.
     static func classify(response: Data, contentID: String) -> Result<Preview, Failure> {
         guard let payload = try? JSONSerialization.jsonObject(with: response) as? [String: Any],
             let data = payload[Field.data] as? [String: Any],
@@ -209,13 +240,50 @@ enum DmmPreviewResolver {
             let errors = payload[Field.errors] as? [Any] ?? []
             return .failure(errors.isEmpty ? .notFound : .changedFormat)
         }
-        guard let work = work as? [String: Any], work[Field.standardSample] != nil, work[Field.vrSample] != nil else {
-            return .failure(.changedFormat)
-        }
+        guard let work = work as? [String: Any] else { return .failure(.changedFormat) }
         if let status, status != RegionStatus.allowed, work[Field.offeredAbroad] as? Bool == false {
             return .failure(.regionBlocked)
         }
 
+        let clip = readClip(of: work)
+        let gallery = readGallery(of: work)
+        let unusable = gallery.unusable + (clip == .unusable ? 1 : 0)
+        guard case .found(let found) = clip else {
+            guard !gallery.pictures.isEmpty else { return .failure(unusable == 0 ? .noPreview : .changedFormat) }
+            return .success(preview(of: work, contentID: contentID, clip: nil, gallery: gallery, unusable: unusable))
+        }
+        return .success(preview(of: work, contentID: contentID, clip: found, gallery: gallery, unusable: unusable))
+    }
+
+    private static func preview(
+        of work: [String: Any], contentID: String, clip: Clip?, gallery: Gallery, unusable: Int
+    ) -> Preview {
+        // The id names the files: the site's own spelling of it when that
+        // is a usable one, else the id the link carried.
+        let named = text(work[Field.contentID]).map { $0.lowercased() }.flatMap { isContentID($0) ? $0 : nil }
+        return Preview(
+            clip: clip,
+            pictures: gallery.pictures,
+            unusable: unusable,
+            title: text(work[Field.title]) ?? "",
+            maker: text((work[Field.maker] as? [String: Any])?[Field.makerName]) ?? unknownMaker,
+            contentID: named ?? contentID)
+    }
+
+    private enum ClipReading: Equatable {
+        case found(Clip)
+        /// The samples are there and plainly empty.
+        case none
+        case unusable
+    }
+
+    /// Preference: the standard preview file, then the VR preview file, then
+    /// the standard preview as a stream. An address that is not the expected
+    /// kind of address is unusable — nothing else is tried in its place.
+    /// Samples that are missing, or of a type this resolver does not read,
+    /// are unusable too, not empty.
+    private static func readClip(of work: [String: Any]) -> ClipReading {
+        guard work[Field.standardSample] != nil, work[Field.vrSample] != nil else { return .unusable }
         let standard = work[Field.standardSample] as? [String: Any]
         let vr = work[Field.vrSample] as? [String: Any]
         let candidates: [(address: String?, kind: Kind)] = [
@@ -229,20 +297,92 @@ enum DmmPreviewResolver {
                 (work[Field.vrSample], [Field.fileAddress]),
             ]
             let plainlyEmpty = samples.allSatisfy { isEmptySample($0.sample, addresses: $0.addresses) }
-            return .failure(plainlyEmpty ? .noPreview : .changedFormat)
+            return plainlyEmpty ? .none : .unusable
         }
-        guard let address = previewAddress(raw) else { return .failure(.changedFormat) }
+        guard let address = previewAddress(raw) else { return .unusable }
+        return .found(Clip(address: address, kind: pick.kind))
+    }
 
-        // The id names the file: the site's own spelling of it when that is
-        // a usable one, else the id the link carried.
-        let named = text(work[Field.contentID]).map { $0.lowercased() }.flatMap { isContentID($0) ? $0 : nil }
-        return .success(
-            Preview(
-                address: address,
-                title: text(work[Field.title]) ?? "",
-                maker: text((work[Field.maker] as? [String: Any])?[Field.makerName]) ?? unknownMaker,
-                contentID: named ?? contentID,
-                kind: pick.kind))
+    private struct Gallery {
+        let pictures: [Picture]
+        let unusable: Int
+    }
+
+    private enum PictureReading {
+        case found(URL)
+        /// Both sizes are null or empty: there is no picture here.
+        case empty
+        case unusable
+    }
+
+    /// The gallery the page builds: the cover first, then the sample
+    /// pictures sorted by their number (the answer's own order is not the
+    /// page's), each at its largest size. An entry that holds an address,
+    /// usable or not, takes its place in the gallery, so the pictures after
+    /// it keep their numbers; one without a number has no place and only
+    /// counts as unusable.
+    private static func readGallery(of work: [String: Any]) -> Gallery {
+        var places: [URL?] = []
+        var unusable = 0
+
+        // A missing field takes the cover's place: the query asks for it, so
+        // an answer without it has been reshaped.
+        let cover = work[Field.cover] ?? [String: Any]()
+        if !(cover is NSNull) {
+            switch readPicture(cover, large: Field.coverLarge, smaller: Field.coverSmaller) {
+            case .found(let address): places.append(address)
+            case .empty: break
+            case .unusable: places.append(nil)
+            }
+        }
+
+        // A missing list is read like one of another type (the `default`).
+        switch work[Field.samplePictures] ?? 0 {
+        case is NSNull:
+            break
+        case let list as [Any]:
+            var numbered: [(number: Int, reading: PictureReading)] = []
+            for element in list {
+                guard let entry = element as? [String: Any], let number = entry[Field.pictureNumber] as? Int else {
+                    unusable += 1
+                    continue
+                }
+                numbered.append((number, readPicture(entry, large: Field.pictureLarge, smaller: Field.pictureSmaller)))
+            }
+            // Stable: two entries with one number keep the answer's order.
+            let sorted = numbered.enumerated().sorted { ($0.element.number, $0.offset) < ($1.element.number, $1.offset) }
+            for (_, entry) in sorted {
+                switch entry.reading {
+                case .found(let address): places.append(address)
+                case .empty: break
+                case .unusable: places.append(nil)
+                }
+            }
+        default:
+            unusable += 1
+        }
+
+        let pictures = places.enumerated().compactMap { index, address in
+            address.map { Picture(position: index + 1, address: $0) }
+        }
+        return Gallery(pictures: pictures, unusable: unusable + places.filter { $0 == nil }.count)
+    }
+
+    /// The largest size of one picture. The smaller one is taken only when
+    /// the large one is null or empty — never when the large one is there
+    /// and turned down, or the thumbnail would stand in for a picture that
+    /// exists. Both fields must be present: a renamed one is the site having
+    /// reshaped its answer, not a picture without that size.
+    private static func readPicture(_ value: Any, large: String, smaller: String) -> PictureReading {
+        guard let entry = value as? [String: Any] else { return .unusable }
+        for name in [large, smaller] {
+            guard let field = entry[name] else { return .unusable }
+            if field is NSNull { continue }
+            guard let raw = field as? String else { return .unusable }
+            if raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { continue }
+            return pictureAddress(raw).map(PictureReading.found) ?? .unusable
+        }
+        return .empty
     }
 
     /// Only an https address of a file or stream on one of the site's own
@@ -253,17 +393,31 @@ enum DmmPreviewResolver {
     /// that is no media ends the row with a fixed message (see
     /// YtDlpService.resolvedAddressFailureMessage).
     static func previewAddress(_ raw: String) -> URL? {
+        siteAddress(raw, extensions: previewExtensions)
+    }
+
+    /// The same check for a picture: an https address of a picture file on
+    /// one of the site's own hosts. It is fetched in-app, so anything else
+    /// in its place would be saved into the download folder as a picture.
+    /// What the host answers is checked when it arrives (see
+    /// `downloadPictures`).
+    static func pictureAddress(_ raw: String) -> URL? {
+        siteAddress(raw, extensions: pictureExtensions)
+    }
+
+    private static func siteAddress(_ raw: String, extensions: [String]) -> URL? {
         guard let components = URLComponents(string: raw), components.scheme?.lowercased() == "https",
             components.user == nil, components.password == nil,
-            let host = components.host?.lowercased(), host.hasSuffix(previewHostSuffix), host.count > previewHostSuffix.count
+            let host = components.host?.lowercased(), host.hasSuffix(siteHostSuffix), host.count > siteHostSuffix.count
         else { return nil }
         let path = components.path.lowercased()
-        guard previewExtensions.contains(where: { path.hasSuffix($0) }) else { return nil }
+        guard extensions.contains(where: { path.hasSuffix($0) }) else { return nil }
         return URL(string: raw)
     }
 
-    private static let previewHostSuffix = ".dmm.co.jp"
+    private static let siteHostSuffix = ".dmm.co.jp"
     private static let previewExtensions = [".mp4", ".m3u8"]
+    private static let pictureExtensions = [".jpg", ".jpeg", ".png", ".webp"]
 
     /// True for a sample that is there and offers nothing: null, or an
     /// object whose every address is null or a string. (A string that held
@@ -284,6 +438,80 @@ enum DmmPreviewResolver {
         return text
     }
 
+    // MARK: - Downloading the pictures
+
+    /// How the pictures' downloads ended.
+    enum PictureRun {
+        /// `saved` holds every picture on disk, in gallery order — this
+        /// run's downloads and the ones an earlier run saved.
+        /// `lastFailure` is the last download that failed, nil when none did:
+        /// with several, the freshest evidence (see DirectDownload.FileFailure).
+        case finished(saved: [URL], lastFailure: DirectDownload.FileFailure?)
+        /// The wrapping Task was cancelled (Stop / remove): no outcome.
+        case cancelled
+    }
+
+    /// Downloads the pictures into `directory` in-app, one at a time, with
+    /// the session that keeps and sends no cookies: the pictures are served
+    /// to every visitor, and yt-dlp has nothing to offer for a plain file.
+    /// A picture already on disk is not fetched again, so a Retry only
+    /// fetches what is missing. The row reads "downloading" only while a
+    /// transfer runs; the outcome is the caller's to put on the row.
+    ///
+    /// The address was checked as written, so it must also be where the
+    /// picture comes from: a redirect is refused, not followed, and fails as
+    /// its status. Only an answer that is a picture is saved; anything else
+    /// fails instead of landing in the folder under a picture's name, where
+    /// a Retry would take it for one already downloaded.
+    ///
+    /// `session` is a seam for tests; the default keeps and sends no cookies.
+    @MainActor
+    static func downloadPictures(
+        _ pictures: [Picture], stem: String, to directory: URL, item: DownloadItem, session: URLSession = DirectDownload.session
+    ) async -> PictureRun {
+        var saved: [URL] = []
+        var lastFailure: DirectDownload.FileFailure?
+        for (index, picture) in pictures.enumerated() {
+            // Stop and the row's ✕ cancel the wrapping Task: end between
+            // files; a transfer in flight reports .cancelled itself.
+            if Task.isCancelled { return .cancelled }
+            let name = pictureBaseName(stem: stem, position: picture.position)
+            if let existing = DirectDownload.existingFile(baseName: name, in: directory) {
+                saved.append(existing)
+                continue
+            }
+            item.status = .downloading
+            let outcome = await DirectDownload.download(
+                picture.address, to: directory, baseName: name, fallbackExtension: nil, accepting: MediaExtensions.image,
+                item: item, fileIndex: index, fileCount: pictures.count, session: session, delegate: RedirectRefusal())
+            switch outcome {
+            case .saved(let url): saved.append(url)
+            case .failed(let failure): lastFailure = failure
+            case .cancelled: return .cancelled
+            }
+        }
+        if Task.isCancelled { return .cancelled }
+        return .finished(saved: saved, lastFailure: lastFailure)
+    }
+
+    /// File name of a picture, without its extension (the server's answer
+    /// names that): the clip's stem numbered in gallery order, the way the
+    /// files of a multi-file X post are numbered. The clip keeps the plain
+    /// stem, as it always has.
+    static func pictureBaseName(stem: String, position: Int) -> String {
+        "\(stem) #\(position)"
+    }
+
+    /// Why a file the answer offered was counted as failed without being
+    /// requested: an address turned down, an entry that could not be read.
+    static let unusableEntryReason = "the site's answer held an address that couldn't be used"
+
+    /// No clip, and not one picture could be saved. A Retry asks for the
+    /// addresses again.
+    static func noPictureSavedMessage(reason: String) -> String {
+        "None of the sample pictures could be saved — \(reason). Retry fetches them again."
+    }
+
     // MARK: - Failure messages
 
     // Every failure names its own cause: the downloader never runs for a
@@ -294,7 +522,8 @@ enum DmmPreviewResolver {
         "This link isn't a work page — open the work's own page and paste its link instead."
     static let notFoundMessage =
         "Work not found — it may have been removed, or the link may be incomplete; check the link, then Retry."
-    static let noPreviewMessage = "This work has no free preview clip, so there is nothing to download. " + paidVideosNotSupportedMessage
+    static let noPreviewMessage =
+        "This work has no free preview clip or sample pictures, so there is nothing to download. " + paidVideosNotSupportedMessage
     static let regionBlockedMessage =
         "Not available in your region — the site doesn't offer this preview clip where your connection is located."
     static let changedFormatMessage =
