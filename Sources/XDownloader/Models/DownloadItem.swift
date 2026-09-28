@@ -249,6 +249,17 @@ class DownloadItem: Identifiable, ObservableObject {
     /// be used; each counts as a failed file of the run. Cleared with the
     /// address.
     var resolvedUnusableFiles = 0
+    /// In-memory only (NOT persisted). The folder this row's files go into
+    /// when it produces two or more (see `RowFolder`); nil for the download
+    /// folder itself. Settled afresh at the start of every run, and NOT
+    /// cleared in resetForReattempt(): the gallery-dl fallback resets the
+    /// row mid-run, and the tools after it must still write where the run
+    /// began.
+    var destination: URL?
+    /// In-memory only (NOT persisted). True when `destination` was already
+    /// on disk as the run began. Only a folder this run created may be
+    /// removed again when the run leaves it empty.
+    var destinationExistedAtStart = false
 
     init(url: String, addedAt: Date = Date()) {
         self.url = url

@@ -455,6 +455,86 @@ final class DirectDownloadTests: XCTestCase {
         XCTAssertEqual(item.progress, 0)
     }
 
+    // MARK: - A post's own folder
+
+    /// A post of two or more files is saved into a folder of its own, which
+    /// does not exist until its first file is complete.
+    func testASaveIntoAFolderNotYetThereMakesTheFolder() async throws {
+        let url = stubURL("first.jpg")
+        StubProtocol.set(.init(status: 200, headers: ["Content-Type": "image/jpeg"], body: Data([0xFF, 0xD8, 0xFF, 0xE0])), for: url)
+        let folder = downloads.appendingPathComponent("Invented Author - hello [AbCdEfGhIjK]", isDirectory: true)
+        let item = DownloadItem(url: "https://www.threads.com/@someone.invented/post/AbCdEfGhIjK")
+        item.status = .downloading
+
+        let outcome = await DirectDownload.download(
+            url, to: folder, baseName: "Invented Author - hello [AbCdEfGhIjK] #1", fallbackExtension: "jpg",
+            item: item, fileIndex: 0, fileCount: 2, session: stubSession(), temporaryDirectory: scratch)
+
+        guard case .saved(let saved) = outcome else { return XCTFail("expected .saved, got \(outcome)") }
+        XCTAssertEqual(saved.path, folder.appendingPathComponent("Invented Author - hello [AbCdEfGhIjK] #1.jpg").path)
+        XCTAssertEqual(try contents(of: downloads), [folder.lastPathComponent])
+        XCTAssertEqual(try contents(of: folder), [saved.lastPathComponent])
+        XCTAssertEqual(try contents(of: scratch), [])
+    }
+
+    /// No complete file, no folder: a refused transfer and a cancelled one
+    /// both leave the download folder as it was.
+    func testAFailedOrCancelledTransferMakesNoFolder() async throws {
+        let folder = downloads.appendingPathComponent("Invented Author - hello [AbCdEfGhIjK]", isDirectory: true)
+        let refused = stubURL("missing.jpg")
+        StubProtocol.set(.init(status: 404, headers: ["Content-Type": "text/html"], body: Data()), for: refused)
+        let item = DownloadItem(url: "https://www.threads.com/@someone.invented/post/AbCdEfGhIjK")
+        item.status = .downloading
+
+        let failed = await DirectDownload.download(
+            refused, to: folder, baseName: "Invented Author - hello [AbCdEfGhIjK] #1", fallbackExtension: "jpg",
+            item: item, fileIndex: 0, fileCount: 2, session: stubSession(), temporaryDirectory: scratch)
+
+        guard case .failed(.httpStatus(404)) = failed else { return XCTFail("expected .httpStatus(404), got \(failed)") }
+        XCTAssertEqual(try contents(of: downloads), [])
+
+        let stalled = stubURL("stalled.mp4")
+        StubProtocol.set(
+            .init(status: 200, headers: ["Content-Type": "video/mp4"], body: Data(repeating: 1, count: 200_000), ending: .never),
+            for: stalled)
+        let session = stubSession()
+        let scratch: URL = scratch
+        let task = Task { @MainActor in
+            await DirectDownload.download(
+                stalled, to: folder, baseName: "Invented Author - hello [AbCdEfGhIjK] #2", fallbackExtension: "mp4",
+                item: item, fileIndex: 1, fileCount: 2, session: session, temporaryDirectory: scratch)
+        }
+        // Cancel only once the request has reached the stub and its bytes
+        // have a temporary file.
+        var inFlight = false
+        for _ in 0..<500 where !inFlight {
+            inFlight = try !StubProtocol.requests(to: stalled).isEmpty && !contents(of: scratch).isEmpty
+            if !inFlight { try await Task.sleep(nanoseconds: 10_000_000) }
+        }
+        XCTAssertTrue(inFlight, "the transfer never started")
+        task.cancel()
+        let cancelled = await task.value
+
+        guard case .cancelled = cancelled else { return XCTFail("expected .cancelled, got \(cancelled)") }
+        XCTAssertEqual(try contents(of: downloads), [])
+        XCTAssertEqual(try contents(of: scratch), [])
+    }
+
+    /// The scratch file is placed by the nearest folder that exists: asked
+    /// about a post folder not made yet, the system would give up and put
+    /// the bytes on the startup disk, and the final move onto a download
+    /// folder on another disk would become a copy.
+    func testTheScratchFileIsPlacedByTheNearestFolderOnDisk() throws {
+        let folder = downloads.appendingPathComponent("Invented Author - hello [AbCdEfGhIjK]", isDirectory: true)
+        XCTAssertEqual(DirectDownload.scratchVolumeAnchor(for: folder).path, downloads.standardizedFileURL.path)
+        XCTAssertEqual(
+            DirectDownload.scratchVolumeAnchor(for: folder.appendingPathComponent("deeper", isDirectory: true)).path,
+            downloads.standardizedFileURL.path)
+        // A folder that is there is its own anchor.
+        XCTAssertEqual(DirectDownload.scratchVolumeAnchor(for: downloads).path, downloads.standardizedFileURL.path)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: folder.path), "placing the scratch file made the folder")
+    }
+
     func testEveryExtensionAFileCanBeSavedUnderIsKnownToTheReDownloadCheck() {
         // `existingFile` only looks for the extensions of MediaExtensions: a
         // file saved under any other would be fetched again on every run,

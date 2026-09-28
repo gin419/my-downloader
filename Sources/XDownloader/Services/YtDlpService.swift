@@ -31,7 +31,10 @@ enum YtDlpService {
         let stem =
             resolvedStem.map(Self.literalTemplateText)
             ?? (profile.extractorTitleIncludesUploader ? "%(title)s" : "%(uploader)s - %(title)s")
-        let outputTemplate = outputDirectory.path + "/\(stem)\(profile.outputTemplateSuffix).%(ext)s"
+        // The directory is text in the template too: a row's own folder is
+        // named after its stem, so a "%" there must not open a field.
+        let outputTemplate =
+            RowFolder.templateDirectory(outputDirectory) + "/\(stem)\(profile.outputTemplateSuffix).%(ext)s"
         var args: [String] = []
         if profile.receivesBrowserCookies {
             args += CookieArgs.make(

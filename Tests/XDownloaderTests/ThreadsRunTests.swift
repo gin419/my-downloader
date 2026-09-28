@@ -4,7 +4,8 @@ import XCTest
 
 /// `ThreadsService.run` from link to files on disk: what it requests, what it
 /// leaves on the row at every exit, and that it never reports more than
-/// happened. The pages are the synthetic fixtures; page and media requests
+/// happened, and that a post of two or more files keeps them in a folder
+/// of its own. The pages are the synthetic fixtures; page and media requests
 /// are answered by a URLProtocol stub on an injected session, so nothing
 /// here touches the network.
 @MainActor
@@ -41,7 +42,9 @@ final class ThreadsRunTests: XCTestCase {
         // One file: no " #1".
         XCTAssertTrue(saved[0].hasPrefix("Example Author - "), saved[0])
         XCTAssertTrue(saved[0].hasSuffix(" [SYNimage0001].jpg"), saved[0])
+        // One file: loose in the download folder, as it always was.
         XCTAssertEqual(item.outputPath, downloads.appendingPathComponent(saved[0]).path)
+        XCTAssertNil(item.destination)
         XCTAssertEqual(item.imageCount, 1)
         XCTAssertNil(item.videoCount)
         XCTAssertEqual(item.mediaCategory, .image)
@@ -104,7 +107,8 @@ final class ThreadsRunTests: XCTestCase {
 
         XCTAssertTrue(finished)
         XCTAssertEqual(item.status, .completed)
-        let saved = try contents(of: downloads)
+        let folder = try postFolder()
+        let saved = try contents(of: folder)
         XCTAssertEqual(saved.count, post.media.count)
         for (index, kind) in post.kinds.enumerated() {
             // Named after what arrived: the images came as WebP.
@@ -115,6 +119,28 @@ final class ThreadsRunTests: XCTestCase {
         XCTAssertEqual(item.videoCount, post.kinds.filter { $0 == "video" }.count)
         XCTAssertEqual(item.mediaCategory, .mixed)
         XCTAssertEqual(item.outputPath.map { URL(fileURLWithPath: $0).pathExtension }, "mp4")
+        XCTAssertEqual(item.outputPath.map { URL(fileURLWithPath: $0).deletingLastPathComponent().path }, folder.path)
+    }
+
+    func testCarouselGoesIntoAFolderNamedAfterItsFiles() async throws {
+        let post = try fixture("threads_image_carousel.html")
+        StubProtocol.set(page(post.html), for: post.pageURL)
+        for address in post.media { StubProtocol.set(jpeg(), for: address) }
+        let item = DownloadItem(url: post.link)
+
+        let finished = await ThreadsService.run(item: item, outputDirectory: downloads, session: stubSession())
+
+        XCTAssertTrue(finished)
+        XCTAssertEqual(item.status, .completed)
+        let folder = try postFolder()
+        XCTAssertTrue(folder.lastPathComponent.hasSuffix(" [SYNcarousel1]"), folder.lastPathComponent)
+        // The folder is the files' name without their number.
+        let names = (1...post.media.count).map { "\(folder.lastPathComponent) #\($0).jpg" }
+        XCTAssertEqual(try contents(of: folder), names)
+        XCTAssertEqual(item.outputPath, folder.appendingPathComponent(names[0]).path)
+        XCTAssertEqual(item.imageCount, post.media.count)
+        XCTAssertEqual(item.destination?.path, folder.path)
+        XCTAssertFalse(item.destinationExistedAtStart)
     }
 
     func testQuotedMediaIsNamedAfterItsOriginalAuthor() async throws {
@@ -141,7 +167,8 @@ final class ThreadsRunTests: XCTestCase {
         let first = DownloadItem(url: post.link)
         let firstRun = await ThreadsService.run(item: first, outputDirectory: downloads, session: stubSession())
         XCTAssertTrue(firstRun)
-        let saved = try contents(of: downloads)
+        let folder = try postFolder()
+        let saved = try contents(of: folder)
         XCTAssertEqual(saved.count, post.media.count)
 
         let second = DownloadItem(url: post.link)
@@ -149,7 +176,11 @@ final class ThreadsRunTests: XCTestCase {
 
         XCTAssertTrue(secondRun)
         XCTAssertEqual(second.status, .completed)
-        XCTAssertEqual(try contents(of: downloads), saved)
+        XCTAssertEqual(try postFolder(), folder)
+        XCTAssertEqual(try contents(of: folder), saved)
+        XCTAssertEqual(second.outputPath, first.outputPath)
+        // The folder was there as the second run began.
+        XCTAssertTrue(second.destinationExistedAtStart)
         XCTAssertEqual(second.imageCount, post.media.count)
         // The post is resolved afresh every run; the files are not fetched twice.
         XCTAssertEqual(StubProtocol.requests(to: post.pageURL).count, 2)
@@ -204,7 +235,7 @@ final class ThreadsRunTests: XCTestCase {
         let count = post.media.count
         XCTAssertEqual(
             item.status, .failed("Saved \(count - 1) of \(count) files — the server returned HTTP 404. Retry fetches the rest."))
-        XCTAssertEqual(try contents(of: downloads).count, count - 1)
+        XCTAssertEqual(try contents(of: postFolder()).count, count - 1)
         XCTAssertEqual(item.imageCount, count - 1)
         XCTAssertNotNil(item.outputPath)
         XCTAssertNotNil(item.title)
@@ -213,6 +244,50 @@ final class ThreadsRunTests: XCTestCase {
         // Only a refused address (403) is worth resolving the post again.
         XCTAssertEqual(StubProtocol.requests(to: post.pageURL).count, 1)
         for address in post.media { XCTAssertEqual(StubProtocol.requests(to: address).count, 1) }
+    }
+
+    /// The folder follows the files the post declares, not the ones that
+    /// arrived: the Retry finds what the first run saved and fetches only
+    /// what is missing, into the same folder.
+    func testRetryAfterAPartialResultFetchesOnlyTheMissingFileIntoTheSameFolder() async throws {
+        let post = try fixture("threads_image_carousel.html")
+        StubProtocol.set(page(post.html), for: post.pageURL)
+        for address in post.media { StubProtocol.set(jpeg(), for: address) }
+        let last = try XCTUnwrap(post.media.last)
+        StubProtocol.set([.init(status: 404, headers: [:], body: Data()), jpeg()], for: last)
+        let item = DownloadItem(url: post.link)
+        let partial = await ThreadsService.run(item: item, outputDirectory: downloads, session: stubSession())
+        XCTAssertFalse(partial)
+        let folder = try postFolder()
+        XCTAssertEqual(try contents(of: folder).count, post.media.count - 1)
+
+        let retried = await ThreadsService.run(item: item, outputDirectory: downloads, session: stubSession())
+
+        XCTAssertTrue(retried)
+        XCTAssertEqual(item.status, .completed)
+        XCTAssertEqual(try postFolder(), folder)
+        XCTAssertEqual(try contents(of: folder).count, post.media.count)
+        XCTAssertEqual(item.imageCount, post.media.count)
+        for address in post.media.dropLast() { XCTAssertEqual(StubProtocol.requests(to: address).count, 1) }
+        XCTAssertEqual(StubProtocol.requests(to: last).count, 2)
+    }
+
+    /// The folder is made with the first file saved: a post none of whose
+    /// files arrive leaves nothing behind.
+    func testEveryFileFailingLeavesNoFolder() async throws {
+        let post = try fixture("threads_image_carousel.html")
+        StubProtocol.set(page(post.html), for: post.pageURL)
+        for address in post.media { StubProtocol.set(.init(status: 404, headers: [:], body: Data()), for: address) }
+        let item = DownloadItem(url: post.link)
+
+        let finished = await ThreadsService.run(item: item, outputDirectory: downloads, session: stubSession())
+
+        XCTAssertFalse(finished)
+        XCTAssertEqual(
+            item.status,
+            .failed("None of this post's files could be saved — the server returned HTTP 404. Retry fetches them again."))
+        XCTAssertEqual(try contents(of: downloads), [])
+        XCTAssertNil(item.outputPath)
     }
 
     func testRefusedFileInTheMiddleOfAPostIsFetchedFromTheFreshAddress() async throws {
@@ -230,7 +305,7 @@ final class ThreadsRunTests: XCTestCase {
 
         XCTAssertTrue(finished)
         XCTAssertEqual(item.status, .completed)
-        let saved = try contents(of: downloads)
+        let saved = try contents(of: postFolder())
         XCTAssertEqual(saved.count, 3)
         for number in 1...3 {
             XCTAssertEqual(saved.filter { $0.hasSuffix(" [SYNcarousel1] #\(number).jpg") }.count, 1, "\(saved)")
@@ -269,7 +344,7 @@ final class ThreadsRunTests: XCTestCase {
 
         XCTAssertFalse(finished)
         XCTAssertEqual(item.status, .failed("Saved 2 of 3 files — the server returned HTTP 403. Retry fetches the rest."))
-        let saved = try contents(of: downloads)
+        let saved = try contents(of: postFolder())
         XCTAssertEqual(saved.count, 2)
         XCTAssertEqual(saved.filter { $0.hasSuffix(" [SYNcarousel1] #1.jpg") }.count, 1, "\(saved)")
         XCTAssertEqual(saved.filter { $0.hasSuffix(" [SYNcarousel1] #3.jpg") }.count, 1, "\(saved)")
@@ -482,6 +557,33 @@ final class ThreadsRunTests: XCTestCase {
         XCTAssertNil(item.outputPath)
     }
 
+    func testCancelDuringTheFirstFileOfACarouselLeavesNoFolder() async throws {
+        let post = try fixture("threads_image_carousel.html")
+        StubProtocol.set(page(post.html), for: post.pageURL)
+        for address in post.media { StubProtocol.set(jpeg(), for: address) }
+        var stalled = jpeg()
+        stalled.ending = .never
+        StubProtocol.set(stalled, for: post.media[0])
+        let item = DownloadItem(url: post.link)
+        let session = stubSession()
+        let downloads: URL = downloads
+
+        let task = Task { @MainActor in
+            await ThreadsService.run(item: item, outputDirectory: downloads, session: session)
+        }
+        for _ in 0..<500 where StubProtocol.requests(to: post.media[0]).isEmpty {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertEqual(StubProtocol.requests(to: post.media[0]).count, 1, "the transfer never started")
+        task.cancel()
+        let finished = await task.value
+
+        XCTAssertFalse(finished)
+        XCTAssertEqual(try contents(of: downloads), [])
+        XCTAssertNil(item.outputPath)
+        for address in post.media.dropFirst() { XCTAssertTrue(StubProtocol.requests(to: address).isEmpty) }
+    }
+
     // MARK: - Helpers
 
     private struct Post {
@@ -565,5 +667,17 @@ final class ThreadsRunTests: XCTestCase {
 
     private func contents(of directory: URL) throws -> [String] {
         try FileManager.default.contentsOfDirectory(atPath: directory.path).sorted()
+    }
+
+    /// The one folder a post of two or more files was saved into: the only
+    /// entry of the download folder.
+    private func postFolder() throws -> URL {
+        let names = try contents(of: downloads)
+        XCTAssertEqual(names.count, 1, "\(names)")
+        let folder = downloads.appendingPathComponent(try XCTUnwrap(names.first), isDirectory: true)
+        var isDirectory: ObjCBool = false
+        XCTAssertTrue(FileManager.default.fileExists(atPath: folder.path, isDirectory: &isDirectory))
+        XCTAssertTrue(isDirectory.boolValue, "\(folder.lastPathComponent) is not a folder")
+        return folder
     }
 }

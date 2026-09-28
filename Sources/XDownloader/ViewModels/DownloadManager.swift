@@ -1535,14 +1535,34 @@ class DownloadManager: ObservableObject {
             if holdsProfileTurn { instagramProfileRunning = true }
             activeCount += 1
             inFlightItemIDs.insert(item.id)
+            // Every run settles its own folder; the last run's is not
+            // trusted, only worked out again.
+            RowFolder.use(nil, for: item)
             Task {
                 await runDownload(item)
                 inFlightItemIDs.remove(item.id)
+                cleanUpRowFolder(item)
                 if holdsProfileTurn { instagramProfileRunning = false }
                 activeCount -= 1
                 drainQueue()
             }
         }
+    }
+
+    /// Removes the row's folder when this run created it and left it
+    /// empty, whatever the run ended in: yt-dlp makes its folder before the
+    /// first byte, so a failed, stopped or removed row could otherwise
+    /// leave an empty folder behind. Skipped while another running row
+    /// writes to the same folder (two spellings of one post): its files may
+    /// be on their way.
+    private func cleanUpRowFolder(_ item: DownloadItem) {
+        guard let folder = item.destination, !item.destinationExistedAtStart else { return }
+        let shared = items.contains {
+            $0.id != item.id && inFlightItemIDs.contains($0.id)
+                && $0.destination?.standardizedFileURL == folder.standardizedFileURL
+        }
+        guard !shared else { return }
+        RowFolder.removeIfEmpty(folder, createdThisRun: true)
     }
 
     private static func isInstagramProfile(_ item: DownloadItem) -> Bool {
@@ -1823,7 +1843,7 @@ class DownloadManager: ObservableObject {
         let runYtDlp = { [self] () async -> ProcessResult in
             let args = YtDlpService.buildArguments(
                 for: item,
-                outputDirectory: outputDirectory,
+                outputDirectory: item.destination ?? outputDirectory,
                 format: youtubeFormat,
                 videoQuality: videoQuality,
                 audioQuality: audioQuality,
@@ -2149,6 +2169,12 @@ class DownloadManager: ObservableObject {
             finalize(item)
             return
         }
+        // An account's files go into a folder named after it, even when the
+        // account yields one file, so every later paste adds to the same
+        // folder and gallery-dl's own skip finds what is there. The username
+        // is lowercased and of Instagram's own safe characters.
+        let folder = outputDirectory.appendingPathComponent(username, isDirectory: true)
+        RowFolder.use(folder, for: item)
         let cookies = resolveCookiesForDownload()
         await cookieAccess.withScope(for: item.id, file: cookies.path, grantedURL: cookies.granted) {
             await GalleryDlService.runProfile(
@@ -2156,7 +2182,7 @@ class DownloadManager: ObservableObject {
                 username: username,
                 postLimit: limit,
                 executablePath: executable,
-                outputDirectory: outputDirectory,
+                outputDirectory: folder,
                 cookieBrowser: cookieBrowser,
                 cookieBrowserProfile: cookieBrowserProfile,
                 cookiesFile: cookies.path,
@@ -2284,7 +2310,14 @@ class DownloadManager: ObservableObject {
         guard stillInList(item) else { return false }
         if stopped { return false }
         // The stem is set whenever the work resolved, clip or not.
-        if item.resolvedFileStem != nil { return true }
+        if let stem = item.resolvedFileStem {
+            // A clip and its pictures share a folder once there are two
+            // files. yt-dlp is handed the folder, so it is named the way the
+            // clip's own file is ("$" made harmless).
+            let folder = RowFolder.folder(in: outputDirectory, name: RowFolder.appNamed(stem), fileCount: plannedFileCount(item))
+            RowFolder.use(folder, for: item)
+            return true
+        }
         Self.ensureTerminalStatus(item)
         finalize(item)
         return false
@@ -2303,6 +2336,16 @@ class DownloadManager: ObservableObject {
     /// picture to download, or one it could not use that must be counted.
     static func hasResolvedPictures(_ item: DownloadItem) -> Bool {
         !item.resolvedPictures.isEmpty || item.resolvedUnusableFiles > 0
+    }
+
+    /// The files a resolved work page will produce: its clip, and its
+    /// pictures unless they are skipped for the clip (see
+    /// `picturesFollowClip`). An entry the page offered but that could not
+    /// be used never becomes a file, so it does not count.
+    private func plannedFileCount(_ item: DownloadItem) -> Int {
+        let hasClip = item.resolvedAddress != nil
+        let picturesRun = !hasClip || youtubeFormat != .audioOnly
+        return (hasClip ? 1 : 0) + (picturesRun ? item.resolvedPictures.count : 0)
     }
 
     /// True when a work page's pictures are downloaded after its clip ran.
@@ -2334,7 +2377,7 @@ class DownloadManager: ObservableObject {
         }
         let pictures = item.resolvedPictures
         let stem = item.resolvedFileStem ?? DmmPreviewResolver.unknownMaker
-        let directory = outputDirectory
+        let directory = item.destination ?? outputDirectory
         let session = dmmSession
         var run = DmmPreviewResolver.PictureRun.cancelled
         let stopped = await runResolverTask(item) {

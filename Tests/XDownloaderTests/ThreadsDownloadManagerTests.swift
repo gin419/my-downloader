@@ -64,6 +64,33 @@ final class ThreadsDownloadManagerTests: XCTestCase {
         XCTAssertEqual(StubProtocol.requests(to: post.pageURL).count, 1)
     }
 
+    /// A post of two or more files ends Done in a folder of its own; the
+    /// row and history name a file inside it, and history knows its size.
+    func testAMultiFilePostEndsDoneInItsFolderAndHistoryRecordsTheFile() async throws {
+        let post = try fixture("threads_image_carousel.html")
+        StubProtocol.set(page(post.html), for: post.pageURL)
+        for address in post.media { StubProtocol.set(jpeg(), for: address) }
+        let manager = try makeManager()
+
+        manager.capture(text: post.link, source: .field)
+
+        let item = try XCTUnwrap(manager.items.first)
+        try await waitUntil("the download finished") { self.history.count() == 1 }
+        XCTAssertEqual(item.status, .completed)
+        let entries = try contents(of: downloads)
+        XCTAssertEqual(entries.count, 1)
+        let folder = downloads.appendingPathComponent(try XCTUnwrap(entries.first), isDirectory: true)
+        let names = (1...post.media.count).map { "\(folder.lastPathComponent) #\($0).jpg" }
+        XCTAssertEqual(try contents(of: folder), names)
+        let outputPath = folder.appendingPathComponent(names[0]).path
+        XCTAssertEqual(item.outputPath, outputPath)
+        let entry = try XCTUnwrap(history.mostRecentCompleted(for: item.url))
+        XCTAssertEqual(entry.outputPath, outputPath)
+        let size = try XCTUnwrap(FileManager.default.attributesOfItem(atPath: outputPath)[.size] as? Int64)
+        XCTAssertEqual(entry.fileSizeBytes, size)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: ytDlpMark.path))
+    }
+
     func testResumedRowIsResolvedAgainInsteadOfTrustingWhatItCarries() async throws {
         // A row that still names a file from an earlier run. With yt-dlp
         // skipped there is no yt-dlp result to read as "exit 0, file on

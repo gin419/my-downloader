@@ -368,8 +368,12 @@ enum GalleryDlService {
                 item.outputPath = outputDirectory.appendingPathComponent(name).path
             } else if let path = item.outputPath, !FileManager.default.fileExists(atPath: path) {
                 // Never nil: a Done row with no output reads as the old
-                // empty-success bug and is re-queued at launch.
-                item.outputPath = outputDirectory.path
+                // empty-success bug and is re-queued at launch. The run's
+                // directory is the account's own folder inside the download
+                // folder; when the tool never made it (every file an archive
+                // hit), the download folder is what is really there.
+                let isThere = FileManager.default.fileExists(atPath: outputDirectory.path)
+                item.outputPath = (isThere ? outputDirectory : outputDirectory.deletingLastPathComponent()).path
             }
             item.recomputeMediaCategory()
             item.markCompleted()

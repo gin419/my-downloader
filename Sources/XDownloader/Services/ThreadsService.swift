@@ -76,6 +76,13 @@ enum ThreadsService {
         }
 
         let stem = fileStem(author: post.author, text: post.text, code: post.code)
+        // Two or more files get a folder named after the stem. The count is
+        // the post's own, so a Retry after a partial run finds the files it
+        // already saved; the re-resolve below keeps the count, so the folder
+        // cannot change mid-run.
+        let folder = RowFolder.folder(in: outputDirectory, name: stem, fileCount: post.media.count)
+        RowFolder.use(folder, for: item)
+        let directory = folder ?? outputDirectory
         var media = post.media
         var savedPaths: [String] = []
         var imageCount = 0
@@ -94,11 +101,11 @@ enum ThreadsService {
             let entry = media[index]
             let name = baseName(stem: stem, index: index, count: media.count)
 
-            var saved = DirectDownload.existingFile(baseName: name, in: outputDirectory)
+            var saved = DirectDownload.existingFile(baseName: name, in: directory)
             if saved == nil {
                 item.status = .downloading
                 let outcome = await DirectDownload.download(
-                    entry.url, to: outputDirectory, baseName: name,
+                    entry.url, to: directory, baseName: name,
                     fallbackExtension: entry.kind == .video ? "mp4" : "jpg",
                     item: item, fileIndex: index, fileCount: media.count, session: session)
                 switch outcome {

@@ -6,11 +6,13 @@ import XCTest
 /// An Instagram profile link through DownloadManager itself: the account's
 /// newest posts, capped by the number in Settings, in one gallery-dl run —
 /// yt-dlp never starts — and one profile at a time across the app, while a
-/// single post pasted beside it goes ahead. The yt-dlp and gallery-dl the
-/// manager is given are scripts that record their arguments and when they
-/// began and ended; gallery-dl holds until the test lets it go, then saves
-/// one synthetic file the way it reports one. Nothing here touches the
-/// network, a browser or a cookie. Every username and code is invented.
+/// single post pasted beside it goes ahead. The account's files go into a
+/// folder named after it inside the download folder. The yt-dlp and
+/// gallery-dl the manager is given are scripts that record their arguments
+/// and when they began and ended; gallery-dl holds until the test lets it
+/// go, then saves one synthetic file the way it reports one, making the
+/// folder it was handed only then, as gallery-dl does. Nothing here touches
+/// the network, a browser or a cookie. Every username and code is invented.
 @MainActor
 final class InstagramProfileDownloadTests: XCTestCase {
 
@@ -20,6 +22,8 @@ final class InstagramProfileDownloadTests: XCTestCase {
 
     private var root: URL!
     private var downloads: URL!
+    /// The first profile's own folder inside `downloads`.
+    private var firstFolder: URL!
     private var history: HistoryStore!
     /// "begin <account>", "end <account>" and "overlap <account>" lines, as
     /// gallery-dl runs.
@@ -36,6 +40,7 @@ final class InstagramProfileDownloadTests: XCTestCase {
     override func setUpWithError() throws {
         root = FileManager.default.temporaryDirectory.appendingPathComponent("InstagramProfileDownloadTests-\(UUID().uuidString)")
         downloads = root.appendingPathComponent("downloads")
+        firstFolder = downloads.appendingPathComponent("someone_invented", isDirectory: true)
         try FileManager.default.createDirectory(at: downloads, withIntermediateDirectories: true)
         history = HistoryStore(directory: root.appendingPathComponent("stores"))
         galleryDlLog = root.appendingPathComponent("gallery-dl-log")
@@ -73,15 +78,19 @@ final class InstagramProfileDownloadTests: XCTestCase {
         let runs = try galleryDlRuns()
         XCTAssertEqual(runs.count, 1)
         let expected = GalleryDlService.profileArguments(
-            username: "someone_invented", postLimit: 7, outputDirectory: downloads,
+            username: "someone_invented", postLimit: 7, outputDirectory: firstFolder,
             cookieBrowser: .chrome, cookieBrowserProfile: "", cookiesFile: nil)
         XCTAssertEqual(runs.first, expected)
         XCTAssertTrue(expected.contains("max-posts=7"))
         XCTAssertEqual(Array(expected.prefix(2)), ["--cookies-from-browser", "chrome"])
         XCTAssertEqual(expected.last, "https://www.instagram.com/someone_invented/posts/")
         // A lone image keeps the name gallery-dl gave it, so the next paste
-        // finds it and skips it.
-        XCTAssertEqual(try contents(of: downloads), ["someone_invented - synthetic [SYNpost0001_] #1.jpg"])
+        // finds it and skips it. It is in the account's folder all the same:
+        // every later paste adds to that folder.
+        XCTAssertEqual(try contents(of: downloads), ["someone_invented"])
+        XCTAssertEqual(try contents(of: firstFolder), ["someone_invented - synthetic [SYNpost0001_] #1.jpg"])
+        XCTAssertEqual(
+            item.outputPath, firstFolder.appendingPathComponent("someone_invented - synthetic [SYNpost0001_] #1.jpg").path)
         let entry = try XCTUnwrap(history.mostRecentCompleted(for: firstProfile))
         XCTAssertEqual(entry.site, "instagram")
         XCTAssertEqual(entry.title, "someone_invented - newest 7 posts")
@@ -119,9 +128,18 @@ final class InstagramProfileDownloadTests: XCTestCase {
         XCTAssertEqual(again.toConfirm, 0)
         XCTAssertNil(manager.pendingDuplicates)
         try await waitUntil("the second download finished") { self.history.count() == 2 }
-        // The file of the first run was skipped, not fetched again.
-        XCTAssertEqual(try contents(of: downloads), ["someone_invented - synthetic [SYNpost0001_] #1.jpg"])
-        XCTAssertEqual(try XCTUnwrap(manager.items.first).status, .completed)
+        // The second paste is handed the same folder, and the file of the
+        // first run was skipped there, not fetched again.
+        let runs = try galleryDlRuns()
+        XCTAssertEqual(runs.count, 2)
+        XCTAssertEqual(runs[0], runs[1])
+        XCTAssertEqual(try contents(of: downloads), ["someone_invented"])
+        XCTAssertEqual(try contents(of: firstFolder), ["someone_invented - synthetic [SYNpost0001_] #1.jpg"])
+        let second = try XCTUnwrap(manager.items.first)
+        XCTAssertEqual(second.status, .completed)
+        XCTAssertNil(second.imageCount)
+        XCTAssertEqual(
+            second.outputPath, firstFolder.appendingPathComponent("someone_invented - synthetic [SYNpost0001_] #1.jpg").path)
     }
 
     /// Pasting a profile whose row is still listed as Done runs that row
@@ -210,6 +228,9 @@ final class InstagramProfileDownloadTests: XCTestCase {
         XCTAssertFalse(item.autoRetryAttempted)
         XCTAssertEqual(begun(), 1)
         XCTAssertEqual(try starts(of: ytDlpMark), 0)
+        // gallery-dl was handed the account's folder and saved nothing:
+        // no folder is left behind.
+        XCTAssertEqual(try contents(of: downloads), [])
     }
 
     func testMissingGalleryDlIsNamed() async throws {
@@ -367,11 +388,12 @@ final class InstagramProfileDownloadTests: XCTestCase {
     }
 
     /// A Done row counts only what this run saved, and Show in Finder points
-    /// at something that is there: a new file, or the folder when every file
-    /// was skipped and the reported one has since gone.
+    /// at something that is there: a new file, or, when every file was
+    /// skipped and the reported one has since gone, the account's folder —
+    /// the download folder when the account has no folder.
     func testTheDoneRowCountsOnlyNewFilesAndPointsAtAFileThatExists() async throws {
         letGo()
-        let gone = downloads.appendingPathComponent("someone_invented - moved [SYNpost0001_] #1.jpg").path
+        let gone = firstFolder.appendingPathComponent("someone_invented - moved [SYNpost0001_] #1.jpg").path
         let skipsOnly = try makeManager(galleryDlSays: "echo \"# \(gone)\"")
         skipsOnly.capture(text: firstProfile, source: .field)
         let first = try XCTUnwrap(skipsOnly.items.first)
@@ -387,7 +409,21 @@ final class InstagramProfileDownloadTests: XCTestCase {
         XCTAssertEqual(second.status, .completed)
         XCTAssertEqual(second.imageCount, 1)
         XCTAssertEqual(
-            second.outputPath, downloads.appendingPathComponent("another_invented - synthetic [SYNpost0002_] #1.jpg").path)
+            second.outputPath,
+            downloads.appendingPathComponent("another_invented/another_invented - synthetic [SYNpost0002_] #1.jpg").path)
+
+        // The account's folder is there, from an earlier paste: that is
+        // what the row shows.
+        try FileManager.default.createDirectory(at: firstFolder, withIntermediateDirectories: true)
+        let inFolder = try makeManager(galleryDlSays: "echo \"# \(gone)\"")
+        inFolder.capture(text: firstProfile, source: .field)
+        let third = try XCTUnwrap(inFolder.items.first)
+        try await waitUntil("the third run ended") { self.history.count() == 3 }
+        XCTAssertEqual(third.status, .completed)
+        XCTAssertEqual(third.outputPath, firstFolder.path)
+        // A folder that was there before the run is never removed, empty
+        // or not.
+        XCTAssertTrue(FileManager.default.fileExists(atPath: firstFolder.path))
     }
 
     /// Another site keeps showing the error as it arrives.
@@ -557,6 +593,7 @@ final class InstagramProfileDownloadTests: XCTestCase {
     /// gallery-dl logs to stderr; stdout here keeps the lines in order.
     private func savesPost(_ code: String) -> String {
         """
+        mkdir -p "$dest"
         file="$dest/$account - synthetic [\(code)] #1.jpg"
         printf 'synthetic' > "$file"
         echo "$file"
@@ -639,6 +676,7 @@ final class InstagramProfileDownloadTests: XCTestCase {
             if [ -f "$file" ]; then
                 echo "# $file"
             else
+                mkdir -p "$dest"
                 printf 'synthetic' > "$file"
                 echo "$file"
             fi
