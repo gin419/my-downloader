@@ -26,26 +26,29 @@ final class DmmPreviewResolverTests: XCTestCase {
             Resolver.classify(response: try fixture("dmm_preview_2d.json"), contentID: "test00123"),
             .success(
                 Resolver.Preview(
-                    address: try XCTUnwrap(
-                        URL(string: "https://cc3001.dmm.co.jp/pv/SYNTHETICtokenAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/test00123hhb.mp4")),
-                    title: "Synthetic Sample Title", maker: "Synthetic Maker", contentID: "test00123", kind: .standard)))
+                    clip: Resolver.Clip(
+                        address: try XCTUnwrap(
+                            URL(string: "https://cc3001.dmm.co.jp/pv/SYNTHETICtokenAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/test00123hhb.mp4")),
+                        kind: .standard),
+                    pictures: [], unusable: 0,
+                    title: "Synthetic Sample Title", maker: "Synthetic Maker", contentID: "test00123")))
     }
 
     func testStandardPreviewWithTheOlderFileNaming() throws {
         let preview = try Resolver.classify(response: try fixture("dmm_preview_2d_legacy_suffix.json"), contentID: "test00123").get()
         // Byte for byte: the address is never rebuilt from its parts.
         XCTAssertEqual(
-            preview.address.absoluteString,
+            preview.clip?.address.absoluteString,
             "https://cc3001.dmm.co.jp/pv/SYNTHETICtokenCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC/test00123_mhb_w.mp4")
-        XCTAssertEqual(preview.kind, .standard)
+        XCTAssertEqual(preview.clip?.kind, .standard)
     }
 
     func testVRPreview() throws {
         let preview = try Resolver.classify(response: try fixture("dmm_preview_vr.json"), contentID: "testvr00045").get()
         XCTAssertEqual(
-            preview.address.absoluteString,
+            preview.clip?.address.absoluteString,
             "https://cc3001.dmm.co.jp/pv/SYNTHETICtokenDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD/testvr00045vruhq.mp4")
-        XCTAssertEqual(preview.kind, .vr)
+        XCTAssertEqual(preview.clip?.kind, .vr)
         XCTAssertEqual(preview.contentID, "testvr00045")
         XCTAssertEqual(preview.maker, "Synthetic Maker")
     }
@@ -68,6 +71,39 @@ final class DmmPreviewResolverTests: XCTestCase {
         XCTAssertEqual(Resolver.classify(response: try fixture("dmm_changed_format.json"), contentID: "test00123"), .failure(.changedFormat))
     }
 
+    func testPicturesWithoutAClip() throws {
+        // The answer lists the samples out of order: the gallery is the
+        // cover first, then the samples by number, each at its large size.
+        let preview = try Resolver.classify(response: try fixture("dmm_pictures_only.json"), contentID: "testvr00046").get()
+        XCTAssertNil(preview.clip)
+        XCTAssertEqual(preview.unusable, 0)
+        XCTAssertEqual(preview.contentID, "testvr00046")
+        XCTAssertEqual(
+            preview.pictures,
+            [
+                .init(position: 1, address: try picture("testvr00046", "cover-large")),
+                .init(position: 2, address: try picture("testvr00046", "sample-1-large")),
+                .init(position: 3, address: try picture("testvr00046", "sample-2-large")),
+                .init(position: 4, address: try picture("testvr00046", "sample-3-large")),
+            ])
+    }
+
+    func testClipAndPictures() throws {
+        let preview = try Resolver.classify(response: try fixture("dmm_preview_with_pictures.json"), contentID: "test00124").get()
+        XCTAssertEqual(preview.clip?.kind, .standard)
+        XCTAssertEqual(
+            preview.clip?.address.absoluteString,
+            "https://cc3001.dmm.co.jp/pv/SYNTHETICtokenEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE/test00124hhb.mp4")
+        XCTAssertEqual(
+            preview.pictures,
+            [
+                .init(position: 1, address: try picture("test00124", "cover-large")),
+                .init(position: 2, address: try picture("test00124", "sample-1-large")),
+                .init(position: 3, address: try picture("test00124", "sample-2-large")),
+            ])
+        XCTAssertEqual(preview.unusable, 0)
+    }
+
     func testEveryFixtureHasATest() throws {
         // A fixture added without a test would sit in the repo proving nothing.
         let folder = try XCTUnwrap(Bundle.module.url(forResource: "Fixtures", withExtension: nil))
@@ -76,7 +112,8 @@ final class DmmPreviewResolverTests: XCTestCase {
             Set(answers),
             [
                 "dmm_preview_2d.json", "dmm_preview_2d_legacy_suffix.json", "dmm_preview_vr.json", "dmm_no_preview.json",
-                "dmm_not_found.json", "dmm_region_denied.json", "dmm_changed_format.json",
+                "dmm_not_found.json", "dmm_region_denied.json", "dmm_changed_format.json", "dmm_pictures_only.json",
+                "dmm_preview_with_pictures.json",
             ])
     }
 
@@ -87,8 +124,8 @@ final class DmmPreviewResolverTests: XCTestCase {
             standard: ["highestMovieUrl": "https://cc3001.dmm.co.jp/pv/SYNa/test00123hhb.mp4", "hlsMovieUrl": streamAddress],
             vr: ["highestMovieUrl": "https://cc3001.dmm.co.jp/pv/SYNb/test00123vruhq.mp4"])
         let preview = try Resolver.classify(response: answer, contentID: "test00123").get()
-        XCTAssertEqual(preview.kind, .standard)
-        XCTAssertEqual(preview.address.absoluteString, "https://cc3001.dmm.co.jp/pv/SYNa/test00123hhb.mp4")
+        XCTAssertEqual(preview.clip?.kind, .standard)
+        XCTAssertEqual(preview.clip?.address.absoluteString, "https://cc3001.dmm.co.jp/pv/SYNa/test00123hhb.mp4")
     }
 
     func testVRFileWinsOverTheStream() throws {
@@ -96,15 +133,15 @@ final class DmmPreviewResolverTests: XCTestCase {
             standard: ["highestMovieUrl": NSNull(), "hlsMovieUrl": streamAddress],
             vr: ["highestMovieUrl": "https://cc3001.dmm.co.jp/pv/SYNb/test00123vruhq.mp4"])
         let preview = try Resolver.classify(response: answer, contentID: "test00123").get()
-        XCTAssertEqual(preview.kind, .vr)
-        XCTAssertEqual(preview.address.absoluteString, "https://cc3001.dmm.co.jp/pv/SYNb/test00123vruhq.mp4")
+        XCTAssertEqual(preview.clip?.kind, .vr)
+        XCTAssertEqual(preview.clip?.address.absoluteString, "https://cc3001.dmm.co.jp/pv/SYNb/test00123vruhq.mp4")
     }
 
     func testStreamIsTheLastResort() throws {
         let answer = try self.answer(standard: ["highestMovieUrl": "", "hlsMovieUrl": streamAddress], vr: NSNull())
         let preview = try Resolver.classify(response: answer, contentID: "test00123").get()
-        XCTAssertEqual(preview.kind, .stream)
-        XCTAssertEqual(preview.address.absoluteString, streamAddress)
+        XCTAssertEqual(preview.clip?.kind, .stream)
+        XCTAssertEqual(preview.clip?.address.absoluteString, streamAddress)
     }
 
     func testEmptySamplesAreNoPreview() throws {
@@ -145,7 +182,7 @@ final class DmmPreviewResolverTests: XCTestCase {
         // A preview that is there is still found beside a sample that
         // cannot be read.
         let mixed = try self.answer(standard: ["highestMovieUrl": file, "hlsMovieUrl": 1], vr: [1])
-        XCTAssertEqual(try Resolver.classify(response: mixed, contentID: "test00123").get().address.absoluteString, file)
+        XCTAssertEqual(try Resolver.classify(response: mixed, contentID: "test00123").get().clip?.address.absoluteString, file)
     }
 
     func testARefusedAddressIsNeverReplacedByTheNextOne() throws {
@@ -167,6 +204,169 @@ final class DmmPreviewResolverTests: XCTestCase {
         XCTAssertEqual(Resolver.classify(response: answer, contentID: "test00123"), .failure(.noPreview))
         XCTAssertFalse(Resolver.query.contains("products"))
         XCTAssertFalse(String(decoding: try XCTUnwrap(Resolver.request(contentID: "test00123").httpBody), as: UTF8.self).contains("products"))
+    }
+
+    // MARK: - Pictures
+
+    func testTheLargeSizeIsTakenAndTheSmallerOnlyWhenTheLargeIsMissing() throws {
+        let clip: [String: Any] = ["highestMovieUrl": "https://cc3001.dmm.co.jp/pv/SYNa/test00123hhb.mp4", "hlsMovieUrl": NSNull()]
+        let answer = try self.answer(
+            standard: clip, vr: NSNull(),
+            cover: ["largeUrl": NSNull(), "mediumUrl": address("cover-medium")],
+            samples: [
+                ["number": 1, "imageUrl": address("s1-thumb"), "largeImageUrl": address("s1-large")],
+                ["number": 2, "imageUrl": address("s2-thumb"), "largeImageUrl": NSNull()],
+                ["number": 3, "imageUrl": address("s3-thumb"), "largeImageUrl": "  "],
+                // Nothing at either size: no picture, and no place taken.
+                ["number": 4, "imageUrl": NSNull(), "largeImageUrl": ""],
+                ["number": 5, "imageUrl": NSNull(), "largeImageUrl": address("s5-large")],
+            ])
+        let preview = try Resolver.classify(response: answer, contentID: "test00123").get()
+        XCTAssertEqual(
+            preview.pictures.map(\.address.absoluteString),
+            [address("cover-medium"), address("s1-large"), address("s2-thumb"), address("s3-thumb"), address("s5-large")])
+        XCTAssertEqual(preview.pictures.map(\.position), [1, 2, 3, 4, 5])
+        XCTAssertEqual(preview.unusable, 0)
+        XCTAssertNotNil(preview.clip)
+    }
+
+    func testSamplesAreSortedByNumberAndTheCoverLeads() throws {
+        let answer = try self.answer(
+            standard: NSNull(), vr: NSNull(),
+            cover: ["largeUrl": address("cover"), "mediumUrl": NSNull()],
+            samples: [10, 2, 1, 9].map { ["number": $0, "imageUrl": NSNull(), "largeImageUrl": address("s\($0)")] })
+        let preview = try Resolver.classify(response: answer, contentID: "test00123").get()
+        XCTAssertEqual(
+            preview.pictures.map(\.address.absoluteString), [address("cover"), address("s1"), address("s2"), address("s9"), address("s10")])
+        XCTAssertEqual(preview.pictures.map(\.position), [1, 2, 3, 4, 5])
+
+        // No cover: the samples start the gallery.
+        let coverless = try self.answer(
+            standard: NSNull(), vr: NSNull(), cover: NSNull(),
+            samples: [["number": 1, "imageUrl": NSNull(), "largeImageUrl": address("s1")]])
+        XCTAssertEqual(
+            try Resolver.classify(response: coverless, contentID: "test00123").get().pictures,
+            [.init(position: 1, address: try XCTUnwrap(URL(string: address("s1"))))])
+    }
+
+    /// A refused address is skipped and counted, never replaced — not by the
+    /// thumbnail of the same picture either — and the pictures after it keep
+    /// their numbers.
+    func testARefusedPictureAddressIsSkippedAndCounted() throws {
+        let refused = [
+            "http://awsimgsrc.dmm.co.jp/pics_dig/digital/video/test00123/SYNTHETIC-s1.jpg",
+            "https://example.com/pics_dig/digital/video/test00123/SYNTHETIC-s1.jpg",
+            "https://user@awsimgsrc.dmm.co.jp/pics_dig/digital/video/test00123/SYNTHETIC-s1.jpg",
+            "https://awsimgsrc.dmm.co.jp/pics_dig/digital/video/test00123/SYNTHETIC-s1.html",
+        ]
+        for bad in refused {
+            let answer = try self.answer(
+                standard: NSNull(), vr: NSNull(), cover: NSNull(),
+                samples: [
+                    ["number": 1, "imageUrl": address("s1-thumb"), "largeImageUrl": bad],
+                    ["number": 2, "imageUrl": NSNull(), "largeImageUrl": address("s2")],
+                ])
+            let preview = try Resolver.classify(response: answer, contentID: "test00123").get()
+            XCTAssertEqual(preview.pictures, [.init(position: 2, address: try XCTUnwrap(URL(string: address("s2"))))], bad)
+            XCTAssertEqual(preview.unusable, 1, bad)
+        }
+        // Nothing else to download: the site has reshaped its answer.
+        let alone = try self.answer(
+            standard: NSNull(), vr: NSNull(), cover: ["largeUrl": refused[1], "mediumUrl": address("cover-medium")], samples: [Any]())
+        XCTAssertEqual(Resolver.classify(response: alone, contentID: "test00123"), .failure(.changedFormat))
+    }
+
+    func testPictureFieldsOfAnotherType() throws {
+        let clip: [String: Any] = ["highestMovieUrl": "https://cc3001.dmm.co.jp/pv/SYNa/test00123hhb.mp4", "hlsMovieUrl": NSNull()]
+        let good: [String: Any] = ["number": 1, "imageUrl": NSNull(), "largeImageUrl": address("s1")]
+        let reshaped: [(name: String, cover: Any, samples: Any)] = [
+            ("the list as text", NSNull(), address("s1")),
+            ("the list as a number", NSNull(), 1),
+            ("the list as an object", NSNull(), good),
+            ("an entry as text", NSNull(), [address("s1")]),
+            ("an entry without a number", NSNull(), [["imageUrl": NSNull(), "largeImageUrl": address("s1")]]),
+            ("a number as text", NSNull(), [["number": "1", "imageUrl": NSNull(), "largeImageUrl": address("s1")]]),
+            ("an address as an object", NSNull(), [["number": 1, "imageUrl": NSNull(), "largeImageUrl": ["url": address("s1")]]]),
+            ("an address under another name", NSNull(), [["number": 1, "bestImageUrl": address("s1")]]),
+            ("the cover as text", address("cover"), [Any]()),
+            ("a cover address as a number", ["largeUrl": 1, "mediumUrl": NSNull()], [Any]()),
+        ]
+        for c in reshaped {
+            // With a clip: the clip is the download, and the rest is counted.
+            let withClip = try Resolver.classify(
+                response: try answer(standard: clip, vr: NSNull(), cover: c.cover, samples: c.samples), contentID: "test00123"
+            ).get()
+            XCTAssertNotNil(withClip.clip, c.name)
+            XCTAssertEqual(withClip.pictures, [], c.name)
+            XCTAssertEqual(withClip.unusable, 1, c.name)
+            // With a good picture beside it: that one downloads, and the
+            // rest is counted.
+            let seventh: [String: Any] = ["number": 7, "imageUrl": NSNull(), "largeImageUrl": address("s7")]
+            let beside: (cover: Any, samples: Any, expected: String) =
+                if let list = c.samples as? [Any] {
+                    (c.cover, list + [seventh], address("s7"))
+                } else {
+                    (["largeUrl": address("cover"), "mediumUrl": NSNull()], c.samples, address("cover"))
+                }
+            let withPicture = try Resolver.classify(
+                response: try answer(standard: NSNull(), vr: NSNull(), cover: beside.cover, samples: beside.samples), contentID: "test00123"
+            ).get()
+            XCTAssertNil(withPicture.clip, c.name)
+            XCTAssertEqual(withPicture.pictures.map(\.address.absoluteString), [beside.expected], c.name)
+            XCTAssertEqual(withPicture.unusable, 1, c.name)
+            // Nothing else: a changed format, never "no preview".
+            XCTAssertEqual(
+                Resolver.classify(response: try answer(standard: NSNull(), vr: NSNull(), cover: c.cover, samples: c.samples), contentID: "test00123"),
+                .failure(.changedFormat), c.name)
+        }
+        // The fields missing altogether: the query asks for them.
+        var work = self.work(standard: NSNull(), vr: NSNull())
+        work["packageImage"] = nil
+        work["sampleImages"] = nil
+        let missing = try JSONSerialization.data(withJSONObject: ["data": ["ipInfo": ["accessStatus": "ALLOW"], "ppvContent": work]])
+        XCTAssertEqual(Resolver.classify(response: missing, contentID: "test00123"), .failure(.changedFormat))
+        // Plainly empty, in every spelling of empty: no preview.
+        for (cover, samples) in [(NSNull(), NSNull()), (NSNull(), [Any]()), (["largeUrl": NSNull(), "mediumUrl": ""], [Any]())] as [(Any, Any)] {
+            let answer = try self.answer(standard: NSNull(), vr: NSNull(), cover: cover, samples: samples)
+            XCTAssertEqual(Resolver.classify(response: answer, contentID: "test00123"), .failure(.noPreview))
+        }
+    }
+
+    func testOnlyHTTPSPicturesOnTheSitesHostsAreAccepted() {
+        let accepted = [
+            "https://awsimgsrc.dmm.co.jp/pics_dig/digital/video/test00123/SYNTHETIC-s1.jpg",
+            "https://awsimgsrc.dmm.co.jp/pics_dig/digital/video/test00123/SYNTHETIC-s1.JPEG",
+            "https://pics.dmm.co.jp/digital/video/test00123/SYNTHETIC-s1.png",
+            "https://awsimgsrc.dmm.co.jp/pics_dig/digital/video/test00123/SYNTHETIC-s1.webp?w=1",
+        ]
+        for address in accepted {
+            XCTAssertEqual(Resolver.pictureAddress(address)?.absoluteString, address, address)
+        }
+        let refused = [
+            "http://awsimgsrc.dmm.co.jp/pics_dig/digital/video/test00123/SYNTHETIC-s1.jpg",
+            "file:///tmp/example/SYNTHETIC-s1.jpg",
+            "https://example.com/pics_dig/digital/video/test00123/SYNTHETIC-s1.jpg",
+            "https://dmm.co.jp/pics_dig/digital/video/test00123/SYNTHETIC-s1.jpg",
+            "https://awsimgsrc.dmm.co.jp.example.com/pics_dig/SYNTHETIC-s1.jpg",
+            "https://awsimgsrc.dmm.co.jp@example.com/pics_dig/SYNTHETIC-s1.jpg",
+            "https://someone:x@awsimgsrc.dmm.co.jp/pics_dig/SYNTHETIC-s1.jpg",
+            // Not a picture file.
+            "https://awsimgsrc.dmm.co.jp/pics_dig/digital/video/test00123/SYNTHETIC-s1.gif",
+            "https://awsimgsrc.dmm.co.jp/pics_dig/digital/video/test00123/SYNTHETIC-s1.mp4",
+            "https://awsimgsrc.dmm.co.jp/pics_dig/digital/video/test00123/",
+            "https://awsimgsrc.dmm.co.jp/pics_dig/view?file=SYNTHETIC-s1.jpg",
+            "",
+        ]
+        for address in refused {
+            XCTAssertNil(Resolver.pictureAddress(address), address)
+        }
+    }
+
+    func testPictureFileNamesAreTheStemNumbered() {
+        XCTAssertEqual(
+            Resolver.pictureBaseName(stem: "Synthetic Maker - Synthetic Sample Title [test00123]", position: 1),
+            "Synthetic Maker - Synthetic Sample Title [test00123] #1")
+        XCTAssertEqual(Resolver.pictureBaseName(stem: "dmm -  [test00123]", position: 20), "dmm -  [test00123] #20")
     }
 
     // MARK: - Names in the answer
@@ -204,9 +404,9 @@ final class DmmPreviewResolverTests: XCTestCase {
         // A visitor from abroad with reduced service: only works not
         // offered abroad are withheld.
         XCTAssertEqual(try classified(status: "RESTRICT_FUNCTION", offeredAbroad: false), .failure(.regionBlocked))
-        XCTAssertEqual(try classified(status: "RESTRICT_FUNCTION", offeredAbroad: true).get().kind, .standard)
-        XCTAssertEqual(try classified(status: "ALLOW", offeredAbroad: false).get().kind, .standard)
-        XCTAssertEqual(try classified(status: NSNull(), offeredAbroad: false).get().kind, .standard)
+        XCTAssertEqual(try classified(status: "RESTRICT_FUNCTION", offeredAbroad: true).get().clip?.kind, .standard)
+        XCTAssertEqual(try classified(status: "ALLOW", offeredAbroad: false).get().clip?.kind, .standard)
+        XCTAssertEqual(try classified(status: NSNull(), offeredAbroad: false).get().clip?.kind, .standard)
     }
 
     // MARK: - Changed format
@@ -306,7 +506,11 @@ final class DmmPreviewResolverTests: XCTestCase {
     }
 
     func testQueryAsksForTheFreeSampleFieldsAndNothingPurchasable() {
-        for field in ["sample2DMovie", "sampleVRMovie", "highestMovieUrl", "hlsMovieUrl", "accessStatus", "isAllowForeign"] {
+        let fields = [
+            "sample2DMovie", "sampleVRMovie", "highestMovieUrl", "hlsMovieUrl", "accessStatus", "isAllowForeign",
+            "packageImage { largeUrl mediumUrl }", "sampleImages { number imageUrl largeImageUrl }",
+        ]
+        for field in fields {
             XCTAssertTrue(Resolver.query.contains(field), field)
         }
         for field in ["products", "price", "license", "deliveryUnit", "QualityGroup", "purchase"] {
@@ -322,7 +526,7 @@ final class DmmPreviewResolverTests: XCTestCase {
         let outcome = await Resolver.resolve(link: "http://VIDEO.DMM.CO.JP/cinema/content?id=TEST00123&utm_source=x", session: stubSession())
 
         guard case .resolved(let preview) = outcome else { return XCTFail("expected a preview, got \(outcome)") }
-        XCTAssertEqual(preview.kind, .standard)
+        XCTAssertEqual(preview.clip?.kind, .standard)
         XCTAssertEqual(preview.contentID, "test00123")
         let requests = StubProtocol.requests(to: Resolver.endpoint)
         XCTAssertEqual(requests.count, 1)
@@ -333,6 +537,25 @@ final class DmmPreviewResolverTests: XCTestCase {
         XCTAssertEqual(sent, Resolver.requestHeaders)
         XCTAssertNil(requests.first?.value(forHTTPHeaderField: "Cookie"))
         XCTAssertEqual(requests.first?.httpShouldHandleCookies, false)
+    }
+
+    func testPicturesComeFromTheSameOneRequest() async throws {
+        StubProtocol.set(json(try fixture("dmm_pictures_only.json")), for: Resolver.endpoint)
+
+        let outcome = await Resolver.resolve(link: "https://video.dmm.co.jp/vr/content/?id=testvr00046", session: stubSession())
+
+        guard case .resolved(let preview) = outcome else { return XCTFail("expected a preview, got \(outcome)") }
+        XCTAssertNil(preview.clip)
+        XCTAssertEqual(preview.pictures.count, 4)
+        let requests = StubProtocol.requests(to: Resolver.endpoint)
+        XCTAssertEqual(requests.count, 1)
+        XCTAssertEqual(requests.first?.httpMethod, "POST")
+        XCTAssertNil(requests.first?.value(forHTTPHeaderField: "Cookie"))
+        XCTAssertEqual(requests.first?.httpShouldHandleCookies, false)
+        // Resolving fetches no picture: those are the download's.
+        for picture in preview.pictures {
+            XCTAssertTrue(StubProtocol.requests(to: picture.address).isEmpty)
+        }
     }
 
     func testDefaultSessionKeepsAndSendsNoCookies() {
@@ -543,7 +766,7 @@ final class DmmPreviewResolverTests: XCTestCase {
             "Work not found — it may have been removed, or the link may be incomplete; check the link, then Retry.")
         XCTAssertEqual(
             Resolver.noPreviewMessage,
-            "This work has no free preview clip, so there is nothing to download. "
+            "This work has no free preview clip or sample pictures, so there is nothing to download. "
                 + "Purchased, rental and subscription videos are not supported.")
         XCTAssertEqual(
             Resolver.regionBlockedMessage,
@@ -599,13 +822,30 @@ final class DmmPreviewResolverTests: XCTestCase {
     private func work(standard: Any, vr: Any) -> [String: Any] {
         [
             "id": "test00123", "title": "Synthetic Sample Title", "isAllowForeign": true, "maker": ["name": "Synthetic Maker"],
-            "sample2DMovie": standard, "sampleVRMovie": vr,
+            "sample2DMovie": standard, "sampleVRMovie": vr, "packageImage": NSNull(), "sampleImages": [Any](),
         ]
     }
 
     private func answer(standard: Any, vr: Any) throws -> Data {
         try JSONSerialization.data(
             withJSONObject: ["data": ["ipInfo": ["accessStatus": "ALLOW"], "ppvContent": work(standard: standard, vr: vr)]])
+    }
+
+    private func answer(standard: Any, vr: Any, cover: Any, samples: Any) throws -> Data {
+        var work = self.work(standard: standard, vr: vr)
+        work["packageImage"] = cover
+        work["sampleImages"] = samples
+        return try JSONSerialization.data(withJSONObject: ["data": ["ipInfo": ["accessStatus": "ALLOW"], "ppvContent": work]])
+    }
+
+    /// A synthetic picture address on the site's picture host.
+    private func address(_ name: String) -> String {
+        "https://awsimgsrc.dmm.co.jp/pics_dig/digital/video/test00123/SYNTHETIC-\(name).jpg"
+    }
+
+    /// A picture address of the picture fixtures.
+    private func picture(_ contentID: String, _ name: String) throws -> URL {
+        try XCTUnwrap(URL(string: "https://awsimgsrc.dmm.co.jp/pics_dig/digital/video/\(contentID)/SYNTHETIC\(name).jpg"))
     }
 
     private func json(_ body: Data) -> StubProtocol.Stub {

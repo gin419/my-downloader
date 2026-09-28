@@ -21,6 +21,9 @@ enum DirectDownload {
         case transport(Error)
         /// The downloaded bytes couldn't be moved into the download folder.
         case move(Error)
+        /// The server answered with success, but not with the kind of file
+        /// the caller asked for (a web page where a picture was expected).
+        case unexpectedContent
     }
 
     /// True for the CocoaError codes `moveItem` throws when the destination
@@ -58,6 +61,8 @@ enum DirectDownload {
             return isDiskWriteError(error)
                 ? "the download folder's disk is full or not writable"
                 : "the file couldn't be saved to the download folder"
+        case .unexpectedContent:
+            return "the server sent something other than the file"
         }
     }
 
@@ -68,7 +73,14 @@ enum DirectDownload {
     /// Retry is dedup-safe — existing files are skipped — so it only fetches
     /// the rest.
     static func partialFailureMessage(saved: Int, attempted: Int, lastFailure: FileFailure) -> String {
-        "Saved \(saved) of \(attempted) files — \(shortReason(for: lastFailure)). Retry fetches the rest."
+        partialFailureMessage(saved: saved, attempted: attempted, reason: shortReason(for: lastFailure))
+    }
+
+    /// The same message for a cause that is not a transfer's — a file the
+    /// work page's resolver could not use, say — so every partial result
+    /// reads alike.
+    static func partialFailureMessage(saved: Int, attempted: Int, reason: String) -> String {
+        "Saved \(saved) of \(attempted) files — \(reason). Retry fetches the rest."
     }
 
     /// Zero files saved: only a disk write error is a LOCAL cause that must
@@ -239,6 +251,16 @@ enum DirectDownload {
     /// set: the sizes of the files still to come are unknown, so any figure
     /// for a multi-file post would be invented.
     ///
+    /// A caller that knows what the file must be passes `accepting` (the
+    /// extensions it may be saved under) and no `fallbackExtension`: a file
+    /// that is not recognised as one of them — an error page answered with
+    /// success, say — is not saved but fails, so it can neither pass for
+    /// that file nor be kept by the next run's re-download check. With a
+    /// `fallbackExtension`, an unrecognised file is saved under it.
+    ///
+    /// `delegate` goes with the request, for a caller that must refuse
+    /// redirects: the session's own default follows them.
+    ///
     /// `temporaryDirectory` is a seam for tests; by default the system picks
     /// a scratch folder on the download folder's own volume.
     @MainActor
@@ -247,11 +269,13 @@ enum DirectDownload {
         headers: [String: String] = [:],
         to directory: URL,
         baseName: String,
-        fallbackExtension: String,
+        fallbackExtension: String?,
+        accepting: Set<String>? = nil,
         item: DownloadItem,
         fileIndex: Int,
         fileCount: Int,
         session: URLSession = DirectDownload.session,
+        delegate: (any URLSessionTaskDelegate)? = nil,
         temporaryDirectory: URL? = nil
     ) async -> Outcome {
         let scratch = Scratch(for: directory, override: temporaryDirectory)
@@ -261,7 +285,9 @@ enum DirectDownload {
         }
 
         let files = max(fileCount, 1)
-        let result = await transfer(request: request(for: url, headers: headers), session: session, to: scratch.file) { progress in
+        let result = await transfer(
+            request: request(for: url, headers: headers), session: session, delegate: delegate, to: scratch.file
+        ) { progress in
             await MainActor.run {
                 guard case .downloading = item.status else { return }
                 if let expected = progress.expected {
@@ -286,7 +312,10 @@ enum DirectDownload {
         // the row is being stopped or removed.
         if Task.isCancelled { return .cancelled }
 
-        let ext = fileExtension(contentType: fetched.contentType, leadingBytes: fetched.leadingBytes) ?? fallbackExtension
+        let recognised = fileExtension(contentType: fetched.contentType, leadingBytes: fetched.leadingBytes)
+        guard let ext = recognised ?? fallbackExtension, accepting.map({ $0.contains(ext) }) ?? true else {
+            return .failed(.unexpectedContent)
+        }
         let destination = directory.appendingPathComponent("\(baseName).\(ext)")
         var saved = destination
         do {
@@ -369,13 +398,14 @@ enum DirectDownload {
     nonisolated private static func transfer(
         request: URLRequest,
         session: URLSession,
+        delegate: (any URLSessionTaskDelegate)?,
         to file: URL,
         report: @escaping @Sendable (Progress) async -> Void
     ) async -> Result<Fetched, Stop> {
         let bytes: URLSession.AsyncBytes
         let response: URLResponse
         do {
-            (bytes, response) = try await session.bytes(for: request)
+            (bytes, response) = try await session.bytes(for: request, delegate: delegate)
         } catch {
             return .failure(isCancellation(error) ? .cancelled : .failed(.transport(error)))
         }

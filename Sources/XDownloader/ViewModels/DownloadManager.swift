@@ -1741,6 +1741,13 @@ class DownloadManager: ObservableObject {
         // The row's title is the resolver's. yt-dlp would name it after the
         // file, id included.
         let resolvedTitle = profile.resolvesAddressBeforeDownload ? item.title : nil
+        // A work page with pictures and no clip has nothing for yt-dlp: it
+        // is not started, and the pictures download in-app.
+        if profile.resolvesAddressBeforeDownload, item.resolvedAddress == nil {
+            if await downloadResolvedPictures(item, clip: .none) { return }
+            finalize(item)
+            return
+        }
 
         // A prior run hit a subtitle 429 and aborted before saving the video —
         // drop subtitles on the retry so the video itself can download.
@@ -1836,6 +1843,13 @@ class DownloadManager: ObservableObject {
             if let resolvedTitle { item.title = resolvedTitle }
             await runImageSweepIfNeeded(item)
             if cookieSaveOnlyFailure { surfaceCookieSaveFeedback() }
+            // The clip is in; a work page's pictures follow it, and settle
+            // the row.
+            if picturesFollowClip(item) {
+                if await downloadResolvedPictures(item, clip: .saved) { return }
+                finalize(item)
+                return
+            }
             item.markCompleted()
             finalize(item)
             return
@@ -1916,6 +1930,14 @@ class DownloadManager: ObservableObject {
         // to settle, retry or record.
         guard stillInList(item) else { return }
         Self.ensureTerminalStatus(item)
+
+        // A work page's clip failed: its pictures are downloaded all the
+        // same (unless the format is audio only), and the clip's own
+        // message stays the row's — it names the cause, and a Retry fetches
+        // only what is still missing.
+        if picturesFollowClip(item), case .failed(let message) = item.status {
+            if await downloadResolvedPictures(item, clip: .failed(message)) { return }
+        }
 
         // gallery-dl was skipped for being missing: whatever failure stands —
         // yt-dlp's own, or fxtwitter's restored prior — the absent tool, not
@@ -2114,13 +2136,27 @@ class DownloadManager: ObservableObject {
         // Whatever an earlier run found is not trusted, only looked up again.
         item.resolvedAddress = nil
         item.resolvedFileStem = nil
+        item.resolvedPictures = []
+        item.resolvedUnusableFiles = 0
+        // Every run also counts what is on disk afresh: the clip is reported
+        // again, downloaded or already there, and so is every picture on
+        // disk. What a stopped run counted would otherwise count twice, and
+        // its path would pass for a clip this run captured.
+        item.outputPath = nil
+        item.videoPath = nil
+        item.audioPath = nil
+        item.videoCount = nil
+        item.imageCount = nil
         let session = dmmSession
         let stopped = await runResolverTask(item) {
             switch await DmmPreviewResolver.resolve(link: item.url, session: session) {
             case .resolved(let preview):
-                item.resolvedAddress = preview.address.absoluteString
+                // No clip leaves the address nil: yt-dlp is then not started.
+                item.resolvedAddress = preview.clip?.address.absoluteString
                 item.resolvedFileStem = DmmPreviewResolver.fileStem(
                     maker: preview.maker, title: preview.title, contentID: preview.contentID)
+                item.resolvedPictures = preview.pictures
+                item.resolvedUnusableFiles = preview.unusable
                 item.title = DmmPreviewResolver.displayTitle(maker: preview.maker, title: preview.title)
                 return true
             case .failed(let failure):
@@ -2135,10 +2171,125 @@ class DownloadManager: ObservableObject {
         // whatever the request came back with.
         guard stillInList(item) else { return false }
         if stopped { return false }
-        if item.resolvedAddress != nil { return true }
+        // The stem is set whenever the work resolved, clip or not.
+        if item.resolvedFileStem != nil { return true }
         Self.ensureTerminalStatus(item)
         finalize(item)
         return false
+    }
+
+    /// What became of a work page's clip before its pictures run.
+    enum ResolvedClipOutcome: Equatable {
+        /// The work has no clip; yt-dlp never ran.
+        case none
+        case saved
+        /// yt-dlp failed with this message, which stays the row's.
+        case failed(String)
+    }
+
+    /// True when the resolver left files for the in-app part of the run: a
+    /// picture to download, or one it could not use that must be counted.
+    static func hasResolvedPictures(_ item: DownloadItem) -> Bool {
+        !item.resolvedPictures.isEmpty || item.resolvedUnusableFiles > 0
+    }
+
+    /// True when a work page's pictures are downloaded after its clip ran.
+    /// Audio only is an explicit opt-out of visual media, as it is for the
+    /// image sweep: the clip is the download, and the pictures would be
+    /// files nobody asked for that also recategorise the row. A work with
+    /// no clip has nothing else to give, so its pictures download whatever
+    /// the format, as a photo post's do.
+    private func picturesFollowClip(_ item: DownloadItem) -> Bool {
+        youtubeFormat != .audioOnly && Self.hasResolvedPictures(item)
+    }
+
+    /// Downloads a work page's pictures in-app, as a resolver task so Stop
+    /// and the row's ✕ reach it, then settles the row (see
+    /// `settleResolvedPictures`). Returns true when the run ends here with
+    /// nothing to finalize: the row was removed, or stopped (paused).
+    private func downloadResolvedPictures(_ item: DownloadItem, clip: ResolvedClipOutcome) async -> Bool {
+        // A Stop pressed as the clip's download ended found no process left
+        // to end and no task yet to cancel, so it is still pending: honour
+        // it before the first picture is requested, not after the last one
+        // has been saved. Resume looks the work up again and fetches only
+        // what is missing.
+        if pausedItemIDs.remove(item.id) != nil {
+            item.status = .paused
+            item.speed = nil
+            item.eta = nil
+            saveQueue()
+            return true
+        }
+        let pictures = item.resolvedPictures
+        let stem = item.resolvedFileStem ?? DmmPreviewResolver.unknownMaker
+        let directory = outputDirectory
+        let session = dmmSession
+        var run = DmmPreviewResolver.PictureRun.cancelled
+        let stopped = await runResolverTask(item) {
+            run = await DmmPreviewResolver.downloadPictures(pictures, stem: stem, to: directory, item: item, session: session)
+            return true
+        }
+        guard stillInList(item) else { return true }
+        if stopped { return true }
+        switch run {
+        case .finished(let saved, let lastFailure):
+            Self.settleResolvedPictures(item, clip: clip, saved: saved, lastFailure: lastFailure)
+        case .cancelled:
+            // Cancelled with no Stop and no ✕ behind it: not an outcome
+            // anyone asked for, and the row must still end on one.
+            break
+        }
+        Self.ensureTerminalStatus(item)
+        return false
+    }
+
+    /// The row's outcome once a work page's pictures have run, the way a
+    /// Threads post's is: every file on disk is Done; some is the partial
+    /// message, with the counts of what IS on disk; none names the cause.
+    /// A clip that failed keeps its own message, and the counts show the
+    /// pictures that made it. No outcome here arms the automatic retry: a
+    /// picture that failed is not an empty success, and one that could not
+    /// be used would fail the same way again.
+    static func settleResolvedPictures(
+        _ item: DownloadItem, clip: ResolvedClipOutcome, saved: [URL], lastFailure: DirectDownload.FileFailure?
+    ) {
+        item.speed = nil
+        item.eta = nil
+        item.imageCount = saved.isEmpty ? nil : saved.count
+        // The clip's path, when there is one, is what Reveal in Finder shows.
+        if item.outputPath == nil { item.outputPath = saved.first?.path }
+        item.recomputeMediaCategory()
+
+        let clipSaved: Bool
+        switch clip {
+        case .failed(let message):
+            // The transfers flipped the row to "downloading" on the way.
+            item.status = .failed(message)
+            return
+        case .saved: clipSaved = true
+        case .none: clipSaved = false
+        }
+        item.emptySuccessFailure = false
+        let clipCount = clipSaved ? 1 : 0
+        let attempted = clipCount + item.resolvedPictures.count + item.resolvedUnusableFiles
+        let onDisk = clipCount + saved.count
+        // A transfer's failure is the fresher, actionable evidence; an entry
+        // the answer held unusable is the cause only when nothing failed
+        // to download.
+        let reason =
+            lastFailure.map(DirectDownload.shortReason(for:))
+            ?? (onDisk < attempted ? DmmPreviewResolver.unusableEntryReason : nil)
+        guard let reason else {
+            item.markCompleted()
+            return
+        }
+        if onDisk == 0 {
+            item.status = .failed(
+                DirectDownload.zeroSavedFailureMessage(lastFailure: lastFailure)
+                    ?? DmmPreviewResolver.noPictureSavedMessage(reason: reason))
+            return
+        }
+        item.status = .failed(DirectDownload.partialFailureMessage(saved: onDisk, attempted: attempted, reason: reason))
     }
 
     /// Last-resort fallback: X's GraphQL APIs sometimes hide tweets from

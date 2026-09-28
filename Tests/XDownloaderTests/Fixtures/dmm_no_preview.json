@@ -11,7 +11,9 @@
         "name": "Synthetic Maker"
       },
       "sample2DMovie": null,
-      "sampleVRMovie": null
+      "sampleVRMovie": null,
+      "packageImage": null,
+      "sampleImages": []
     }
   }
 }

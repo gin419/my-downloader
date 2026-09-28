@@ -7,8 +7,9 @@ import XCTest
 /// is the orchestration around the resolver — the address is looked up
 /// first and handed to yt-dlp without any cookie argument, a link that
 /// resolves nothing fails under its cause's own message with yt-dlp never
-/// started, Stop ends paused, the row's ✕ leaves nothing behind, and every
-/// further run asks for the address again. The answers are the synthetic
+/// started, the pictures download in-app after the clip or in its place,
+/// Stop ends paused, the row's ✕ leaves nothing behind, and every further
+/// run asks for the address again. The answers are the synthetic
 /// fixtures; every request is answered by the URLProtocol stub on the
 /// injected session, and the yt-dlp the manager is given is a script that
 /// records its arguments, so nothing here touches the network, a browser or
@@ -117,6 +118,7 @@ final class DmmDownloadManagerTests: XCTestCase {
                 "ppvContent": [
                     "id": "test00123", "title": title, "isAllowForeign": true, "maker": ["name": "Synthetic Maker"],
                     "sample2DMovie": ["highestMovieUrl": address, "hlsMovieUrl": NSNull()], "sampleVRMovie": NSNull(),
+                    "packageImage": NSNull(), "sampleImages": [Any](),
                 ],
             ]
         ]
@@ -135,6 +137,387 @@ final class DmmDownloadManagerTests: XCTestCase {
         XCTAssertEqual(
             arguments[try XCTUnwrap(arguments.firstIndex(of: "--output")) + 1],
             downloads.path + "/Synthetic Maker - 100%% Synthetic [test00123].%(ext)s")
+    }
+
+    // MARK: - Pictures
+
+    func testPicturesWithoutAClipDownloadInAppAndNeverStartTheTool() async throws {
+        StubProtocol.set(json(try fixture("dmm_pictures_only.json")), for: Resolver.endpoint)
+        stubPictures(picturesOnlyNames, of: "testvr00046")
+        // Were the tool started, the row would fail.
+        let manager = try makeManager(tool: "exit 1\n")
+        manager.cookieBrowser = .chrome
+        manager.cookieBrowserProfile = "Default"
+
+        manager.capture(text: picturesOnlyLink, source: .field)
+
+        let item = try XCTUnwrap(manager.items.first)
+        try await waitUntil("the download finished") { self.history.count() == 1 }
+        XCTAssertEqual(item.status, .completed)
+        XCTAssertEqual(item.imageCount, 4)
+        XCTAssertNil(item.videoCount)
+        XCTAssertEqual(item.title, "Synthetic Maker - Synthetic Sample Title")
+        let names = (1...4).map { "\(picturesOnlyStem) #\($0).jpg" }
+        XCTAssertEqual(try contents(of: downloads), names)
+        XCTAssertEqual(item.outputPath, downloads.appendingPathComponent(names[0]).path)
+        // Gallery order: the cover is #1, the samples follow by number.
+        for (index, name) in picturesOnlyNames.enumerated() {
+            XCTAssertEqual(try Data(contentsOf: downloads.appendingPathComponent(names[index])), jpegBody(name), name)
+        }
+
+        XCTAssertEqual(try toolStarts(), 0)
+        XCTAssertEqual(StubProtocol.requests(to: Resolver.endpoint).count, 1)
+        for name in picturesOnlyNames {
+            let requests = StubProtocol.requests(to: try pictureURL("testvr00046", name))
+            XCTAssertEqual(requests.count, 1, name)
+            XCTAssertEqual(requests.first?.httpMethod, "GET", name)
+            XCTAssertNil(requests.first?.value(forHTTPHeaderField: "Cookie"), name)
+            XCTAssertEqual(requests.first?.httpShouldHandleCookies, false, name)
+        }
+        // Never the smaller size of a picture that has the large one.
+        for name in ["cover-medium", "sample-1-thumb", "sample-2-thumb", "sample-3-thumb"] {
+            XCTAssertTrue(StubProtocol.requests(to: try pictureURL("testvr00046", name)).isEmpty, name)
+        }
+
+        // Nothing the app wrote holds a picture address.
+        let own = ["yt-dlp", ytDlpArguments.lastPathComponent]
+        var read = 0
+        for file in try files(under: root) where !own.contains(file.lastPathComponent) {
+            guard let bytes = try? Data(contentsOf: file) else { continue }
+            read += 1
+            XCTAssertNil(bytes.range(of: Data("awsimgsrc".utf8)), file.lastPathComponent)
+        }
+        XCTAssertGreaterThan(read, 0)
+    }
+
+    func testClipAndPicturesStartTheToolOnceThenSaveThePictures() async throws {
+        StubProtocol.set(json(try fixture("dmm_preview_with_pictures.json")), for: Resolver.endpoint)
+        stubPictures(withClipNames, of: "test00124")
+        let manager = try makeManager(tool: saving(withClipStem))
+
+        manager.capture(text: "https://video.dmm.co.jp/cinema/content/?id=test00124", source: .field)
+
+        let item = try XCTUnwrap(manager.items.first)
+        try await waitUntil("the download finished") { self.history.count() == 1 }
+        XCTAssertEqual(item.status, .completed)
+        XCTAssertEqual(item.videoCount, 1)
+        XCTAssertEqual(item.imageCount, 3)
+        // The clip keeps its un-numbered name and stays the row's file.
+        XCTAssertEqual(item.outputPath, downloads.appendingPathComponent(withClipStem + ".mp4").path)
+        XCTAssertEqual(
+            try contents(of: downloads), ((1...3).map { "\(withClipStem) #\($0).jpg" } + [withClipStem + ".mp4"]).sorted())
+
+        XCTAssertEqual(try toolStarts(), 1)
+        let arguments = try toolArguments()
+        XCTAssertEqual(arguments.last, withClipAddress)
+        XCTAssertEqual(arguments[try XCTUnwrap(arguments.firstIndex(of: "--output")) + 1], downloads.path + "/" + withClipStem + ".%(ext)s")
+        for argument in arguments {
+            XCTAssertFalse(argument.lowercased().contains("cookie"), argument)
+            XCTAssertFalse(argument.contains("awsimgsrc"), "a picture was handed to the tool: \(argument)")
+        }
+        XCTAssertEqual(StubProtocol.requests(to: Resolver.endpoint).count, 1)
+        for name in withClipNames {
+            XCTAssertEqual(StubProtocol.requests(to: try pictureURL("test00124", name)).count, 1, name)
+        }
+    }
+
+    func testAPictureThatFailsIsAPartialResultAndRetryFetchesOnlyIt() async throws {
+        StubProtocol.set(json(try fixture("dmm_pictures_only.json")), for: Resolver.endpoint)
+        stubPictures(picturesOnlyNames, of: "testvr00046")
+        // The sample numbered 2 is the gallery's third picture.
+        let failing = try pictureURL("testvr00046", "sample-2-large")
+        StubProtocol.set([.init(status: 404, headers: ["Content-Type": "text/html"], body: Data()), jpeg("sample-2-large")], for: failing)
+        let manager = try makeManager(tool: "exit 1\n")
+
+        manager.capture(text: picturesOnlyLink, source: .field)
+
+        let item = try XCTUnwrap(manager.items.first)
+        try await waitUntil("the failure was recorded") { self.history.count() == 1 }
+        // Time for an automatic retry to show itself, were one armed.
+        try await Task.sleep(nanoseconds: 200_000_000)
+        XCTAssertEqual(item.status, .failed("Saved 3 of 4 files — the server returned HTTP 404. Retry fetches the rest."))
+        XCTAssertEqual(item.imageCount, 3)
+        XCTAssertFalse(item.emptySuccessFailure)
+        XCTAssertFalse(item.autoRetryAttempted)
+        XCTAssertEqual(try contents(of: downloads), [1, 2, 4].map { "\(picturesOnlyStem) #\($0).jpg" })
+        XCTAssertEqual(StubProtocol.requests(to: Resolver.endpoint).count, 1)
+
+        manager.retryItem(item)
+
+        try await waitUntil("the retry finished") { item.status == .completed }
+        XCTAssertEqual(item.imageCount, 4)
+        XCTAssertEqual(try contents(of: downloads), (1...4).map { "\(picturesOnlyStem) #\($0).jpg" })
+        // Looked up again, and only the missing picture fetched again.
+        XCTAssertEqual(StubProtocol.requests(to: Resolver.endpoint).count, 2)
+        XCTAssertEqual(StubProtocol.requests(to: failing).count, 2)
+        for name in picturesOnlyNames where name != "sample-2-large" {
+            XCTAssertEqual(StubProtocol.requests(to: try pictureURL("testvr00046", name)).count, 1, name)
+        }
+        XCTAssertEqual(try toolStarts(), 0)
+    }
+
+    func testClipSavedAndAPictureFailedIsAPartialResult() async throws {
+        StubProtocol.set(json(try fixture("dmm_preview_with_pictures.json")), for: Resolver.endpoint)
+        stubPictures(withClipNames, of: "test00124")
+        StubProtocol.set(
+            .init(status: 404, headers: ["Content-Type": "text/html"], body: Data()), for: try pictureURL("test00124", "sample-1-large"))
+        let manager = try makeManager(tool: saving(withClipStem))
+
+        manager.capture(text: "https://video.dmm.co.jp/cinema/content/?id=test00124", source: .field)
+
+        let item = try XCTUnwrap(manager.items.first)
+        try await waitUntil("the failure was recorded") { self.history.count() == 1 }
+        try await Task.sleep(nanoseconds: 200_000_000)
+        XCTAssertEqual(item.status, .failed("Saved 3 of 4 files — the server returned HTTP 404. Retry fetches the rest."))
+        XCTAssertEqual(item.videoCount, 1)
+        XCTAssertEqual(item.imageCount, 2)
+        XCTAssertFalse(item.emptySuccessFailure)
+        XCTAssertFalse(item.autoRetryAttempted)
+        XCTAssertEqual(try toolStarts(), 1)
+        XCTAssertEqual(
+            try contents(of: downloads), ["\(withClipStem) #1.jpg", "\(withClipStem) #3.jpg", withClipStem + ".mp4"])
+    }
+
+    /// The clip failed: the pictures are saved all the same, and the row
+    /// keeps the clip's own message, which names what is missing.
+    func testClipFailedAndPicturesSavedKeepsTheClipsMessage() async throws {
+        StubProtocol.set(json(try fixture("dmm_preview_with_pictures.json")), for: Resolver.endpoint)
+        stubPictures(withClipNames, of: "test00124")
+        let manager = try makeManager(tool: "exit 1\n")
+
+        manager.capture(text: "https://video.dmm.co.jp/cinema/content/?id=test00124", source: .field)
+
+        let item = try XCTUnwrap(manager.items.first)
+        try await waitUntil("the failure was recorded") { self.history.count() == 1 }
+        try await Task.sleep(nanoseconds: 200_000_000)
+        XCTAssertEqual(item.status, .failed(YtDlpService.resolvedAddressFailedMessage))
+        XCTAssertEqual(item.imageCount, 3)
+        XCTAssertNil(item.videoCount)
+        XCTAssertFalse(item.autoRetryAttempted)
+        XCTAssertEqual(try toolStarts(), 1)
+        XCTAssertEqual(try contents(of: downloads), (1...3).map { "\(withClipStem) #\($0).jpg" })
+    }
+
+    func testRemoveDuringPictureDownloadsLeavesNoFileAndStartsNothingFurther() async throws {
+        StubProtocol.set(json(try fixture("dmm_pictures_only.json")), for: Resolver.endpoint)
+        stubPictures(picturesOnlyNames, of: "testvr00046")
+        // The cover starts arriving and never ends, like a transfer in flight.
+        let cover = try pictureURL("testvr00046", "cover-large")
+        var stalled = jpeg("cover-large")
+        stalled.ending = .never
+        StubProtocol.set(stalled, for: cover)
+        let manager = try makeManager(tool: "exit 1\n")
+        manager.capture(text: picturesOnlyLink, source: .field)
+        let item = try XCTUnwrap(manager.items.first)
+        try await waitUntil("the picture was requested") { !StubProtocol.requests(to: cover).isEmpty }
+
+        manager.removeItem(item)
+
+        XCTAssertTrue(manager.items.isEmpty)
+        try await waitUntil("the transfer was cancelled", seconds: 5) { StubProtocol.wasStopped(cover) }
+        // The run winds down after the cancel; nothing it does from here on
+        // may touch the folder or start another transfer.
+        try await Task.sleep(nanoseconds: 500_000_000)
+        XCTAssertEqual(try contents(of: downloads), [])
+        for name in picturesOnlyNames where name != "cover-large" {
+            XCTAssertTrue(StubProtocol.requests(to: try pictureURL("testvr00046", name)).isEmpty, name)
+        }
+        XCTAssertEqual(StubProtocol.requests(to: cover).count, 1)
+        XCTAssertEqual(StubProtocol.requests(to: Resolver.endpoint).count, 1)
+        XCTAssertEqual(try toolStarts(), 0)
+        XCTAssertEqual(history.count(), 0)
+    }
+
+    func testStopDuringPictureDownloadsEndsPausedAndResumeFetchesTheRest() async throws {
+        StubProtocol.set(json(try fixture("dmm_pictures_only.json")), for: Resolver.endpoint)
+        stubPictures(picturesOnlyNames, of: "testvr00046")
+        let second = try pictureURL("testvr00046", "sample-1-large")
+        var stalled = jpeg("sample-1-large")
+        stalled.ending = .never
+        StubProtocol.set([stalled, jpeg("sample-1-large")], for: second)
+        let manager = try makeManager(tool: "exit 1\n")
+        manager.capture(text: picturesOnlyLink, source: .field)
+        let item = try XCTUnwrap(manager.items.first)
+        try await waitUntil("the second picture was requested") { !StubProtocol.requests(to: second).isEmpty }
+
+        manager.pauseItem(item)
+
+        try await waitUntil("the row is paused", seconds: 5) { item.status == .paused }
+        XCTAssertTrue(StubProtocol.wasStopped(second))
+        try await Task.sleep(nanoseconds: 300_000_000)
+        XCTAssertEqual(item.status, .paused)
+        XCTAssertEqual(history.count(), 0, "a paused download is not a finished one")
+        XCTAssertEqual(try contents(of: downloads), ["\(picturesOnlyStem) #1.jpg"])
+
+        manager.resumeItem(item)
+
+        try await waitUntil("the download finished") { self.history.count() == 1 }
+        XCTAssertEqual(item.status, .completed)
+        XCTAssertEqual(item.imageCount, 4)
+        XCTAssertEqual(try contents(of: downloads), (1...4).map { "\(picturesOnlyStem) #\($0).jpg" })
+        XCTAssertEqual(StubProtocol.requests(to: Resolver.endpoint).count, 2)
+        XCTAssertEqual(StubProtocol.requests(to: try pictureURL("testvr00046", "cover-large")).count, 1)
+        XCTAssertEqual(StubProtocol.requests(to: second).count, 2)
+        XCTAssertEqual(try toolStarts(), 0)
+    }
+
+    /// A Stop that reaches the row once the clip's download has ended finds
+    /// no process left to end. It must still stop the row before the first
+    /// picture, not after the last. The tool here ignores the stop signal,
+    /// so it exits cleanly after the Stop, as one that had already ended
+    /// would.
+    func testAStopAsTheClipEndsPausesBeforeAnyPictureAndResumeFetchesThem() async throws {
+        StubProtocol.set(json(try fixture("dmm_preview_with_pictures.json")), for: Resolver.endpoint)
+        stubPictures(withClipNames, of: "test00124")
+        let proceed = root.appendingPathComponent("proceed")
+        let clip = downloads.appendingPathComponent(withClipStem + ".mp4").path
+        let manager = try makeManager(
+            tool: """
+                trap '' TERM
+                printf 'synthetic' > "\(clip)"
+                echo "[download] Destination: \(clip)"
+                while [ ! -f "\(proceed.path)" ]; do sleep 0.05; done
+                echo "[download] 100% of 9.00B in 00:00"
+                exit 0
+
+                """)
+        manager.capture(text: "https://video.dmm.co.jp/cinema/content/?id=test00124", source: .field)
+        let item = try XCTUnwrap(manager.items.first)
+        try await waitUntil("the clip was reported") { item.outputPath != nil }
+
+        manager.pauseItem(item)
+        try Data().write(to: proceed)
+
+        try await waitUntil("the row is paused", seconds: 5) { item.status == .paused }
+        try await Task.sleep(nanoseconds: 300_000_000)
+        XCTAssertEqual(item.status, .paused)
+        XCTAssertEqual(history.count(), 0, "a paused download is not a finished one")
+        XCTAssertEqual(try contents(of: downloads), [withClipStem + ".mp4"])
+        for name in withClipNames {
+            XCTAssertTrue(StubProtocol.requests(to: try pictureURL("test00124", name)).isEmpty, name)
+        }
+
+        manager.resumeItem(item)
+
+        try await waitUntil("the download finished") { self.history.count() == 1 }
+        XCTAssertEqual(item.status, .completed)
+        XCTAssertEqual(item.videoCount, 1)
+        XCTAssertEqual(item.imageCount, 3)
+        XCTAssertEqual(
+            try contents(of: downloads), ((1...3).map { "\(withClipStem) #\($0).jpg" } + [withClipStem + ".mp4"]).sorted())
+        XCTAssertEqual(StubProtocol.requests(to: Resolver.endpoint).count, 2)
+        XCTAssertEqual(try toolStarts(), 2)
+    }
+
+    /// Audio only opts out of visual media: the clip is the download and
+    /// its pictures are not fetched.
+    func testAudioOnlyDownloadsTheClipWithoutItsPictures() async throws {
+        StubProtocol.set(json(try fixture("dmm_preview_with_pictures.json")), for: Resolver.endpoint)
+        stubPictures(withClipNames, of: "test00124")
+        let manager = try makeManager(tool: saving(withClipStem))
+        manager.youtubeFormat = .audioOnly
+
+        manager.capture(text: "https://video.dmm.co.jp/cinema/content/?id=test00124", source: .field)
+
+        let item = try XCTUnwrap(manager.items.first)
+        try await waitUntil("the download finished") { self.history.count() == 1 }
+        XCTAssertEqual(item.status, .completed)
+        XCTAssertNil(item.imageCount)
+        XCTAssertNotEqual(item.mediaCategory, .mixed)
+        XCTAssertNotEqual(item.mediaCategory, .image)
+        XCTAssertEqual(try contents(of: downloads), [withClipStem + ".mp4"])
+        XCTAssertTrue(try toolArguments().contains("--extract-audio"))
+        for name in withClipNames {
+            XCTAssertTrue(StubProtocol.requests(to: try pictureURL("test00124", name)).isEmpty, name)
+        }
+    }
+
+    /// The clip failed in audio only: its pictures are not fetched as a
+    /// consolation, and the clip's message stands.
+    func testAudioOnlyWithAFailedClipFetchesNoPicture() async throws {
+        StubProtocol.set(json(try fixture("dmm_preview_with_pictures.json")), for: Resolver.endpoint)
+        stubPictures(withClipNames, of: "test00124")
+        let manager = try makeManager(tool: "exit 1\n")
+        manager.youtubeFormat = .audioOnly
+
+        manager.capture(text: "https://video.dmm.co.jp/cinema/content/?id=test00124", source: .field)
+
+        let item = try XCTUnwrap(manager.items.first)
+        try await waitUntil("the failure was recorded") { self.history.count() == 1 }
+        XCTAssertEqual(item.status, .failed(YtDlpService.resolvedAddressFailedMessage))
+        XCTAssertNil(item.imageCount)
+        XCTAssertEqual(try contents(of: downloads), [])
+        for name in withClipNames {
+            XCTAssertTrue(StubProtocol.requests(to: try pictureURL("test00124", name)).isEmpty, name)
+        }
+    }
+
+    /// A work with only pictures has nothing else to give: they download in
+    /// audio only too, as a photo post's do.
+    func testAudioOnlyStillDownloadsAWorkThatOnlyHasPictures() async throws {
+        StubProtocol.set(json(try fixture("dmm_pictures_only.json")), for: Resolver.endpoint)
+        stubPictures(picturesOnlyNames, of: "testvr00046")
+        let manager = try makeManager(tool: "exit 1\n")
+        manager.youtubeFormat = .audioOnly
+
+        manager.capture(text: picturesOnlyLink, source: .field)
+
+        let item = try XCTUnwrap(manager.items.first)
+        try await waitUntil("the download finished") { self.history.count() == 1 }
+        XCTAssertEqual(item.status, .completed)
+        XCTAssertEqual(item.imageCount, 4)
+        XCTAssertEqual(try contents(of: downloads), (1...4).map { "\(picturesOnlyStem) #\($0).jpg" })
+        XCTAssertEqual(try toolStarts(), 0)
+    }
+
+    /// A picture address was checked as written; where it redirects to was
+    /// not, so the redirect is refused and the picture counts as failed.
+    func testAPictureThatRedirectsIsNotFollowedAndCountsAsFailed() async throws {
+        StubProtocol.set(json(try fixture("dmm_pictures_only.json")), for: Resolver.endpoint)
+        stubPictures(picturesOnlyNames, of: "testvr00046")
+        let elsewhere = try XCTUnwrap(URL(string: "https://elsewhere.example.invalid/SYNTHETICpicture.jpg"))
+        StubProtocol.set(jpeg("elsewhere"), for: elsewhere)
+        StubProtocol.set(.refusedRedirect(to: elsewhere), for: try pictureURL("testvr00046", "sample-1-large"))
+        let manager = try makeManager(tool: "exit 1\n")
+
+        manager.capture(text: picturesOnlyLink, source: .field)
+
+        let item = try XCTUnwrap(manager.items.first)
+        try await waitUntil("the failure was recorded") { self.history.count() == 1 }
+        XCTAssertEqual(item.status, .failed("Saved 3 of 4 files — the server returned HTTP 302. Retry fetches the rest."))
+        XCTAssertEqual(item.imageCount, 3)
+        XCTAssertTrue(StubProtocol.requests(to: elsewhere).isEmpty, "the redirect was followed")
+        XCTAssertEqual(try contents(of: downloads), [1, 3, 4].map { "\(picturesOnlyStem) #\($0).jpg" })
+    }
+
+    /// A page answered with success where a picture was expected is not
+    /// saved under the picture's name, so a Retry fetches it again.
+    func testAPictureAnsweredWithAPageIsNotSavedAndRetryFetchesIt() async throws {
+        StubProtocol.set(json(try fixture("dmm_pictures_only.json")), for: Resolver.endpoint)
+        stubPictures(picturesOnlyNames, of: "testvr00046")
+        let notice = try pictureURL("testvr00046", "sample-2-large")
+        StubProtocol.set(
+            [
+                .init(status: 200, headers: ["Content-Type": "text/html"], body: Data("<!DOCTYPE html><title>Notice</title>".utf8)),
+                jpeg("sample-2-large"),
+            ],
+            for: notice)
+        let manager = try makeManager(tool: "exit 1\n")
+
+        manager.capture(text: picturesOnlyLink, source: .field)
+
+        let item = try XCTUnwrap(manager.items.first)
+        try await waitUntil("the failure was recorded") { self.history.count() == 1 }
+        XCTAssertEqual(
+            item.status, .failed("Saved 3 of 4 files — the server sent something other than the file. Retry fetches the rest."))
+        XCTAssertEqual(try contents(of: downloads), [1, 2, 4].map { "\(picturesOnlyStem) #\($0).jpg" })
+
+        manager.retryItem(item)
+
+        try await waitUntil("the retry finished") { item.status == .completed }
+        XCTAssertEqual(item.imageCount, 4)
+        XCTAssertEqual(try Data(contentsOf: downloads.appendingPathComponent("\(picturesOnlyStem) #3.jpg")), jpegBody("sample-2-large"))
+        XCTAssertEqual(StubProtocol.requests(to: notice).count, 2)
     }
 
     // MARK: - Failing
@@ -458,6 +841,36 @@ final class DmmDownloadManagerTests: XCTestCase {
     }
 
     // MARK: - Helpers
+
+    private let picturesOnlyLink = "https://video.dmm.co.jp/vr/content/?id=testvr00046"
+    private let picturesOnlyStem = "Synthetic Maker - Synthetic Sample Title [testvr00046]"
+    /// The large pictures of dmm_pictures_only.json, in gallery order.
+    private let picturesOnlyNames = ["cover-large", "sample-1-large", "sample-2-large", "sample-3-large"]
+    private let withClipStem = "Synthetic Maker - Synthetic Sample Title [test00124]"
+    private let withClipAddress =
+        "https://cc3001.dmm.co.jp/pv/SYNTHETICtokenEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE/test00124hhb.mp4"
+    /// The large pictures of dmm_preview_with_pictures.json, in gallery order.
+    private let withClipNames = ["cover-large", "sample-1-large", "sample-2-large"]
+
+    private func pictureURL(_ contentID: String, _ name: String) throws -> URL {
+        try XCTUnwrap(URL(string: "https://awsimgsrc.dmm.co.jp/pics_dig/digital/video/\(contentID)/SYNTHETIC\(name).jpg"))
+    }
+
+    /// A JPEG signature followed by the picture's name, so each saved file
+    /// shows which address it came from.
+    private func jpegBody(_ name: String) -> Data {
+        Data([0xFF, 0xD8, 0xFF, 0xE0]) + Data(name.utf8)
+    }
+
+    private func jpeg(_ name: String) -> StubProtocol.Stub {
+        .init(status: 200, headers: ["Content-Type": "image/jpeg"], body: jpegBody(name))
+    }
+
+    private func stubPictures(_ names: [String], of contentID: String) {
+        for name in names {
+            if let url = try? pictureURL(contentID, name) { StubProtocol.set(jpeg(name), for: url) }
+        }
+    }
 
     private func fixture(_ name: String) throws -> Data {
         let url = try XCTUnwrap(Bundle.module.url(forResource: "Fixtures", withExtension: nil)).appendingPathComponent(name)

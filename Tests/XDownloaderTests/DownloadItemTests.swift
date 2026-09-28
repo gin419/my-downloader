@@ -52,6 +52,18 @@ final class DownloadItemTests: XCTestCase {
         XCTAssertNil(item.resolvedFileStem)
     }
 
+    func testResetForReattemptClearsTheResolvedPictures() throws {
+        let item = DownloadItem(url: "https://video.dmm.co.jp/cinema/content/?id=test00123")
+        let picture = try XCTUnwrap(URL(string: "https://awsimgsrc.dmm.co.jp/pics_dig/digital/video/test00123/SYNTHETIC-s1.jpg"))
+        item.resolvedPictures = [.init(position: 1, address: picture)]
+        item.resolvedUnusableFiles = 2
+
+        item.resetForReattempt()
+
+        XCTAssertEqual(item.resolvedPictures, [])
+        XCTAssertEqual(item.resolvedUnusableFiles, 0)
+    }
+
     func testTotalBytesParsesUnits() {
         let item = DownloadItem(url: "x")
         item.totalSize = "5 MB"
