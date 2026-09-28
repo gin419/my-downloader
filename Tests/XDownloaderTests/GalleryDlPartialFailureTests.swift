@@ -117,12 +117,29 @@ final class GalleryDlPartialFailureMessageTests: XCTestCase {
             "Saved 3 files, but one or more downloads failed — \(error). Retry fetches the rest.")
     }
 
+    /// App-native copy is a whole sentence that already says "then Retry.":
+    /// it is closed once, and Retry is not said a second time.
     func testPartialMessageUsesSingularForOneFile() {
         XCTAssertEqual(
             GalleryDlService.partialFailureMessage(
                 savedCount: 1, firstError: GalleryDlService.nsfwTweetMessage),
-            "Saved 1 file, but one or more downloads failed — \(GalleryDlService.nsfwTweetMessage). "
-                + "Retry fetches the rest.")
+            "Saved 1 file, but one or more downloads failed — \(GalleryDlService.nsfwTweetMessage)")
+    }
+
+    func testPartialMessageClosesAFullSentenceOnce() {
+        XCTAssertEqual(
+            GalleryDlService.partialFailureMessage(
+                savedCount: 2, firstError: GalleryDlService.internalErrorMessage),
+            "Saved 2 files, but one or more downloads failed — \(GalleryDlService.internalErrorMessage) "
+                .trimmingCharacters(in: .whitespaces) + " Retry fetches the rest.")
+        for message in [
+            GalleryDlService.instagramLoginMessage, GalleryDlService.instagramAccountNotFoundMessage,
+            GalleryDlService.instagramPrivateAccountMessage,
+        ] {
+            let composed = GalleryDlService.partialFailureMessage(savedCount: 3, firstError: message)
+            XCTAssertFalse(composed.contains(".."), composed)
+            XCTAssertEqual(composed.components(separatedBy: "Retry").count - 1, 1, composed)
+        }
     }
 }
 

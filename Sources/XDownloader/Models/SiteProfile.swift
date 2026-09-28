@@ -80,10 +80,12 @@ struct SiteProfile {
     /// visitor. Defaulted like `usesYtDlp`.
     var receivesBrowserCookies: Bool = true
     /// Non-nil: the site is downloaded one item at a time. A link on it
-    /// that names more than one item — an account, a tab, a collection —
-    /// would have the tools walk all of it with the browser login, so the
-    /// run ends at once under `message` instead: no tool is started, no
-    /// request is made and no cookie source is looked up. Defaulted like
+    /// that names more than one item — a tab, a collection, a page of the
+    /// site — would have the tools walk all of it with the browser login, so
+    /// the run ends at once under `message` instead: no tool is started, no
+    /// request is made and no cookie source is looked up. (An Instagram
+    /// profile is the one exception, and is never turned down: it runs as
+    /// its own bounded download, see `InstagramProfilePosts`.) Defaulted like
     /// `usesYtDlp`: a site that declares nothing turns nothing down.
     var singleItemGuard: SingleItemGuard? = nil
 

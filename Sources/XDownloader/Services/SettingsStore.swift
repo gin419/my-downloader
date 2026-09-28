@@ -17,6 +17,8 @@ struct AppSettings {
     var subtitleLanguage: SubtitleLanguage
     var embedSubtitles: Bool
     var maxConcurrent: Int
+    /// Newest posts a pasted Instagram profile link downloads.
+    var instagramProfilePostLimit: Int
     var openPreference: OpenPreference
     var saveHistoryEnabled: Bool
     var showMenuBarExtra: Bool
@@ -48,6 +50,7 @@ struct SettingsStore {
         d.set(s.subtitleLanguage.rawValue, forKey: "subtitleLanguage")
         d.set(s.embedSubtitles, forKey: "embedSubtitles")
         d.set(s.maxConcurrent, forKey: "maxConcurrent")
+        d.set(s.instagramProfilePostLimit, forKey: "instagramProfilePostLimit")
         d.set(s.openPreference.rawValue, forKey: "openPreference")
         d.set(s.saveHistoryEnabled, forKey: "saveHistoryEnabled")
         d.set(s.showMenuBarExtra, forKey: "showMenuBarExtra")
@@ -77,6 +80,11 @@ struct SettingsStore {
         s.showMenuBarExtra = d.object(forKey: "showMenuBarExtra") as? Bool ?? fallback.showMenuBarExtra
         let stored = d.integer(forKey: "maxConcurrent")
         if stored > 0 { s.maxConcurrent = stored }
+        // An absent key leaves the fallback. A stored number outside the
+        // range (a hand-edited defaults file) is brought inside it.
+        if let limit = d.object(forKey: "instagramProfilePostLimit") as? Int {
+            s.instagramProfilePostLimit = InstagramProfilePosts.clampedLimit(limit)
+        }
         return s
     }
 }

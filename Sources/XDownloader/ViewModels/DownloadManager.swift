@@ -25,6 +25,15 @@ class DownloadManager: ObservableObject {
     }
     private let cookieAccess = CookieAccessManager()  // security-scoped bookmark + per-download scope for cookies.txt
     @Published var maxConcurrent: Int = 2
+    /// How many of an account's newest posts a pasted Instagram profile link
+    /// downloads. Kept inside the allowed range however it is set: the
+    /// Settings field takes typed numbers.
+    @Published var instagramProfilePostLimit: Int = InstagramProfilePosts.defaultLimit {
+        didSet {
+            let clamped = InstagramProfilePosts.clampedLimit(instagramProfilePostLimit)
+            if clamped != instagramProfilePostLimit { instagramProfilePostLimit = clamped }
+        }
+    }
     @Published var showDownloadDate: Bool = false
     @Published var youtubeFormat: YouTubeFormat = .videoAndAudio
     @Published var videoQuality: VideoQuality = .best
@@ -78,6 +87,13 @@ class DownloadManager: ObservableObject {
     /// signed-in try also has a Process, in `activeProcesses`.)
     private var activeResolverTasks: [UUID: Task<Bool, Never>] = [:]
     private var downloadQueue: [DownloadItem] = []
+    /// True while an Instagram profile's run holds its turn. Only one runs
+    /// at a time, whatever the concurrency setting: each walks a whole
+    /// timeline under the browser login, and two at once would double the
+    /// requests that login makes. The rows behind it stay in the queue as
+    /// "Queued", taking no download slot, so single posts and other sites
+    /// pass them by.
+    private var instagramProfileRunning = false
     /// Overflow behind `pendingDuplicates`: each capture's duplicates present
     /// as ONE alert; a second capture while it's up waits its turn here.
     private var duplicateBatchQueue: [DuplicateBatch] = []
@@ -521,6 +537,11 @@ class DownloadManager: ObservableObject {
     /// file, whatever section the link puts it under.
     nonisolated static func isSameDownload(_ link: String, _ other: String) -> Bool {
         if link == other { return true }
+        // A profile row restored from a saved queue may still carry the
+        // spelling it was pasted in; the account alone names it.
+        if let username = InstagramLink.profileUsername(of: link) {
+            return username == InstagramLink.profileUsername(of: other)
+        }
         if let contentID = DmmPreviewResolver.parseLink(link)?.contentID {
             return contentID == DmmPreviewResolver.parseLink(other)?.contentID
         }
@@ -555,10 +576,23 @@ class DownloadManager: ObservableObject {
         let stripped = Self.storedLink(trimmed)
 
         if let existing = items.first(where: { Self.isSameDownload($0.url, stripped) }) {
+            // Pasting a profile again is how its new posts are fetched, so a
+            // finished or failed profile row runs again in place. One that is
+            // still queued, running or paused stays as it is.
+            if Self.isInstagramProfile(existing), !inFlightItemIDs.contains(existing.id),
+                Self.hasEnded(existing)
+            {
+                retryItem(existing)
+                return .queued
+            }
             return .alreadyInList(existing.id)
         }
 
-        if saveHistoryEnabled, !skipHistoryCheck, let prior = priorDownload(of: stripped) {
+        // A profile is pasted again to fetch what it posted since: files on
+        // disk are skipped, so there is nothing to warn about re-downloading.
+        if saveHistoryEnabled, !skipHistoryCheck, InstagramLink.profileUsername(of: stripped) == nil,
+            let prior = priorDownload(of: stripped)
+        {
             let fileExists = prior.outputPath.map { FileManager.default.fileExists(atPath: $0) } ?? false
             return .needsConfirmation(
                 DuplicateConfirmation(url: stripped, priorEntry: prior, priorFileExists: fileExists))
@@ -1442,6 +1476,7 @@ class DownloadManager: ObservableObject {
             subtitleLanguage: subtitleLanguage,
             embedSubtitles: embedSubtitles,
             maxConcurrent: maxConcurrent,
+            instagramProfilePostLimit: instagramProfilePostLimit,
             openPreference: openPreference,
             saveHistoryEnabled: saveHistoryEnabled,
             showMenuBarExtra: showMenuBarExtra
@@ -1465,6 +1500,7 @@ class DownloadManager: ObservableObject {
         subtitleLanguage = s.subtitleLanguage
         embedSubtitles = s.embedSubtitles
         maxConcurrent = s.maxConcurrent
+        instagramProfilePostLimit = s.instagramProfilePostLimit
         openPreference = s.openPreference
         saveHistoryEnabled = s.saveHistoryEnabled
         showMenuBarExtra = s.showMenuBarExtra
@@ -1489,17 +1525,34 @@ class DownloadManager: ObservableObject {
         // Queue-drain start is a probe moment: a stale tool is about to run.
         // Cached ≥60s, so back-to-back drains don't spawn probe processes.
         toolHealth.refreshIfStale()
-        while activeCount < maxConcurrent, !downloadQueue.isEmpty {
-            let item = downloadQueue.removeFirst()
+        // The first row that may start now: a profile waits while another
+        // profile runs, and the rows behind it go ahead.
+        while activeCount < maxConcurrent,
+            let index = downloadQueue.firstIndex(where: { !instagramProfileRunning || !Self.isInstagramProfile($0) })
+        {
+            let item = downloadQueue.remove(at: index)
+            let holdsProfileTurn = Self.isInstagramProfile(item)
+            if holdsProfileTurn { instagramProfileRunning = true }
             activeCount += 1
             inFlightItemIDs.insert(item.id)
             Task {
                 await runDownload(item)
                 inFlightItemIDs.remove(item.id)
+                if holdsProfileTurn { instagramProfileRunning = false }
                 activeCount -= 1
                 drainQueue()
             }
         }
+    }
+
+    private static func isInstagramProfile(_ item: DownloadItem) -> Bool {
+        InstagramLink.profileUsername(of: item.url) != nil
+    }
+
+    /// Done or failed: nothing is queued, running or waiting for Resume.
+    private static func hasEnded(_ item: DownloadItem) -> Bool {
+        if case .failed = item.status { return true }
+        return item.status == .completed
     }
 
     /// True while the item is still in the visible list. `removeItem` is the
@@ -1721,6 +1774,12 @@ class DownloadManager: ObservableObject {
     private func runDownload(_ item: DownloadItem) async {
         guard stillInList(item) else { return }
         item.status = .fetching
+        // Judged by the link itself, before its routing: an uppercase host
+        // or a username ending in "x.com" routes the link to another site.
+        if let username = InstagramLink.profileUsername(of: item.url) {
+            await runInstagramProfile(item, username: username)
+            return
+        }
         if youtubeFormat == .audioOnly { item.mediaCategory = .audio }
 
         let profile = SiteRegistry.profile(for: item.url)
@@ -2068,6 +2127,59 @@ class DownloadManager: ObservableObject {
         if item.outputPath == nil { item.eta = nil }
     }
 
+    /// Shown when a profile link runs with gallery-dl missing: nothing else
+    /// can read an account's posts (yt-dlp's Instagram user extractor is
+    /// marked broken).
+    static let instagramProfileNeedsGalleryDlMessage =
+        "Downloading an Instagram profile needs gallery-dl, which is not installed — install it (see Settings), then Retry."
+
+    /// An Instagram profile link: the account's newest posts, as many as
+    /// Settings says when the row starts, in one gallery-dl run with the
+    /// browser login. yt-dlp is not started — its Instagram user extractor
+    /// is marked broken — and neither is anything else afterwards: a
+    /// profile has no fallback, no photo sweep and no automatic retry, which
+    /// would walk the account a second time unasked. Stop and the row's ✕
+    /// reach the process through `activeProcesses` like any gallery-dl run.
+    private func runInstagramProfile(_ item: DownloadItem, username: String) async {
+        let limit = instagramProfilePostLimit
+        item.resetForReattempt()
+        item.title = InstagramProfilePosts.title(username: username, limit: limit)
+        guard let executable = galleryDlPath else {
+            item.status = .failed(Self.instagramProfileNeedsGalleryDlMessage)
+            finalize(item)
+            return
+        }
+        let cookies = resolveCookiesForDownload()
+        await cookieAccess.withScope(for: item.id, file: cookies.path, grantedURL: cookies.granted) {
+            await GalleryDlService.runProfile(
+                item: item,
+                username: username,
+                postLimit: limit,
+                executablePath: executable,
+                outputDirectory: outputDirectory,
+                cookieBrowser: cookieBrowser,
+                cookieBrowserProfile: cookieBrowserProfile,
+                cookiesFile: cookies.path,
+                register: { [weak self] p in self?.activeProcesses[item.id] = p },
+                unregister: { [weak self] in self?.activeProcesses.removeValue(forKey: item.id) }
+            )
+        }
+        guard stillInList(item) else { return }
+        // Stopped by hand: Resume walks the timeline again and skips what
+        // already arrived.
+        if pausedItemIDs.remove(item.id) != nil {
+            item.status = .paused
+            item.speed = nil
+            item.eta = nil
+            saveQueue()
+            return
+        }
+        item.emptySuccessFailure = false
+        if item.outputPath == nil { item.eta = nil }
+        Self.ensureTerminalStatus(item)
+        finalize(item)
+    }
+
     /// The signed-in second try for a Threads post (see ThreadsSignedInPage):
     /// yt-dlp requests the page with the login Settings name. Runs inside
     /// the resolver's Task, and the tool is registered in `activeProcesses`,
@@ -2396,7 +2508,8 @@ class DownloadManager: ObservableObject {
     }
 
     private func siteLabel(for url: String) -> String {
-        SiteRegistry.profile(for: url).id
+        if InstagramLink.profileUsername(of: url) != nil { return SiteRegistry.instagram.id }
+        return SiteRegistry.profile(for: url).id
     }
 
     // MARK: - History admin
@@ -2470,6 +2583,11 @@ class DownloadManager: ObservableObject {
 
         items = restored
         for item in restored.reversed() where item.status != .completed && item.status != .paused {
+            // A failed profile row walks an account with the Instagram login,
+            // so it runs again only when asked: Retry, or pasting it again.
+            // This also covers rows 1.12.0 refused as profile links, which
+            // would otherwise start a walk nobody pasted after the upgrade.
+            if case .failed = item.status, Self.isInstagramProfile(item) { continue }
             downloadQueue.append(item)
         }
     }
@@ -2488,8 +2606,10 @@ class DownloadManager: ObservableObject {
     /// and in history. Tracking parameters go; a work page link is kept in
     /// its one canonical spelling, and a wrapper link is replaced by the
     /// work page link it wraps, so however a work's link was pasted it is
-    /// recognised as the same download.
+    /// recognised as the same download. An Instagram profile link likewise,
+    /// whatever its host, case or tab.
     static func storedLink(_ urlString: String) -> String {
+        if let profile = InstagramLink.canonicalProfileLink(for: urlString) { return profile }
         if let inner = DmmPreviewResolver.unwrapWrapperLink(urlString) { return inner }
         if let work = DmmPreviewResolver.parseLink(urlString),
             let canonical = DmmPreviewResolver.canonicalURL(for: work)

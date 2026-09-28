@@ -99,6 +99,35 @@ struct SettingsView: View {
                 .foregroundColor(.secondary)
             }
 
+            Section("Instagram Profiles") {
+                HStack {
+                    Text("Posts per profile link")
+                    Spacer()
+                    // Typeable as well as steppable: a few hundred posts is
+                    // a lot of stepper clicks. The manager keeps the value
+                    // inside the range whatever is typed.
+                    TextField(
+                        "Posts per profile link", value: $manager.instagramProfilePostLimit,
+                        format: .number.grouping(.never)
+                    )
+                    .labelsHidden()
+                    .textFieldStyle(.roundedBorder)
+                    .multilineTextAlignment(.trailing)
+                    .frame(width: 56)
+                    Stepper(
+                        "Posts per profile link", value: $manager.instagramProfilePostLimit,
+                        in: InstagramProfilePosts.limitRange
+                    )
+                    .labelsHidden()
+                }
+
+                Text(
+                    "Pasting a profile link downloads the account's newest posts, up to this number. Posts already saved are skipped, so pasting again later only fetches what is missing."
+                )
+                .font(.caption)
+                .foregroundColor(.secondary)
+            }
+
             Section("X Likes Sync") {
                 HStack {
                     TextField("@handle", text: $manager.twitterHandle)
@@ -283,6 +312,7 @@ struct SettingsView: View {
             manager.saveSettings()
         }
         .onChange(of: manager.maxConcurrent) { manager.saveSettings() }
+        .onChange(of: manager.instagramProfilePostLimit) { manager.saveSettings() }
         .onChange(of: manager.youtubeFormat) { manager.saveSettings() }
         .onChange(of: manager.videoQuality) { manager.saveSettings() }
         .onChange(of: manager.audioQuality) { manager.saveSettings() }

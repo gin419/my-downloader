@@ -223,13 +223,15 @@ final class SiteRegistryTests: XCTestCase {
         XCTAssertEqual(ig.imageSweepArgs, ["-o", "videos=false"])
     }
 
-    /// Instagram is downloaded one post, reel or story at a time: its
-    /// downloads run with the browser login, and a profile link would walk
-    /// the whole account with it.
+    /// Instagram is downloaded one post, reel or story at a time, or a
+    /// profile's newest posts up to a set number: its downloads run with the
+    /// browser login, and a tab or a collection link would walk all of it
+    /// with it.
     func testInstagramDeclaresTheSingleItemGuard() throws {
         let guardDeclared = try XCTUnwrap(SiteRegistry.instagram.singleItemGuard)
         XCTAssertEqual(guardDeclared.message, InstagramLink.notASingleItemMessage)
-        XCTAssertTrue(guardDeclared.turnsDown("https://www.instagram.com/someone.invented/"))
+        XCTAssertTrue(guardDeclared.turnsDown("https://www.instagram.com/someone.invented/tagged/"))
+        XCTAssertFalse(guardDeclared.turnsDown("https://www.instagram.com/someone.invented/"))
         XCTAssertFalse(guardDeclared.turnsDown("https://www.instagram.com/p/SYNpost0001_/"))
         XCTAssertFalse(guardDeclared.turnsDown("https://example.com/someone.invented/"))
     }
