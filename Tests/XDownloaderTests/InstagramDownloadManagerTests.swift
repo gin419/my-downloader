@@ -4,18 +4,19 @@ import XCTest
 
 /// An Instagram link through DownloadManager itself: the row is in the
 /// manager's list and its run is the one the queue starts. What is held here
-/// is the single-item guard — a link that names an account or a page of the
-/// site fails at once under the fixed message, with neither tool started, no
-/// cookie source looked up and no auto-retry armed, whether it was just
-/// pasted or restored from a saved queue; a link to one post reaches the
-/// tools exactly as before. The yt-dlp and gallery-dl the manager is given
+/// is the single-item guard — a link that names a tab, a collection or a
+/// page of the site fails at once under the fixed message, with neither tool
+/// started, no cookie source looked up and no auto-retry armed, whether it
+/// was just pasted or restored from a saved queue; a link to one post
+/// reaches the tools exactly as before. (A profile link is a download of its
+/// own, held in InstagramProfileDownloadTests.) The yt-dlp and gallery-dl the manager is given
 /// are scripts that record that they were started, so nothing here touches
 /// the network, a browser or a cookie. Every username and code is invented.
 @MainActor
 final class InstagramDownloadManagerTests: XCTestCase {
 
     private let post = "https://www.instagram.com/p/SYNpost0001_/"
-    private let profile = "https://www.instagram.com/someone.invented/"
+    private let tagged = "https://www.instagram.com/someone.invented/tagged/"
 
     private var root: URL!
     private var downloads: URL!
@@ -46,18 +47,25 @@ final class InstagramDownloadManagerTests: XCTestCase {
 
     func testAccountWideLinksFailWithTheFixedMessageAndStartNoTool() async throws {
         let links = [
-            profile,
-            "https://instagram.com/someone.invented",
-            "https://WWW.INSTAGRAM.COM/someone.invented/reels/",
-            "https://www.instagram.com/someone.invented/tagged/",
+            tagged,
+            "https://instagram.com/someone.invented/tagged",
+            "https://WWW.INSTAGRAM.COM/someone.invented/tagged/",
             "https://www.instagram.com/someone.invented/saved/",
+            "https://www.instagram.com/someone.invented/saved/invented-collection/17900000000000001/",
+            "https://www.instagram.com/someone.invented/highlights/",
             "https://www.instagram.com/stories/someone.invented/",
             "https://www.instagram.com/stories/highlights/17900000000000000/",
             "https://www.instagram.com/explore/tags/invented/",
+            "https://www.instagram.com/explore/locations/1234567890/invented-place/",
+            "https://www.instagram.com/explore/",
             "https://www.instagram.com/reels/audio/1234567890/",
-            "https://instagr.am/someone.invented/",
+            "https://www.instagram.com/",
+            "https://www.instagram.com/accounts/login/",
+            "https://www.instagram.com/accounts/edit/",
+            "https://www.instagram.com/direct/inbox/",
+            "https://instagr.am/someone.invented/saved/",
             // Routed to the twitter profile, by the "x.com/" in it.
-            "https://www.instagram.com/invented.x.com/",
+            "https://www.instagram.com/invented.x.com/tagged/",
             // An escaped slash, which gallery-dl reads as the reels tab.
             "https://www.instagram.com/someone.invented/reels%2FSYNreel0001_",
         ]
@@ -95,7 +103,7 @@ final class InstagramDownloadManagerTests: XCTestCase {
 
     func testRetryOfATurnedDownLinkIsTurnedDownAgain() async throws {
         let manager = try makeManager()
-        manager.capture(text: profile, source: .field)
+        manager.capture(text: tagged, source: .field)
         let item = try XCTUnwrap(manager.items.first)
         try await waitUntil("the failure was recorded") { self.history.count() == 1 }
 
@@ -112,7 +120,7 @@ final class InstagramDownloadManagerTests: XCTestCase {
 
     /// A row saved by an earlier version, which would have run the link.
     func testRowRestoredFromASavedQueueIsTurnedDownWhenItRuns() async throws {
-        let saved = DownloadItem(url: "https://www.instagram.com/someone.invented/reels/")
+        let saved = DownloadItem(url: "https://www.instagram.com/someone.invented/saved/")
         XCTAssertEqual(saved.status, .queued)
         let queue = root.appendingPathComponent("saved-queue")
         QueueStore(directory: queue).save([saved.toPersisted()])
@@ -135,7 +143,7 @@ final class InstagramDownloadManagerTests: XCTestCase {
     /// A paused row of an earlier session, resumed.
     func testResumedRowIsTurnedDown() async throws {
         let manager = try makeManager()
-        let item = DownloadItem(url: profile)
+        let item = DownloadItem(url: tagged)
         item.status = .paused
         manager.items.insert(item, at: 0)
 

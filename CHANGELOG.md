@@ -6,6 +6,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Entries before _Unreleased_ were back-filled from git history.
 
+## [Unreleased]
+
+### Added
+- **Instagram profiles** — paste a link to an Instagram profile (or its
+  posts or reels tab) and the account's newest posts download, reels
+  included: 100 by default, set under Settings → Instagram Profiles
+  (1 to 1000). The number counts posts, so a carousel is one post however
+  many pictures it holds. The row reads "<username> - newest <N> posts",
+  its progress bar follows the posts reached, and the Image and Video
+  chips count the files as they arrive. Files already saved are skipped,
+  so pasting the same profile again later only fetches what is missing.
+  The download runs gallery-dl with your browser login and gallery-dl's
+  own pause between requests; yt-dlp is not used. One profile downloads
+  at a time whatever the concurrency setting — other profile links wait
+  as "Queued" and can be removed while they wait — and single posts and
+  other sites are not held up.
+
+### Changed
+- **Instagram links that are still turned down** — tagged, saved and
+  highlights tabs, saved collections, hashtag, explore, location and audio
+  pages, a stories link without a story id, and the site's own pages. The
+  message now says the link isn't a single post, reel, story or profile,
+  and asks for one of those instead.
+
 ## [1.12.1] — 2026-09-28
 
 ### Changed

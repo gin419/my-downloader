@@ -27,6 +27,14 @@ enum GalleryDlService {
         "gallery-dl doesn't recognize this URL — if the site recently changed links, updating gallery-dl may add support."
     static let instagramLoginMessage =
         "Instagram requires login — sign in to Instagram in the browser selected in Settings → Cookies, then Retry."
+    /// gallery-dl's "Requested user could not be found": a profile link whose
+    /// account was renamed, deleted or mistyped. Without it the exit code's
+    /// generic "a network/HTTP error" would name a cause that didn't happen.
+    static let instagramAccountNotFoundMessage =
+        "Instagram account not found — it may have been renamed or deleted, or the link may be incomplete; check the link, then Retry."
+    /// gallery-dl's "<name>'s posts are private" warning on a profile run.
+    static let instagramPrivateAccountMessage =
+        "This account is private — follow it with the Instagram login in the browser selected in Settings → Cookies, then Retry."
 
     // Empty-success messages (exit 0, no files). The guard in run() that
     // composes them also sets `item.emptySuccessFailure` — the structural
@@ -73,6 +81,9 @@ enum GalleryDlService {
         if line.contains("[instagram]"), line.lowercased().contains("challenge") {
             return instagramChallengeMessage
         }
+        if line.contains("[instagram]"), line.contains("could not be found") {
+            return instagramAccountNotFoundMessage
+        }
         if line.contains("Unsupported URL") { return unsupportedURLMessage }
         return nil
     }
@@ -83,6 +94,13 @@ enum GalleryDlService {
     /// 4 extraction/HTTP, 8 ChallengeError (bot check), 16 auth,
     /// 32 InputError family, 64 unsupported URL, 128 OS error.
     static func exitFailureMessage(code: Int32, lastWarning: String?) -> String {
+        var message = "gallery-dl failed: \(exitCauses(code: code)) (code \(code))"
+        if let lastWarning { message += " — last warning: \(lastWarning)" }
+        return message
+    }
+
+    /// The causes an exit status names, joined: "a network/HTTP error".
+    static func exitCauses(code: Int32) -> String {
         var causes: [String] = []
         if code & 4 != 0 { causes.append("a network/HTTP error") }
         if code & 8 != 0 {
@@ -93,9 +111,7 @@ enum GalleryDlService {
         if code & 64 != 0 { causes.append("URL not recognized") }
         if code & 128 != 0 { causes.append("a disk or file error") }
         if causes.isEmpty { causes = ["an unspecified error"] }
-        var message = "gallery-dl failed: \(causes.joined(separator: " + ")) (code \(code))"
-        if let lastWarning { message += " — last warning: \(lastWarning)" }
-        return message
+        return causes.joined(separator: " + ")
     }
 
     /// Non-zero exit after some files DID land (a multi-file post where one
@@ -103,8 +119,12 @@ enum GalleryDlService {
     /// instead of the exit bitmask's generic guess. Retry is dedup-safe —
     /// existing files are skipped — so it only fetches the rest.
     static func partialFailureMessage(savedCount: Int, firstError: String) -> String {
-        "Saved \(savedCount) file\(savedCount == 1 ? "" : "s"), but one or more downloads failed — "
-            + "\(firstError). Retry fetches the rest."
+        let saved = "Saved \(savedCount) file\(savedCount == 1 ? "" : "s"), but one or more downloads failed — "
+        // App-native causes are whole sentences, and most already end in
+        // their own "then Retry." — close them once, and don't say Retry twice.
+        var cause = firstError
+        while cause.hasSuffix(".") { cause.removeLast() }
+        return cause.contains("Retry") ? saved + cause + "." : saved + cause + ". Retry fetches the rest."
     }
 
     // MARK: - Download
@@ -120,18 +140,132 @@ enum GalleryDlService {
         register: @escaping (Process) -> Void,
         unregister: @escaping () -> Void
     ) async {
-        let beforeFiles = Set((try? FileManager.default.contentsOfDirectory(atPath: outputDirectory.path)) ?? [])
-
-        let result = await ProcessRunner.run(
+        await runAndSettle(
+            item: item,
             executablePath: executablePath,
             arguments: arguments(
                 for: item.url, outputDirectory: outputDirectory,
                 cookieBrowser: cookieBrowser, cookieBrowserProfile: cookieBrowserProfile,
                 cookiesFile: cookiesFile),
+            outputDirectory: outputDirectory,
+            register: register,
+            unregister: unregister,
+            lineParser: { line, item in parseLine(line, item: item) },
+            noMediaMessage: emptySuccessMessage(forProfileID: SiteRegistry.profile(for: item.url).id),
+            stripsSingleFileSuffix: true,
+            settlesErrorsAtExit: false)
+    }
+
+    /// An Instagram profile's newest posts, `postLimit` of them at most, in
+    /// one gallery-dl run (see `profileArguments`). Settled like any other
+    /// gallery-dl run — counts, partial failures and exit causes alike —
+    /// except that the progress bar follows the posts reached out of
+    /// `postLimit`, a lone image keeps its " #1" (a later paste of the same
+    /// profile must find every file under the name gallery-dl gives it, or
+    /// it would fetch that image again), and an error line leaves the row
+    /// as it is: one post failing among hundreds says nothing yet about the
+    /// run, so only the exit decides, in app-native copy.
+    @MainActor
+    static func runProfile(
+        item: DownloadItem,
+        username: String,
+        postLimit: Int,
+        executablePath: String,
+        outputDirectory: URL,
+        cookieBrowser: CookieBrowser,
+        cookieBrowserProfile: String? = nil,
+        cookiesFile: String? = nil,
+        register: @escaping (Process) -> Void,
+        unregister: @escaping () -> Void
+    ) async {
+        let progress = ProfileProgress(postLimit: postLimit)
+        await runAndSettle(
+            item: item,
+            executablePath: executablePath,
+            arguments: profileArguments(
+                username: username, postLimit: postLimit, outputDirectory: outputDirectory,
+                cookieBrowser: cookieBrowser, cookieBrowserProfile: cookieBrowserProfile,
+                cookiesFile: cookiesFile),
+            outputDirectory: outputDirectory,
+            register: register,
+            unregister: unregister,
+            lineParser: { line, item in
+                // The link may be routed to another profile by its spelling
+                // ("/<name>.x.com/" reads as X); the errors are Instagram's.
+                parseLine(line, item: item, profileID: SiteRegistry.instagram.id, settlesErrorsAtExit: true)
+                progress.record(line, item: item)
+            },
+            noMediaMessage: noPostsMessage,
+            stripsSingleFileSuffix: false,
+            settlesErrorsAtExit: true)
+    }
+
+    /// Exit 0 and no file, new or already on disk: the account showed no
+    /// post to this login.
+    static let noPostsMessage =
+        "No posts found — the account may have none, be private, or need you signed in to Instagram in the browser selected in Settings → Cookies, then Retry."
+
+    /// Posts reached so far, told apart by the post code every file name
+    /// carries. A post counts once its first file is reported, downloaded or
+    /// already on disk, so a second paste moves the bar as far as the first.
+    @MainActor
+    final class ProfileProgress {
+        private let postLimit: Int
+        private var posts: Set<String> = []
+
+        init(postLimit: Int) { self.postLimit = max(postLimit, 1) }
+
+        func record(_ line: String, item: DownloadItem) {
+            guard let code = GalleryDlService.postCode(inPathLine: line) else { return }
+            posts.insert(code)
+            item.progress = min(1, Double(posts.count) / Double(postLimit))
+        }
+    }
+
+    /// The post code in a reported file's name, nil for any other line. The
+    /// Instagram file-name template ends every name with
+    /// " [<post code>] #<n>.<extension>".
+    static func postCode(inPathLine line: String) -> String? {
+        let path = line.hasPrefix("# ") ? String(line.dropFirst(2)) : line
+        guard path.hasPrefix("/") || path.hasPrefix("~"),
+            MediaExtensions.all.contains((path as NSString).pathExtension.lowercased())
+        else { return nil }
+        let stem = ((path as NSString).lastPathComponent as NSString).deletingPathExtension
+        guard let range = stem.range(of: #" \[[A-Za-z0-9_-]+\] #\d+$"#, options: .regularExpression) else {
+            return nil
+        }
+        let tail = stem[range]
+        guard let open = tail.firstIndex(of: "["), let close = tail.firstIndex(of: "]") else { return nil }
+        return String(tail[tail.index(after: open)..<close])
+    }
+
+    /// Runs gallery-dl and settles the row from its exit and the files that
+    /// arrived. `noMediaMessage` is the failure for exit 0 with no file;
+    /// `stripsSingleFileSuffix` drops the " #1" of a lone image;
+    /// `settlesErrorsAtExit` is the line parser's (see `parseLine`), so no
+    /// error line has set the status and the exit alone words the failure.
+    @MainActor
+    private static func runAndSettle(
+        item: DownloadItem,
+        executablePath: String,
+        arguments: [String],
+        outputDirectory: URL,
+        register: @escaping (Process) -> Void,
+        unregister: @escaping () -> Void,
+        lineParser: @escaping (String, DownloadItem) -> Void,
+        noMediaMessage: String,
+        stripsSingleFileSuffix: Bool,
+        settlesErrorsAtExit: Bool
+    ) async {
+        let beforeFiles = Set((try? FileManager.default.contentsOfDirectory(atPath: outputDirectory.path)) ?? [])
+
+        let result = await ProcessRunner.run(
+            executablePath: executablePath,
+            arguments: arguments,
             item: item,
             register: register,
             unregister: unregister,
-            lineParser: { line, item in parseLine(line, item: item) }
+            lineParser: lineParser
         )
 
         guard result.isSuccess else {
@@ -143,6 +277,9 @@ enum GalleryDlService {
             // the same: name what was saved and the first error, not the
             // exit bitmask's generic guess.
             let savedCount = (item.imageCount ?? 0) + (item.videoCount ?? 0)
+            // A profile pasted again reports every earlier file as skipped, so
+            // its "Saved N" counts only the files this run wrote.
+            let savedByRun = settlesErrorsAtExit ? item.newToolFileCount : savedCount
             if !result.wasSignal, item.outputPath != nil, savedCount > 0,
                 let firstError = item.firstToolError
             {
@@ -155,7 +292,14 @@ enum GalleryDlService {
                 item.status = .failed(
                     item.newToolFileCount == 0
                         ? firstError
-                        : Self.partialFailureMessage(savedCount: savedCount, firstError: firstError))
+                        : Self.partialFailureMessage(savedCount: savedByRun, firstError: firstError))
+            } else if settlesErrorsAtExit, !result.wasSignal, item.outputPath != nil, savedCount > 0,
+                item.newToolFileCount > 0
+            {
+                // Files landed, and no error had app-native copy (only
+                // those are recorded): the exit code names the cause.
+                item.status = .failed(
+                    Self.partialFailureMessage(savedCount: savedByRun, firstError: Self.exitCauses(code: result.code)))
             } else if case .failed = item.status {
             } else if result.wasSignal {
                 // Killed by a signal — the exit bitmask only describes real
@@ -163,9 +307,14 @@ enum GalleryDlService {
                 // causes. (Distinguishing a user pause from a crash on this
                 // path is Phase 4 scope; today both read as terminated.)
                 item.status = .failed("gallery-dl was terminated (signal \(result.code))")
+            } else if settlesErrorsAtExit, let firstError = item.firstToolError {
+                item.status = .failed(firstError)
             } else {
+                // A profile row never shows the tool's own words, warnings
+                // included; the exit's causes stand alone.
                 item.status = .failed(
-                    Self.exitFailureMessage(code: result.code, lastWarning: item.lastToolWarning))
+                    Self.exitFailureMessage(
+                        code: result.code, lastWarning: settlesErrorsAtExit ? nil : item.lastToolWarning))
             }
             return
         }
@@ -196,12 +345,34 @@ enum GalleryDlService {
         // DownloadManager's one-shot empty-success auto-retry.
         guard item.outputPath != nil else {
             item.emptySuccessFailure = true
-            if let warning = item.lastToolWarning {
+            if settlesErrorsAtExit {
+                // App-native copy only (a private account, say), else the
+                // profile's own "no posts" wording — never a raw warning.
+                item.status = .failed(item.firstToolError ?? noMediaMessage)
+            } else if let warning = item.lastToolWarning {
                 item.status = .failed(Self.noMediaWarningPrefix + warning)
             } else {
-                item.status = .failed(
-                    Self.emptySuccessMessage(forProfileID: SiteRegistry.profile(for: item.url).id))
+                item.status = .failed(noMediaMessage)
             }
+            return
+        }
+
+        if settlesErrorsAtExit {
+            // A profile pasted again reports every earlier file as skipped:
+            // the Done row counts only what this run saved, and Show in
+            // Finder points at something that is really there. A reported
+            // path can be an archive hit for a file since moved or deleted.
+            item.imageCount = newImages.isEmpty ? nil : newImages.count
+            item.videoCount = newVideos.isEmpty ? nil : newVideos.count
+            if let name = newVideos.first ?? newImages.first {
+                item.outputPath = outputDirectory.appendingPathComponent(name).path
+            } else if let path = item.outputPath, !FileManager.default.fileExists(atPath: path) {
+                // Never nil: a Done row with no output reads as the old
+                // empty-success bug and is re-queued at launch.
+                item.outputPath = outputDirectory.path
+            }
+            item.recomputeMediaCategory()
+            item.markCompleted()
             return
         }
 
@@ -219,7 +390,7 @@ enum GalleryDlService {
         item.recomputeMediaCategory()
 
         // Rename single-image files: strip trailing " #1" suffix.
-        if newImages.count == 1, let path = item.outputPath {
+        if stripsSingleFileSuffix, newImages.count == 1, let path = item.outputPath {
             let u = URL(fileURLWithPath: path)
             let stem = u.deletingPathExtension().lastPathComponent
             if stem.hasSuffix(" #1") {
@@ -253,6 +424,71 @@ enum GalleryDlService {
         cookiesFile: String?,
         extraArgs: [String] = []
     ) -> [String] {
+        commandLine(
+            url: url, outputDirectory: outputDirectory,
+            cookieBrowser: cookieBrowser, cookieBrowserProfile: cookieBrowserProfile, cookiesFile: cookiesFile,
+            siteArgs: SiteRegistry.profile(for: url).galleryDlArgs + extraArgs)
+    }
+
+    /// The command line for an Instagram profile's newest posts.
+    ///
+    /// The posts tab ("/<username>/posts/") is the account's own timeline —
+    /// photos, carousels and reels alike, newest first, each post once.
+    /// Handed the profile itself, gallery-dl would read the posts tab only
+    /// by default, but a user's config could widen that to stories,
+    /// highlights and tagged; the reels tab would leave the photos out.
+    ///
+    /// `max-posts` stops the walk after that many posts, a carousel counting
+    /// as one, and no further page of the timeline is asked for. `--range`
+    /// counts files, so it would cut a carousel short and still pass the
+    /// cap in posts.
+    ///
+    /// Nothing here touches gallery-dl's own pause between Instagram
+    /// requests (several seconds each): a whole account is many requests
+    /// under the browser login, and that pause is what keeps it from
+    /// looking like a scraper. Files already on disk are skipped, as they
+    /// are by default, so pasting the profile again fetches only what is
+    /// missing.
+    ///
+    /// `videos=merged` takes each video's ready-made file, the largest of
+    /// the versions Instagram lists (verified against gallery-dl 1.32.13's
+    /// instagram extractor). Left at its default, a video that also has a
+    /// DASH manifest is handed to gallery-dl's yt-dlp downloader instead,
+    /// which Homebrew's gallery-dl cannot import: it logs an error, then
+    /// falls back to that same ready-made file. What "merged" gives up is
+    /// the DASH streams, which can reach the original resolution, and only
+    /// a gallery-dl that can import yt-dlp would ever fetch them.
+    static func profileArguments(
+        username: String,
+        postLimit: Int,
+        outputDirectory: URL,
+        cookieBrowser: CookieBrowser,
+        cookieBrowserProfile: String? = nil,
+        cookiesFile: String?
+    ) -> [String] {
+        commandLine(
+            url: profilePostsURL(username: username), outputDirectory: outputDirectory,
+            cookieBrowser: cookieBrowser, cookieBrowserProfile: cookieBrowserProfile, cookiesFile: cookiesFile,
+            siteArgs: SiteRegistry.instagram.galleryDlArgs + [
+                "-o", "max-posts=\(postLimit)",
+                "-o", "videos=merged",
+            ])
+    }
+
+    /// Always the one host gallery-dl's Instagram extractor recognises: it
+    /// reads neither "m.instagram.com", "instagr.am" nor an uppercase host.
+    static func profilePostsURL(username: String) -> String {
+        "https://www.instagram.com/\(username)/posts/"
+    }
+
+    private static func commandLine(
+        url: String,
+        outputDirectory: URL,
+        cookieBrowser: CookieBrowser,
+        cookieBrowserProfile: String?,
+        cookiesFile: String?,
+        siteArgs: [String]
+    ) -> [String] {
         var args = CookieArgs.make(
             browser: cookieBrowser, profile: cookieBrowserProfile, file: cookiesFile)
         args += [
@@ -263,8 +499,7 @@ enum GalleryDlService {
             "--retries", "10",
             "-o", "downloader.http.timeout=60",
         ]
-        args += SiteRegistry.profile(for: url).galleryDlArgs
-        args += extraArgs
+        args += siteArgs
         args += [
             "--no-mtime",
             url,
@@ -324,8 +559,15 @@ enum GalleryDlService {
 
     // MARK: - Output parsing
 
+    /// `profileID` names the site whose copy the errors get; nil reads it
+    /// off the row's link. With `settlesErrorsAtExit` an error line never
+    /// touches the status: only its app-native copy is recorded, when it
+    /// has one, and the run's exit words the outcome — no Failed flash
+    /// while files keep arriving, and no raw tool line left on the row.
     @MainActor
-    static func parseLine(_ line: String, item: DownloadItem) {
+    static func parseLine(
+        _ line: String, item: DownloadItem, profileID: String? = nil, settlesErrorsAtExit: Bool = false
+    ) {
         guard !line.isEmpty else { return }
 
         // gallery-dl prints each downloaded file's path on its own line, or
@@ -369,6 +611,9 @@ enum GalleryDlService {
         // word "error" (e.g. "API errors (1/10)") without being fatal.
         if let r = line.range(of: "[warning] ") {
             let msg = String(line[r.upperBound...]).trimmingCharacters(in: .whitespaces)
+            if settlesErrorsAtExit, line.contains("[instagram]"), msg.hasSuffix("posts are private") {
+                recordFirstError(Self.instagramPrivateAccountMessage, item: item)
+            }
             if !msg.isEmpty { item.lastToolWarning = msg }
             return
         }
@@ -404,6 +649,7 @@ enum GalleryDlService {
         // so replace it with the fix.
         if line.contains("[instagram][error]"), line.lowercased().contains("login") {
             recordFirstError(Self.instagramLoginMessage, item: item)
+            if settlesErrorsAtExit { return }
             if case .failed = item.status { return }
             item.status = .failed(Self.instagramLoginMessage)
             return
@@ -412,8 +658,13 @@ enum GalleryDlService {
         if line.lowercased().contains("error") {
             // Known raw errors get app-native copy naming the true cause and
             // the in-app fix; everything else stays verbatim.
-            let profileID = SiteRegistry.profile(for: item.url).id
-            let message = Self.mappedErrorMessage(for: line, profileID: profileID) ?? line
+            let profileID = profileID ?? SiteRegistry.profile(for: item.url).id
+            let mapped = Self.mappedErrorMessage(for: line, profileID: profileID)
+            if settlesErrorsAtExit {
+                if let mapped { recordFirstError(mapped, item: item) }
+                return
+            }
+            let message = mapped ?? line
             recordFirstError(message, item: item)
             if case .failed = item.status { return }
             item.status = .failed(message)
