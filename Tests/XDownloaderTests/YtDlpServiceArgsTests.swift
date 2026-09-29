@@ -82,12 +82,12 @@ final class YtDlpServiceArgsTests: XCTestCase {
     func testOutputTemplateStemPerSite() {
         let tw = args(DownloadItem(url: "https://x.com/u/status/1"))
         let twOutput = tw[tw.firstIndex(of: "--output")! + 1]
-        XCTAssertTrue(twOutput.hasPrefix("/out/%(title)s"), twOutput)
+        XCTAssertTrue(twOutput.hasPrefix("/out/%(xdl_folder|)s/%(title)s"), twOutput)
         XCTAssertFalse(twOutput.contains("%(uploader)s"), twOutput)
 
         let yt = args(DownloadItem(url: "https://www.youtube.com/watch?v=x"))
         let ytOutput = yt[yt.firstIndex(of: "--output")! + 1]
-        XCTAssertTrue(ytOutput.hasPrefix("/out/%(uploader)s - %(title)s"), ytOutput)
+        XCTAssertTrue(ytOutput.hasPrefix("/out/%(xdl_folder|)s/%(uploader)s - %(title)s"), ytOutput)
     }
 
     // MARK: - Resolved address
@@ -195,13 +195,14 @@ final class YtDlpServiceArgsTests: XCTestCase {
         let item = DownloadItem(url: "https://example.com/p")
         item.resolvedFileStem = "Synthetic Maker - Synthetic Sample Title [test00123]"
         let a = args(item)
-        XCTAssertEqual(a[a.firstIndex(of: "--output")! + 1], "/out/%(uploader)s - %(title)s.%(ext)s")
+        XCTAssertEqual(a[a.firstIndex(of: "--output")! + 1], "/out/%(xdl_folder|)s/%(uploader)s - %(title)s.%(ext)s")
         XCTAssertEqual(a.last, "https://example.com/p")
     }
 
     /// Regression guard for every link that resolves nothing — direct
     /// preview file links among them: the command line is, argument for
-    /// argument, the one it was before there was anything to resolve.
+    /// argument, the one it was before there was anything to resolve, but
+    /// for the list-folder steps and the folder field in the template.
     func testArgumentsWithoutAResolvedAddressAreUnchanged() {
         let generic =
             "bestvideo[vcodec^=avc][ext=mp4]+bestaudio[ext=m4a]/bestvideo[ext=mp4]+bestaudio[ext=m4a]"
@@ -209,24 +210,171 @@ final class YtDlpServiceArgsTests: XCTestCase {
         let single =
             "bestvideo*[acodec!=none][ext=mp4][protocol^=https]/bestvideo*[acodec!=none][ext=mp4]/best[acodec!=none]/bv*+ba/b"
         let tail = ["--socket-timeout", "10", "--progress", "--newline"]
+        let listFolder = listFolderArguments
         let direct = "https://cc3001.dmm.co.jp/pv/SYNTHETICtokenAAAAAAAAAAAAAAAAAAAA/test00123hhb.mp4"
         let stream = "https://cc3001.dmm.co.jp/pv/SYNTHETICtokenBBBBBBBBBBBBBBBBBBBB/playlist.m3u8"
 
         XCTAssertEqual(
             args(DownloadItem(url: direct), browser: .chrome),
             ["--cookies-from-browser", "chrome", "--format", generic, "--merge-output-format", "mp4"]
-                + ["--output", "/out/%(uploader)s - %(title)s.%(ext)s"] + tail + [direct])
+                + listFolder + ["--output", "/out/%(xdl_folder|)s/%(uploader)s - %(title)s.%(ext)s"] + tail + [direct])
         XCTAssertEqual(
             args(DownloadItem(url: stream), format: .singleFile, browser: .safari, file: "/c.txt"),
             ["--cookies", "/c.txt", "--format", single, "--merge-output-format", "mp4"]
-                + ["--output", "/out/%(uploader)s - %(title)s.%(ext)s"] + tail + [stream])
+                + listFolder + ["--output", "/out/%(xdl_folder|)s/%(uploader)s - %(title)s.%(ext)s"] + tail + [stream])
         XCTAssertEqual(
             args(DownloadItem(url: "https://x.com/u/status/1"), browser: .firefox),
             ["--cookies-from-browser", "firefox", "--format", generic, "--merge-output-format", "mp4"]
-                + ["--output", "/out/%(title)s%(playlist_index& [{0:02d}]|)s.%(ext)s"] + tail + ["https://x.com/u/status/1"])
+                + listFolder + ["--output", "/out/%(xdl_folder|)s/%(title)s%(playlist_index& [{0:02d}]|)s.%(ext)s"] + tail + [
+                    "https://x.com/u/status/1"
+                ])
         XCTAssertEqual(
             args(DownloadItem(url: "https://www.youtube.com/watch?v=x"), format: .audioOnly, subtitle: .english),
             ["--format", "bestaudio/best", "--extract-audio", "--audio-format", "mp3", "--audio-quality", AudioQuality.best.rawValue]
-                + ["--output", "/out/%(uploader)s - %(title)s.%(ext)s"] + tail + ["https://www.youtube.com/watch?v=x"])
+                + listFolder + ["--output", "/out/%(xdl_folder|)s/%(uploader)s - %(title)s.%(ext)s"] + tail + ["https://www.youtube.com/watch?v=x"])
+    }
+
+    // MARK: - A list's own folder
+
+    /// The steps as the tool reads them, spelled out: a change to any of
+    /// them changes where every list of videos is saved.
+    private let listFolderArguments = [
+        "--parse-metadata",
+        "pre_process:%(playlist_count,n_entries|)s#%(playlist_title,playlist_id).160B [%(playlist_id).64B]"
+            + ":(?s)^(?:[2-9]|[1-9][0-9]+)#(?P<xdl_folder>.+)",
+        "--replace-in-metadata", "pre_process:xdl_folder", #"\x24"#, "＄",
+    ]
+
+    /// A link with no folder settled before the run may turn out to be a
+    /// list: the steps that name the list's folder come right before the
+    /// template, whose directory reads the folder field.
+    func testALinkWithoutAFolderLetsAListTakeOne() {
+        for link in [
+            "https://x.com/u/status/1", "https://www.instagram.com/p/SYNcode0001/",
+            "https://www.youtube.com/playlist?list=SYNlist", "https://example.com/p",
+        ] {
+            let a = args(DownloadItem(url: link))
+            let output = a.firstIndex(of: "--output")!
+            XCTAssertEqual(Array(a[(output - listFolderArguments.count)..<output]), listFolderArguments, link)
+            XCTAssertEqual(YtDlpService.playlistFolderArguments, listFolderArguments)
+            XCTAssertTrue(a[output + 1].hasPrefix("/out/%(xdl_folder|)s/"), a[output + 1])
+            XCTAssertEqual(a.filter { $0 == "--parse-metadata" }.count, 1, link)
+            XCTAssertFalse(a.contains { $0.contains("$") }, "the tool would expand it: \(a)")
+        }
+        let audio = args(DownloadItem(url: "https://www.youtube.com/watch?v=x"), format: .audioOnly)
+        XCTAssertTrue(audio.contains("--parse-metadata"))
+    }
+
+    /// A folder settled before the run — a post's found on disk, a work
+    /// page's — takes the files flat, as before lists had folders: no step
+    /// names another folder, and a "%" in the folder's name stays a plain
+    /// percent sign.
+    func testAFolderSettledBeforeTheRunTakesTheFilesFlat() {
+        let folder = out.appendingPathComponent("someone - 50% off [1]", isDirectory: true)
+        let a = YtDlpService.buildArguments(
+            for: DownloadItem(url: "https://x.com/u/status/1"), outputDirectory: out, folder: folder,
+            format: .videoAndAudio, videoQuality: .best, audioQuality: .best, subtitleLanguage: .none,
+            embedSubtitles: false, cookieBrowser: .none)
+        XCTAssertFalse(a.contains("--parse-metadata"))
+        XCTAssertFalse(a.contains("--replace-in-metadata"))
+        XCTAssertFalse(a.contains { $0.contains("xdl_folder") })
+        XCTAssertEqual(
+            a[a.firstIndex(of: "--output")! + 1], "/out/someone - 50%% off [1]/%(title)s%(playlist_index& [{0:02d}]|)s.%(ext)s")
+    }
+
+    // MARK: - A post's found folder
+
+    /// The step for a post whose folder is on disk, spelled out as the tool
+    /// reads it: ".." for one video or a list of one, nothing for two or
+    /// more, and no "$" of any kind.
+    private let foundFolderArguments = [
+        "--parse-metadata", #"pre_process:%(playlist_count,n_entries|)s#..:^[01]?#(?P<xdl_up>\.\.)"#,
+    ]
+
+    /// A post whose folder is on disk and holds no video of yt-dlp's: the
+    /// found folder's name is literal text in the template — a "%" doubled,
+    /// the ":" and "?" the tool would swap in a field's value kept — and
+    /// the step that sends a single video back out of it replaces the one
+    /// that would name a second folder.
+    func testAFoundFolderWithoutAVideoTakesAListUnderItsOwnName() {
+        let found = out.appendingPathComponent(#"someone - 50% off: why? "no" [1]"#, isDirectory: true)
+        let a = YtDlpService.buildArguments(
+            for: DownloadItem(url: "https://x.com/u/status/1"), outputDirectory: out, foundFolder: found,
+            format: .videoAndAudio, videoQuality: .best, audioQuality: .best, subtitleLanguage: .none,
+            embedSubtitles: false, cookieBrowser: .none)
+        let output = a.firstIndex(of: "--output")!
+        XCTAssertEqual(Array(a[(output - foundFolderArguments.count)..<output]), foundFolderArguments)
+        XCTAssertEqual(YtDlpService.foundFolderArguments, foundFolderArguments)
+        XCTAssertEqual(
+            a[output + 1], #"/out/someone - 50%% off: why? "no" [1]/%(xdl_up|)s/%(title)s%(playlist_index& [{0:02d}]|)s.%(ext)s"#)
+        XCTAssertEqual(a.filter { $0 == "--parse-metadata" }.count, 1)
+        XCTAssertFalse(a.contains("--replace-in-metadata"))
+        XCTAssertFalse(a.contains { $0.contains("xdl_folder") })
+        XCTAssertFalse(a.contains { $0.contains("$") }, "the tool would expand it: \(a)")
+    }
+
+    /// A folder the files go into flat, or a resolved address, wins over a
+    /// found folder: neither is ever walked as a list.
+    func testAFoundFolderIsIgnoredWhenTheFilesGoFlat() {
+        let found = out.appendingPathComponent("someone - found [1]", isDirectory: true)
+        let flat = out.appendingPathComponent("someone - flat [1]", isDirectory: true)
+        for (item, folder) in [(DownloadItem(url: "https://x.com/u/status/1"), flat), (resolvedItem(), nil)] {
+            let a = YtDlpService.buildArguments(
+                for: item, outputDirectory: out, folder: folder, foundFolder: found,
+                format: .videoAndAudio, videoQuality: .best, audioQuality: .best, subtitleLanguage: .none,
+                embedSubtitles: false, cookieBrowser: .none)
+            XCTAssertFalse(a.contains("--parse-metadata"), "\(a)")
+            XCTAssertFalse(a.contains { $0.contains("xdl_up") || $0.contains(found.lastPathComponent) }, "\(a)")
+        }
+    }
+
+    /// The options of the owner's yt-dlp config that would respell a path
+    /// the app spells out, set back to the tool's defaults, spelled out as
+    /// the tool reads them.
+    private let pinnedPathArguments = [
+        "--no-windows-filenames", "--compat-options", "-filename-sanitization",
+    ]
+
+    /// A template naming a folder of the app's — a found folder taking a
+    /// list, a folder the files go into flat, a work page's — pins how the
+    /// tool writes a path, so a "--windows-filenames" or a
+    /// "--compat-options filename-sanitization" in the owner's config can
+    /// neither respell the folder's name nor turn the ".." step into "_".
+    /// Without such a folder, the command line is unchanged.
+    func testATemplateNamingAFolderOfTheAppsPinsHowPathsAreWritten() {
+        XCTAssertEqual(YtDlpService.pinnedPathArguments, pinnedPathArguments)
+        let found = out.appendingPathComponent("someone - x: y [1]", isDirectory: true)
+        let listed = YtDlpService.buildArguments(
+            for: DownloadItem(url: "https://x.com/u/status/1"), outputDirectory: out, foundFolder: found,
+            format: .videoAndAudio, videoQuality: .best, audioQuality: .best, subtitleLanguage: .none,
+            embedSubtitles: false, cookieBrowser: .none)
+        let output = listed.firstIndex(of: "--output")!
+        let steps = pinnedPathArguments + foundFolderArguments
+        XCTAssertEqual(Array(listed[(output - steps.count)..<output]), steps)
+
+        let workPage = resolvedItem()
+        for (item, folder) in [(DownloadItem(url: "https://x.com/u/status/1"), found), (workPage, found)] {
+            let a = YtDlpService.buildArguments(
+                for: item, outputDirectory: out, folder: folder,
+                format: .videoAndAudio, videoQuality: .best, audioQuality: .best, subtitleLanguage: .none,
+                embedSubtitles: false, cookieBrowser: .none)
+            let output = a.firstIndex(of: "--output")!
+            XCTAssertEqual(Array(a[(output - pinnedPathArguments.count)..<output]), pinnedPathArguments, "\(a)")
+            XCTAssertEqual(a.filter { $0 == "--compat-options" }.count, 1, "\(a)")
+        }
+
+        for a in [args(DownloadItem(url: "https://x.com/u/status/1")), args(resolvedItem())] {
+            XCTAssertFalse(a.contains("--no-windows-filenames"), "\(a)")
+            XCTAssertFalse(a.contains("--compat-options"), "\(a)")
+        }
+    }
+
+    /// A resolved address names one file and is never walked as a list, so
+    /// it gets no folder step either, with or without a folder of its own.
+    func testAResolvedAddressGetsNoListFolder() {
+        for a in [args(resolvedItem()), args(resolvedItem(stem: "50% off [x]"))] {
+            XCTAssertFalse(a.contains("--parse-metadata"), "\(a)")
+            XCTAssertFalse(a.contains { $0.contains("xdl_folder") }, "\(a)")
+        }
     }
 }

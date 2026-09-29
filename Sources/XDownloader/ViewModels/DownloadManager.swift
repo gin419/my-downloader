@@ -1538,6 +1538,7 @@ class DownloadManager: ObservableObject {
             // Every run settles its own folder; the last run's is not
             // trusted, only worked out again.
             RowFolder.use(nil, for: item)
+            postFoldersAtStart[item.id] = nil
             item.videoDownloadedThisRun = false
             Task {
                 await runDownload(item)
@@ -1557,6 +1558,7 @@ class DownloadManager: ObservableObject {
     /// writes to the same folder (two spellings of one post): its files may
     /// be on their way.
     private func cleanUpRowFolder(_ item: DownloadItem) {
+        cleanUpPostFolders(item)
         guard let folder = item.destination, !item.destinationExistedAtStart else { return }
         let shared = items.contains {
             $0.id != item.id && inFlightItemIDs.contains($0.id)
@@ -1564,6 +1566,41 @@ class DownloadManager: ObservableObject {
         }
         guard !shared else { return }
         RowFolder.removeIfEmpty(folder, createdThisRun: true)
+    }
+
+    /// The folders ending in an X or Instagram post's id, or a YouTube
+    /// list's (`RowFolder.folderID`), that were in the
+    /// download folder when the row's run began, by row. yt-dlp names a
+    /// post's folder itself when the post holds several videos, and makes it
+    /// before the first byte arrives, so the app learns of it only from a
+    /// file reported in it — or not at all when every video then fails. The
+    /// id tells which folders are the post's, whichever tool made them.
+    private var postFoldersAtStart: [UUID: (root: URL, id: String, names: Set<String>)] = [:]
+
+    /// Notes the post's folders on disk as the row's run begins. A re-run
+    /// within the same run (the subtitle retry, the automatic one) keeps
+    /// the first note, so a folder the first pass made still counts as made
+    /// by the run.
+    private func notePostFolders(of item: DownloadItem, id: String) {
+        guard postFoldersAtStart[item.id] == nil else { return }
+        let names = RowFolder.all(in: outputDirectory, id: id).map(\.lastPathComponent)
+        postFoldersAtStart[item.id] = (outputDirectory, id, Set(names))
+    }
+
+    /// Removes each folder of the row's post that its run made and left
+    /// empty — a folder yt-dlp made for videos that then all failed —
+    /// so no empty folder is left for a later run to find and write into.
+    /// A folder that was there before the run is never touched, and none
+    /// is while another running row fetches the same post.
+    private func cleanUpPostFolders(_ item: DownloadItem) {
+        guard let start = postFoldersAtStart.removeValue(forKey: item.id) else { return }
+        let shared = items.contains {
+            $0.id != item.id && inFlightItemIDs.contains($0.id) && postFoldersAtStart[$0.id]?.id == start.id
+        }
+        guard !shared else { return }
+        for folder in RowFolder.all(in: start.root, id: start.id) where !start.names.contains(folder.lastPathComponent) {
+            RowFolder.removeIfEmpty(folder, createdThisRun: true)
+        }
     }
 
     private static func isInstagramProfile(_ item: DownloadItem) -> Bool {
@@ -1822,15 +1859,23 @@ class DownloadManager: ObservableObject {
         // it, nor one gallery-dl would write elsewhere (a control character
         // or whitespace at either end, which it drops); the tools then pick
         // their own folder.
-        // yt-dlp is handed the folder only when a video of its own is in it.
-        // Otherwise the post's videos, if any, lie loose — saved before
-        // posts had folders, or several of them, which yt-dlp saves loose —
-        // and yt-dlp finds them only where it saved them.
-        let found = RowFolder.postID(of: item.url)
+        // A YouTube list's folder is found the same way, by the list's id.
+        // yt-dlp is handed the folder flat when a video of its own is in it
+        // (or the folder is a link, or gone by the time yt-dlp starts:
+        // `ytDlpFolders`). Otherwise a single video lies loose in the download folder,
+        // where yt-dlp saved and looks for it (as does one saved before
+        // posts had folders), and a list of two or more goes into the found
+        // folder: were yt-dlp to name one of its own for them, the post
+        // would have two folders of the same id, and the next run would
+        // find one and fetch what lies in the other again. Which of the two
+        // is judged when yt-dlp starts.
+        let folderID = RowFolder.folderID(of: item.url)
+        let found =
+            folderID
             .flatMap { RowFolder.existing(in: outputDirectory, id: $0) }
             .flatMap { RowFolder.isReusable($0) ? $0 : nil }
         if let found { RowFolder.use(found, for: item) }
-        let ytDlpDirectory = found.map { Self.holdsAVideo($0) ? $0 : outputDirectory }
+        if let folderID { notePostFolders(of: item, id: folderID) }
         // The address comes first: without it there is nothing to hand
         // yt-dlp. Every run asks again — a first run, a Retry, a Resume and
         // the re-runs below all pass through here.
@@ -1859,9 +1904,14 @@ class DownloadManager: ObservableObject {
         let cookies: (path: String?, granted: URL?) = sendsCookies ? resolveCookiesForDownload() : (nil, nil)
         var ytResult = ProcessResult(code: 0, wasSignal: false)
         let runYtDlp = { [self] () async -> ProcessResult in
+            // Without a post folder found, the row's own folder is a work
+            // page's, settled by the resolver above.
+            let folders = found.map(Self.ytDlpFolders(for:)) ?? (flat: item.destination, list: nil)
             let args = YtDlpService.buildArguments(
                 for: item,
-                outputDirectory: ytDlpDirectory ?? item.destination ?? outputDirectory,
+                outputDirectory: outputDirectory,
+                folder: folders.flat,
+                foundFolder: folders.list,
                 format: youtubeFormat,
                 videoQuality: videoQuality,
                 audioQuality: audioQuality,
@@ -1896,6 +1946,17 @@ class DownloadManager: ObservableObject {
         // The row's ✕ terminated this process mid-run: the user cancelled.
         // Don't complete, pause-freeze, retry, or fall back on their behalf.
         guard stillInList(item) else { return }
+
+        // yt-dlp put the post's videos into the folder it named for them.
+        // Should it have failed part-way — a video it could not fetch, an
+        // Instagram photo it cannot read — the fallbacks write into that
+        // folder too, so the post is not split between two folders of the
+        // same id and the next run finds everything in one.
+        if found == nil, let folderID,
+            let folder = Self.postFolder(holding: item.videoPath ?? item.outputPath, id: folderID, root: outputDirectory)
+        {
+            RowFolder.use(folder, for: item)
+        }
 
         // "Empty success": yt-dlp can exit 0 without writing any file. Seen on
         // Twitter for text-only tweets, quote-RTs whose referenced media yt-dlp
@@ -2114,26 +2175,29 @@ class DownloadManager: ObservableObject {
         else { return }
         let root = outputDirectory
         let condition = GalleryDlService.ownPostCondition(for: item.url)
-        // The photos go where the video is when that is a folder already
-        // (one found for this post), or else into a folder found for the
-        // post, where an earlier run put them. Without one, a video yt-dlp
-        // saved loose in this run, the post's only one, can follow its
-        // photos into the post's own folder — its own id makes it one
-        // whatever the count, which here leaves the video out. Any other
-        // loose video (one of several, or one saved before posts had
-        // folders) stays where it is, so the photos stay loose beside it:
-        // a post split between a folder and the download folder would send
-        // the next run's yt-dlp into the folder, where it would fetch the
-        // videos again.
+        // The photos go into the row's own folder when it has one: the
+        // post's folder found on disk, where an earlier run put them, or the
+        // one yt-dlp named for a post of several videos. It comes before the
+        // video's folder, so the photos never start a second folder of the
+        // post; the two are one whenever a video is in a folder. Else they
+        // go where the video is when that is a folder already. Without one,
+        // a video yt-dlp saved loose in this run, the post's only one, can
+        // follow its photos into the post's own folder — its own id makes
+        // it one whatever the count, which here leaves the video out. Any
+        // other loose video (one saved before posts had folders, or one of
+        // several saved before yt-dlp gave them a folder) stays where it
+        // is, so the photos stay loose beside it: a post split between a
+        // folder and the download folder would send the next run's yt-dlp
+        // into the folder, where it would fetch the videos again.
         let videoFolder = item.videoPath.map { URL(fileURLWithPath: $0).deletingLastPathComponent() }
         let videoCanFollow = Self.videoCanFollowItsPhotos(item, root: root)
         let folderMode: GalleryDlService.FolderMode
-        if let condition, let videoFolder, GalleryDlService.isDirectlyInside(videoFolder.path, root),
+        if let condition, let found = item.destination {
+            folderMode = .into(found, ownPost: condition)
+        } else if let condition, let videoFolder, GalleryDlService.isDirectlyInside(videoFolder.path, root),
             RowFolder.isReusable(videoFolder)
         {
             folderMode = .into(videoFolder, ownPost: condition)
-        } else if let condition, let found = item.destination {
-            folderMode = .into(found, ownPost: condition)
         } else if let condition, videoCanFollow {
             folderMode = .perPost(always: condition)
         } else {
@@ -2171,7 +2235,8 @@ class DownloadManager: ObservableObject {
 
     /// True when the row's video may follow its photos into the post's
     /// folder: yt-dlp saved it loose in this very run, and it is the post's
-    /// only one. Several videos stay loose together, as yt-dlp saved them.
+    /// only one. Several videos are in the folder yt-dlp named for them, or
+    /// loose together where an earlier version saved them, and stay there.
     static func videoCanFollowItsPhotos(_ item: DownloadItem, root: URL) -> Bool {
         guard item.videoDownloadedThisRun, item.videoCount == 1, let videoPath = item.videoPath else { return false }
         return GalleryDlService.isDirectlyInside(videoPath, root)
@@ -2190,6 +2255,36 @@ class DownloadManager: ObservableObject {
             MediaExtensions.video.contains((name as NSString).pathExtension.lowercased())
                 && name.range(of: #"\] #\d+\.[^.]+$"#, options: .regularExpression) == nil
         }
+    }
+
+    /// How yt-dlp is handed a post's folder found on disk, judged just
+    /// before the tool starts — the scan comes before the address and the
+    /// cookies, which may wait on the owner. As the folder a list of two or
+    /// more takes, from which a single video steps back out to the download
+    /// folder (`YtDlpService.foundFolderArguments`), when yt-dlp has no
+    /// video in it; flat otherwise, and flat whenever the step back could
+    /// go wrong: the folder is a link, so the step would lead out of the
+    /// folder it points into, or it is gone, and the tool would make it
+    /// again, empty, before stepping out of it. Handed flat, a gone folder
+    /// comes back only with the files written into it.
+    static func ytDlpFolders(for found: URL) -> (flat: URL?, list: URL?) {
+        let flat =
+            RowFolder.isSymbolicLink(found)
+            || !FileManager.default.fileExists(atPath: found.path)
+            || holdsAVideo(found)
+        return flat ? (found, nil) : (nil, found)
+    }
+
+    /// The folder `path` lies in when that is a folder of the post `id` —
+    /// its name ends in " [<id>]" — directly inside `root`, and one a tool
+    /// may be handed; nil for a loose file and any other folder.
+    static func postFolder(holding path: String?, id: String, root: URL) -> URL? {
+        guard let path else { return nil }
+        let folder = URL(fileURLWithPath: path).deletingLastPathComponent()
+        guard folder.lastPathComponent.hasSuffix(" [\(id)]"), GalleryDlService.isDirectlyInside(folder.path, root),
+            RowFolder.isReusable(folder)
+        else { return nil }
+        return folder
     }
 
     /// The one file ever moved after it was written: a post's single video,

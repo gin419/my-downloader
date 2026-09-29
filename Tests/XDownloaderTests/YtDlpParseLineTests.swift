@@ -249,4 +249,111 @@ final class YtDlpParseLineTests: XCTestCase {
         XCTAssertEqual(item.progress, 0.453, accuracy: 0.0001)
         XCTAssertEqual(item.outputPath, "/tmp/out/maker - 50% more [test00123].mp4")
     }
+
+    // MARK: - A list's own folder
+
+    /// The list-folder steps report what they parsed, quoting the list's
+    /// title. None of that is an error, progress or a file: a title that
+    /// reads like an error, or holds a "%", leaves the row as it was.
+    func testListFolderLinesNeverFailTheRow() {
+        let item = DownloadItem(url: "https://x.com/a/status/1")
+        let before = item.status
+        for line in [
+            "[MetadataParser] Parsed xdl_folder from '%(playlist_count,n_entries|)s#%(playlist_title,playlist_id).160B"
+                + " [%(playlist_id).64B]': 'someone - ERROR: 50% off [1]'",
+            "[MetadataParser] Changed xdl_folder to: someone - Error: 50% off ＄HOME [1]",
+            "[MetadataParser] Could not interpret '%(playlist_count,n_entries|)s#…' as '(?s)^(?:[2-9]|[1-9][0-9]+)#…'",
+            "[MetadataParser] Video does not have a xdl_folder",
+        ] {
+            parse(line, into: item)
+            XCTAssertEqual(item.status, before, line)
+        }
+        XCTAssertEqual(item.progress, 0)
+        XCTAssertNil(item.outputPath)
+        XCTAssertNil(item.title)
+        XCTAssertNil(item.lastToolWarning)
+    }
+
+    /// A single video's template has an empty folder field, so the tool
+    /// reports "<root>//<name>". Every path is recorded as the single path
+    /// it names: the same string a single video has always been recorded
+    /// as, in history and in the next run's comparisons.
+    func testTheEmptyFolderFieldsDoubledSeparatorIsNeverRecorded() {
+        let video = DownloadItem(url: "https://x.com/a/status/1")
+        parse("[download] Destination: /tmp/out//user - clip.mp4", into: video)
+        XCTAssertEqual(video.outputPath, "/tmp/out/user - clip.mp4")
+        XCTAssertEqual(video.videoPath, "/tmp/out/user - clip.mp4")
+        XCTAssertEqual(video.title, "user - clip")
+
+        let skipped = DownloadItem(url: "https://x.com/a/status/1")
+        parse("[download] /tmp/out//user - clip.mp4 has already been downloaded", into: skipped)
+        XCTAssertEqual(skipped.outputPath, "/tmp/out/user - clip.mp4")
+        XCTAssertEqual(skipped.videoPath, "/tmp/out/user - clip.mp4")
+
+        let merged = DownloadItem(url: "https://youtube.com/watch?v=abc")
+        parse("[download] Destination: /tmp/out//nihil - clip.f299.mp4", into: merged)
+        parse("[download] Destination: /tmp/out//nihil - clip.f140.m4a", into: merged)
+        parse(#"[Merger] Merging formats into "/tmp/out//nihil - clip.mp4""#, into: merged)
+        XCTAssertEqual(merged.outputPath, "/tmp/out/nihil - clip.mp4")
+        XCTAssertEqual(merged.videoPath, "/tmp/out/nihil - clip.mp4")
+        XCTAssertEqual(merged.audioPath, "/tmp/out/nihil - clip.f140.m4a")
+        XCTAssertEqual(merged.videoCount, 1)
+
+        let audio = DownloadItem(url: "https://youtube.com/watch?v=abc")
+        parse("[ExtractAudio] Destination: /tmp/out//nihil - song.mp3", into: audio)
+        XCTAssertEqual(audio.outputPath, "/tmp/out/nihil - song.mp3")
+        XCTAssertEqual(audio.audioPath, "/tmp/out/nihil - song.mp3")
+
+        let percent = DownloadItem(url: "https://example.com/p")
+        parse("[download] Destination: /tmp/out//maker - 50% more.mp4", into: percent)
+        XCTAssertEqual(percent.outputPath, "/tmp/out/maker - 50% more.mp4")
+    }
+
+    /// A single video of a post whose folder is on disk steps back out of
+    /// it, "<root>/<folder>/../<name>": every path is recorded as the loose
+    /// file it reaches, the same string as before posts had folders.
+    func testTheStepBackOutOfAFoundFolderIsNeverRecorded() {
+        let found = "/tmp/out/someone: 50% off? [1]"
+        let video = DownloadItem(url: "https://x.com/a/status/1")
+        parse("[download] Destination: \(found)/../user - clip.mp4", into: video)
+        XCTAssertEqual(video.outputPath, "/tmp/out/user - clip.mp4")
+        XCTAssertEqual(video.videoPath, "/tmp/out/user - clip.mp4")
+        XCTAssertEqual(video.title, "user - clip")
+
+        let skipped = DownloadItem(url: "https://x.com/a/status/1")
+        parse("[download] \(found)/../user - clip.mp4 has already been downloaded", into: skipped)
+        XCTAssertEqual(skipped.outputPath, "/tmp/out/user - clip.mp4")
+
+        let merged = DownloadItem(url: "https://x.com/a/status/1")
+        parse("[download] Destination: \(found)/../user - clip.f1.mp4", into: merged)
+        parse("[download] Destination: \(found)/../user - clip.f2.m4a", into: merged)
+        parse(#"[Merger] Merging formats into "\#(found)/../user - clip.mp4""#, into: merged)
+        XCTAssertEqual(merged.outputPath, "/tmp/out/user - clip.mp4")
+        XCTAssertEqual(merged.videoPath, "/tmp/out/user - clip.mp4")
+
+        let audio = DownloadItem(url: "https://x.com/a/status/1")
+        parse("[ExtractAudio] Destination: \(found)/../user - clip.mp3", into: audio)
+        XCTAssertEqual(audio.outputPath, "/tmp/out/user - clip.mp3")
+
+        // Two or more stay in the found folder.
+        let list = DownloadItem(url: "https://x.com/a/status/1")
+        parse("[download] Destination: \(found)//user - clip [01].mp4", into: list)
+        XCTAssertEqual(list.outputPath, "\(found)/user - clip [01].mp4")
+    }
+
+    /// A list's files lie in its folder, whose name holds the list's title:
+    /// a "%" there must not turn a Destination line or a skip notice into
+    /// progress, or the run ends with no file known.
+    func testAPercentSignInAListsFolderStillRecordsItsFiles() {
+        let folder = "/tmp/out/someone - 50% off [1]"
+        let item = DownloadItem(url: "https://x.com/a/status/1")
+        parse("[download] Destination: \(folder)/someone - 50% off #1 [01].mp4", into: item)
+        parse("[download] \(folder)/someone - 50% off #2 [02].mp4 has already been downloaded", into: item)
+
+        XCTAssertEqual(item.videoCount, 2)
+        XCTAssertEqual(item.outputPath, "\(folder)/someone - 50% off #2 [02].mp4")
+        XCTAssertEqual(item.title, "someone - 50% off #1")
+        XCTAssertEqual(item.progress, 0)
+        XCTAssertTrue(item.videoDownloadedThisRun)
+    }
 }
