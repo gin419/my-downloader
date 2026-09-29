@@ -94,12 +94,17 @@ enum DirectDownload {
     // MARK: - File names
 
     /// Keep filenames in step with what gallery-dl produces for the same
-    /// post: path separators become "_", newlines collapse to spaces.
+    /// post: path separators become "_", newlines collapse to spaces, and
+    /// every other control character (a tab, say) is dropped, as gallery-dl
+    /// drops it from the names it makes. A name made here is then one
+    /// gallery-dl writes to exactly (see `RowFolder.isReusable`).
     static func sanitize(_ s: String) -> String {
-        s.replacingOccurrences(of: "/", with: "_")
+        let spaced = s.replacingOccurrences(of: "/", with: "_")
             .replacingOccurrences(of: "\n", with: " ")
             .replacingOccurrences(of: "\r", with: " ")
-            .trimmingCharacters(in: .whitespaces)
+        var kept = String.UnicodeScalarView()
+        kept.append(contentsOf: spaced.unicodeScalars.filter { !RowFolder.isControl($0) })
+        return String(kept).trimmingCharacters(in: .whitespaces)
     }
 
     /// The file a previous run saved under `baseName`, whatever its
@@ -319,6 +324,10 @@ enum DirectDownload {
         let destination = directory.appendingPathComponent("\(baseName).\(ext)")
         var saved = destination
         do {
+            // A multi-file post's folder is made only now, with a complete
+            // file to put in it: a post whose every transfer fails, or that
+            // is stopped, leaves no empty folder behind.
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             try FileManager.default.moveItem(at: scratch.file, to: destination)
         } catch {
             // The name was free when the caller checked and is taken now:
@@ -335,6 +344,20 @@ enum DirectDownload {
             item.totalSize = sizeText(fetched.byteCount)
         }
         return .saved(saved)
+    }
+
+    /// The folder a download's scratch folder is placed by: the
+    /// destination, or its nearest ancestor on disk. A post's own folder
+    /// does not exist until its first file is saved, and asked about a
+    /// folder that isn't there the system gives up, which would put the
+    /// scratch file on the startup disk and turn the final move onto an
+    /// external download folder into a copy.
+    static func scratchVolumeAnchor(for directory: URL) -> URL {
+        var candidate = directory.standardizedFileURL
+        while !FileManager.default.fileExists(atPath: candidate.path), candidate.pathComponents.count > 1 {
+            candidate = candidate.deletingLastPathComponent()
+        }
+        return candidate
     }
 
     // MARK: - Private
@@ -356,7 +379,8 @@ enum DirectDownload {
             // final move a rename, which either happens or doesn't; across
             // volumes it is a copy that can stop halfway.
             let created = try? FileManager.default.url(
-                for: .itemReplacementDirectory, in: .userDomainMask, appropriateFor: destinationDirectory, create: true)
+                for: .itemReplacementDirectory, in: .userDomainMask,
+                appropriateFor: DirectDownload.scratchVolumeAnchor(for: destinationDirectory), create: true)
             ownedDirectory = created
             file = (created ?? FileManager.default.temporaryDirectory).appendingPathComponent(name)
         }

@@ -135,6 +135,37 @@ final class YtDlpServiceArgsTests: XCTestCase {
         XCTAssertEqual(YtDlpService.literalTemplateText("$HOME 50%"), "＄HOME 50%%")
     }
 
+    // MARK: - A row's own folder
+
+    /// A work of two or more files hands the tool its own folder. The
+    /// folder is named after the stem and is template text too: a "%" in it
+    /// must stay a plain percent sign.
+    func testPercentSignInTheFolderIsEscaped() {
+        let folder = out.appendingPathComponent("50% off [x]", isDirectory: true)
+        let a = YtDlpService.buildArguments(
+            for: resolvedItem(stem: "50% off [x]"), outputDirectory: folder, format: .videoAndAudio,
+            videoQuality: .best, audioQuality: .best, subtitleLanguage: .none,
+            embedSubtitles: false, cookieBrowser: .none)
+        XCTAssertEqual(a[a.firstIndex(of: "--output")! + 1], "/out/50%% off [x]/50%% off [x].%(ext)s")
+        XCTAssertEqual(RowFolder.templateDirectory(folder), "/out/50%% off [x]")
+        XCTAssertEqual(RowFolder.templateDirectory(out), "/out")
+    }
+
+    /// The folder the app names from a stem holding "$" is named the way
+    /// the clip's own file is, so no "$" reaches the tool at all.
+    func testDollarSignInTheStemNamesTheFolderWithoutIt() {
+        let stem = "Synthetic Maker - Sale $HOME [test00123]"
+        let folder = out.appendingPathComponent(RowFolder.appNamed(stem), isDirectory: true)
+        let a = YtDlpService.buildArguments(
+            for: resolvedItem(stem: stem), outputDirectory: folder, format: .videoAndAudio,
+            videoQuality: .best, audioQuality: .best, subtitleLanguage: .none,
+            embedSubtitles: false, cookieBrowser: .none)
+        let template = a[a.firstIndex(of: "--output")! + 1]
+        XCTAssertEqual(
+            template, "/out/Synthetic Maker - Sale ＄HOME [test00123]/Synthetic Maker - Sale ＄HOME [test00123].%(ext)s")
+        XCTAssertFalse(template.contains("$"), template)
+    }
+
     /// The resolved address names one file; a list in its place is not
     /// walked. Links that resolve nothing get no such argument (see
     /// testArgumentsWithoutAResolvedAddressAreUnchanged).

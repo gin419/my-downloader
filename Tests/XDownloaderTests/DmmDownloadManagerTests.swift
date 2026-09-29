@@ -8,8 +8,9 @@ import XCTest
 /// first and handed to yt-dlp without any cookie argument, a link that
 /// resolves nothing fails under its cause's own message with yt-dlp never
 /// started, the pictures download in-app after the clip or in its place,
-/// Stop ends paused, the row's ✕ leaves nothing behind, and every further
-/// run asks for the address again. The answers are the synthetic
+/// Stop ends paused, the row's ✕ leaves nothing behind, every further run
+/// asks for the address again, and a work of two or more files keeps them
+/// in a folder of its own. The answers are the synthetic
 /// fixtures; every request is answered by the URLProtocol stub on the
 /// injected session, and the yt-dlp the manager is given is a script that
 /// records its arguments, so nothing here touches the network, a browser or
@@ -157,12 +158,14 @@ final class DmmDownloadManagerTests: XCTestCase {
         XCTAssertEqual(item.imageCount, 4)
         XCTAssertNil(item.videoCount)
         XCTAssertEqual(item.title, "Synthetic Maker - Synthetic Sample Title")
+        // Four files: a folder named after them, holding them.
         let names = (1...4).map { "\(picturesOnlyStem) #\($0).jpg" }
-        XCTAssertEqual(try contents(of: downloads), names)
-        XCTAssertEqual(item.outputPath, downloads.appendingPathComponent(names[0]).path)
+        XCTAssertEqual(try contents(of: downloads), [picturesOnlyStem])
+        XCTAssertEqual(try contents(of: picturesOnlyFolder), names)
+        XCTAssertEqual(item.outputPath, picturesOnlyFolder.appendingPathComponent(names[0]).path)
         // Gallery order: the cover is #1, the samples follow by number.
         for (index, name) in picturesOnlyNames.enumerated() {
-            XCTAssertEqual(try Data(contentsOf: downloads.appendingPathComponent(names[index])), jpegBody(name), name)
+            XCTAssertEqual(try Data(contentsOf: picturesOnlyFolder.appendingPathComponent(names[index])), jpegBody(name), name)
         }
 
         XCTAssertEqual(try toolStarts(), 0)
@@ -202,15 +205,17 @@ final class DmmDownloadManagerTests: XCTestCase {
         XCTAssertEqual(item.status, .completed)
         XCTAssertEqual(item.videoCount, 1)
         XCTAssertEqual(item.imageCount, 3)
-        // The clip keeps its un-numbered name and stays the row's file.
-        XCTAssertEqual(item.outputPath, downloads.appendingPathComponent(withClipStem + ".mp4").path)
+        // The clip keeps its un-numbered name and stays the row's file. The
+        // clip and its pictures share one folder, named after them.
+        XCTAssertEqual(item.outputPath, withClipFolder.appendingPathComponent(withClipStem + ".mp4").path)
+        XCTAssertEqual(try contents(of: downloads), [withClipStem])
         XCTAssertEqual(
-            try contents(of: downloads), ((1...3).map { "\(withClipStem) #\($0).jpg" } + [withClipStem + ".mp4"]).sorted())
+            try contents(of: withClipFolder), ((1...3).map { "\(withClipStem) #\($0).jpg" } + [withClipStem + ".mp4"]).sorted())
 
         XCTAssertEqual(try toolStarts(), 1)
         let arguments = try toolArguments()
         XCTAssertEqual(arguments.last, withClipAddress)
-        XCTAssertEqual(arguments[try XCTUnwrap(arguments.firstIndex(of: "--output")) + 1], downloads.path + "/" + withClipStem + ".%(ext)s")
+        XCTAssertEqual(try toolOutput(), withClipFolder.path + "/" + withClipStem + ".%(ext)s")
         for argument in arguments {
             XCTAssertFalse(argument.lowercased().contains("cookie"), argument)
             XCTAssertFalse(argument.contains("awsimgsrc"), "a picture was handed to the tool: \(argument)")
@@ -239,14 +244,18 @@ final class DmmDownloadManagerTests: XCTestCase {
         XCTAssertEqual(item.imageCount, 3)
         XCTAssertFalse(item.emptySuccessFailure)
         XCTAssertFalse(item.autoRetryAttempted)
-        XCTAssertEqual(try contents(of: downloads), [1, 2, 4].map { "\(picturesOnlyStem) #\($0).jpg" })
+        // The folder follows the four pictures the work declares, not the
+        // three that arrived, so the Retry finds them.
+        XCTAssertEqual(try contents(of: downloads), [picturesOnlyStem])
+        XCTAssertEqual(try contents(of: picturesOnlyFolder), [1, 2, 4].map { "\(picturesOnlyStem) #\($0).jpg" })
         XCTAssertEqual(StubProtocol.requests(to: Resolver.endpoint).count, 1)
 
         manager.retryItem(item)
 
         try await waitUntil("the retry finished") { item.status == .completed }
         XCTAssertEqual(item.imageCount, 4)
-        XCTAssertEqual(try contents(of: downloads), (1...4).map { "\(picturesOnlyStem) #\($0).jpg" })
+        XCTAssertEqual(try contents(of: downloads), [picturesOnlyStem])
+        XCTAssertEqual(try contents(of: picturesOnlyFolder), (1...4).map { "\(picturesOnlyStem) #\($0).jpg" })
         // Looked up again, and only the missing picture fetched again.
         XCTAssertEqual(StubProtocol.requests(to: Resolver.endpoint).count, 2)
         XCTAssertEqual(StubProtocol.requests(to: failing).count, 2)
@@ -274,8 +283,9 @@ final class DmmDownloadManagerTests: XCTestCase {
         XCTAssertFalse(item.emptySuccessFailure)
         XCTAssertFalse(item.autoRetryAttempted)
         XCTAssertEqual(try toolStarts(), 1)
+        XCTAssertEqual(try contents(of: downloads), [withClipStem])
         XCTAssertEqual(
-            try contents(of: downloads), ["\(withClipStem) #1.jpg", "\(withClipStem) #3.jpg", withClipStem + ".mp4"])
+            try contents(of: withClipFolder), ["\(withClipStem) #1.jpg", "\(withClipStem) #3.jpg", withClipStem + ".mp4"])
     }
 
     /// The clip failed: the pictures are saved all the same, and the row
@@ -295,7 +305,8 @@ final class DmmDownloadManagerTests: XCTestCase {
         XCTAssertNil(item.videoCount)
         XCTAssertFalse(item.autoRetryAttempted)
         XCTAssertEqual(try toolStarts(), 1)
-        XCTAssertEqual(try contents(of: downloads), (1...3).map { "\(withClipStem) #\($0).jpg" })
+        XCTAssertEqual(try contents(of: downloads), [withClipStem])
+        XCTAssertEqual(try contents(of: withClipFolder), (1...3).map { "\(withClipStem) #\($0).jpg" })
     }
 
     func testRemoveDuringPictureDownloadsLeavesNoFileAndStartsNothingFurther() async throws {
@@ -347,14 +358,16 @@ final class DmmDownloadManagerTests: XCTestCase {
         try await Task.sleep(nanoseconds: 300_000_000)
         XCTAssertEqual(item.status, .paused)
         XCTAssertEqual(history.count(), 0, "a paused download is not a finished one")
-        XCTAssertEqual(try contents(of: downloads), ["\(picturesOnlyStem) #1.jpg"])
+        XCTAssertEqual(try contents(of: downloads), [picturesOnlyStem])
+        XCTAssertEqual(try contents(of: picturesOnlyFolder), ["\(picturesOnlyStem) #1.jpg"])
 
         manager.resumeItem(item)
 
         try await waitUntil("the download finished") { self.history.count() == 1 }
         XCTAssertEqual(item.status, .completed)
         XCTAssertEqual(item.imageCount, 4)
-        XCTAssertEqual(try contents(of: downloads), (1...4).map { "\(picturesOnlyStem) #\($0).jpg" })
+        XCTAssertEqual(try contents(of: downloads), [picturesOnlyStem])
+        XCTAssertEqual(try contents(of: picturesOnlyFolder), (1...4).map { "\(picturesOnlyStem) #\($0).jpg" })
         XCTAssertEqual(StubProtocol.requests(to: Resolver.endpoint).count, 2)
         XCTAssertEqual(StubProtocol.requests(to: try pictureURL("testvr00046", "cover-large")).count, 1)
         XCTAssertEqual(StubProtocol.requests(to: second).count, 2)
@@ -370,12 +383,13 @@ final class DmmDownloadManagerTests: XCTestCase {
         StubProtocol.set(json(try fixture("dmm_preview_with_pictures.json")), for: Resolver.endpoint)
         stubPictures(withClipNames, of: "test00124")
         let proceed = root.appendingPathComponent("proceed")
-        let clip = downloads.appendingPathComponent(withClipStem + ".mp4").path
         let manager = try makeManager(
             tool: """
                 trap '' TERM
-                printf 'synthetic' > "\(clip)"
-                echo "[download] Destination: \(clip)"
+                \(intoOutputFolder)
+                clip="$folder/\(withClipStem).mp4"
+                printf 'synthetic' > "$clip"
+                echo "[download] Destination: $clip"
                 while [ ! -f "\(proceed.path)" ]; do sleep 0.05; done
                 echo "[download] 100% of 9.00B in 00:00"
                 exit 0
@@ -392,7 +406,8 @@ final class DmmDownloadManagerTests: XCTestCase {
         try await Task.sleep(nanoseconds: 300_000_000)
         XCTAssertEqual(item.status, .paused)
         XCTAssertEqual(history.count(), 0, "a paused download is not a finished one")
-        XCTAssertEqual(try contents(of: downloads), [withClipStem + ".mp4"])
+        XCTAssertEqual(try contents(of: downloads), [withClipStem])
+        XCTAssertEqual(try contents(of: withClipFolder), [withClipStem + ".mp4"])
         for name in withClipNames {
             XCTAssertTrue(StubProtocol.requests(to: try pictureURL("test00124", name)).isEmpty, name)
         }
@@ -403,8 +418,11 @@ final class DmmDownloadManagerTests: XCTestCase {
         XCTAssertEqual(item.status, .completed)
         XCTAssertEqual(item.videoCount, 1)
         XCTAssertEqual(item.imageCount, 3)
+        // Resume writes to the folder the stopped run began.
+        XCTAssertEqual(try toolOutput(), withClipFolder.path + "/" + withClipStem + ".%(ext)s")
+        XCTAssertEqual(try contents(of: downloads), [withClipStem])
         XCTAssertEqual(
-            try contents(of: downloads), ((1...3).map { "\(withClipStem) #\($0).jpg" } + [withClipStem + ".mp4"]).sorted())
+            try contents(of: withClipFolder), ((1...3).map { "\(withClipStem) #\($0).jpg" } + [withClipStem + ".mp4"]).sorted())
         XCTAssertEqual(StubProtocol.requests(to: Resolver.endpoint).count, 2)
         XCTAssertEqual(try toolStarts(), 2)
     }
@@ -425,7 +443,9 @@ final class DmmDownloadManagerTests: XCTestCase {
         XCTAssertNil(item.imageCount)
         XCTAssertNotEqual(item.mediaCategory, .mixed)
         XCTAssertNotEqual(item.mediaCategory, .image)
+        // One file: loose, as it always was.
         XCTAssertEqual(try contents(of: downloads), [withClipStem + ".mp4"])
+        XCTAssertEqual(try toolOutput(), downloads.path + "/" + withClipStem + ".%(ext)s")
         XCTAssertTrue(try toolArguments().contains("--extract-audio"))
         for name in withClipNames {
             XCTAssertTrue(StubProtocol.requests(to: try pictureURL("test00124", name)).isEmpty, name)
@@ -466,7 +486,8 @@ final class DmmDownloadManagerTests: XCTestCase {
         try await waitUntil("the download finished") { self.history.count() == 1 }
         XCTAssertEqual(item.status, .completed)
         XCTAssertEqual(item.imageCount, 4)
-        XCTAssertEqual(try contents(of: downloads), (1...4).map { "\(picturesOnlyStem) #\($0).jpg" })
+        XCTAssertEqual(try contents(of: downloads), [picturesOnlyStem])
+        XCTAssertEqual(try contents(of: picturesOnlyFolder), (1...4).map { "\(picturesOnlyStem) #\($0).jpg" })
         XCTAssertEqual(try toolStarts(), 0)
     }
 
@@ -487,7 +508,7 @@ final class DmmDownloadManagerTests: XCTestCase {
         XCTAssertEqual(item.status, .failed("Saved 3 of 4 files — the server returned HTTP 302. Retry fetches the rest."))
         XCTAssertEqual(item.imageCount, 3)
         XCTAssertTrue(StubProtocol.requests(to: elsewhere).isEmpty, "the redirect was followed")
-        XCTAssertEqual(try contents(of: downloads), [1, 3, 4].map { "\(picturesOnlyStem) #\($0).jpg" })
+        XCTAssertEqual(try contents(of: picturesOnlyFolder), [1, 3, 4].map { "\(picturesOnlyStem) #\($0).jpg" })
     }
 
     /// A page answered with success where a picture was expected is not
@@ -510,14 +531,127 @@ final class DmmDownloadManagerTests: XCTestCase {
         try await waitUntil("the failure was recorded") { self.history.count() == 1 }
         XCTAssertEqual(
             item.status, .failed("Saved 3 of 4 files — the server sent something other than the file. Retry fetches the rest."))
-        XCTAssertEqual(try contents(of: downloads), [1, 2, 4].map { "\(picturesOnlyStem) #\($0).jpg" })
+        XCTAssertEqual(try contents(of: picturesOnlyFolder), [1, 2, 4].map { "\(picturesOnlyStem) #\($0).jpg" })
 
         manager.retryItem(item)
 
         try await waitUntil("the retry finished") { item.status == .completed }
         XCTAssertEqual(item.imageCount, 4)
-        XCTAssertEqual(try Data(contentsOf: downloads.appendingPathComponent("\(picturesOnlyStem) #3.jpg")), jpegBody("sample-2-large"))
+        XCTAssertEqual(
+            try Data(contentsOf: picturesOnlyFolder.appendingPathComponent("\(picturesOnlyStem) #3.jpg")), jpegBody("sample-2-large"))
         XCTAssertEqual(StubProtocol.requests(to: notice).count, 2)
+    }
+
+    // MARK: - The folder of a work
+
+    /// One picture and no clip is one file: loose, as it always was.
+    func testAWorkWithOnePictureStaysLoose() async throws {
+        let answer = try JSONSerialization.jsonObject(with: try fixture("dmm_pictures_only.json")) as? [String: Any]
+        var data = try XCTUnwrap(answer?["data"] as? [String: Any])
+        var content = try XCTUnwrap(data["ppvContent"] as? [String: Any])
+        content["sampleImages"] = [Any]()
+        data["ppvContent"] = content
+        StubProtocol.set(json(try JSONSerialization.data(withJSONObject: ["data": data])), for: Resolver.endpoint)
+        stubPictures(["cover-large"], of: "testvr00046")
+        let manager = try makeManager(tool: "exit 1\n")
+
+        manager.capture(text: picturesOnlyLink, source: .field)
+
+        let item = try XCTUnwrap(manager.items.first)
+        try await waitUntil("the download finished") { self.history.count() == 1 }
+        XCTAssertEqual(item.status, .completed)
+        XCTAssertEqual(item.imageCount, 1)
+        let saved = try contents(of: downloads)
+        XCTAssertEqual(saved.count, 1)
+        XCTAssertTrue(saved[0].hasPrefix(picturesOnlyStem) && saved[0].hasSuffix(".jpg"), "\(saved)")
+        XCTAssertEqual(item.outputPath, downloads.appendingPathComponent(saved[0]).path)
+        XCTAssertNil(item.destination)
+    }
+
+    /// A work downloaded again is handed the same folder: the clip is the
+    /// tool's to find there, and every picture is found without a request.
+    func testAWorkDownloadedAgainUsesTheSameFolderAndFetchesNoPicture() async throws {
+        StubProtocol.set(json(try fixture("dmm_preview_with_pictures.json")), for: Resolver.endpoint)
+        stubPictures(withClipNames, of: "test00124")
+        let manager = try makeManager(tool: saving(withClipStem))
+        manager.capture(text: "https://video.dmm.co.jp/cinema/content/?id=test00124", source: .field)
+        let item = try XCTUnwrap(manager.items.first)
+        try await waitUntil("the first run finished") { self.history.count() == 1 }
+        let firstOutput = try toolOutput()
+
+        manager.retryItem(item)
+
+        try await waitUntil("the second run started the tool") { (try? self.toolStarts()) == 2 }
+        try await waitUntil("the second run finished") { item.status == .completed }
+        XCTAssertEqual(try toolOutput(), firstOutput)
+        XCTAssertEqual(firstOutput, withClipFolder.path + "/" + withClipStem + ".%(ext)s")
+        XCTAssertEqual(item.imageCount, 3)
+        XCTAssertEqual(item.outputPath, withClipFolder.appendingPathComponent(withClipStem + ".mp4").path)
+        XCTAssertEqual(try contents(of: downloads), [withClipStem])
+        for name in withClipNames {
+            XCTAssertEqual(StubProtocol.requests(to: try pictureURL("test00124", name)).count, 1, name)
+        }
+    }
+
+    /// yt-dlp makes its folder before the first byte. A run that then saves
+    /// nothing leaves no empty folder behind; a folder that was there
+    /// before the run is never removed.
+    func testAFolderTheRunMadeAndLeftEmptyIsRemoved() async throws {
+        StubProtocol.set(json(try fixture("dmm_preview_with_pictures.json")), for: Resolver.endpoint)
+        for name in withClipNames {
+            StubProtocol.set(
+                .init(status: 404, headers: ["Content-Type": "text/html"], body: Data()), for: try pictureURL("test00124", name))
+        }
+        let failing = """
+            \(intoOutputFolder)
+            echo 'ERROR: unable to download video data: HTTP Error 404: Not Found' >&2
+            exit 1
+
+            """
+        let manager = try makeManager(tool: failing)
+        manager.capture(text: "https://video.dmm.co.jp/cinema/content/?id=test00124", source: .field)
+        let item = try XCTUnwrap(manager.items.first)
+        try await waitUntil("the failure was recorded") { self.history.count() == 1 }
+        XCTAssertEqual(try toolOutput(), withClipFolder.path + "/" + withClipStem + ".%(ext)s")
+        try await waitUntil("the empty folder was removed") {
+            !FileManager.default.fileExists(atPath: self.withClipFolder.path)
+        }
+        XCTAssertNotEqual(item.status, .completed)
+        XCTAssertEqual(try contents(of: downloads), [])
+
+        try FileManager.default.createDirectory(at: withClipFolder, withIntermediateDirectories: true)
+        let again = try makeManager(tool: failing)
+        again.capture(text: "https://video.dmm.co.jp/cinema/content/?id=test00124", source: .field)
+        try await waitUntil("the second failure was recorded") { self.history.count() == 2 }
+        try await Task.sleep(nanoseconds: 300_000_000)
+        XCTAssertEqual(try contents(of: downloads), [withClipStem])
+        XCTAssertEqual(try contents(of: withClipFolder), [])
+    }
+
+    /// The folder is named after the files, and handed to the tool: a "$"
+    /// in the title, which the tool would read as the start of a variable,
+    /// becomes its full-width twin there, as it does in the clip's name.
+    func testADollarSignInTheTitleIsNotHandedToTheTool() async throws {
+        let answer = String(decoding: try fixture("dmm_preview_with_pictures.json"), as: UTF8.self)
+            .replacingOccurrences(of: "\"Synthetic Sample Title\"", with: "\"Synthetic $HOME Title\"")
+        StubProtocol.set(json(Data(answer.utf8)), for: Resolver.endpoint)
+        stubPictures(withClipNames, of: "test00124")
+        let folderName = "Synthetic Maker - Synthetic ＄HOME Title [test00124]"
+        let manager = try makeManager(tool: saving(folderName))
+
+        manager.capture(text: "https://video.dmm.co.jp/cinema/content/?id=test00124", source: .field)
+
+        let item = try XCTUnwrap(manager.items.first)
+        try await waitUntil("the download finished") { self.history.count() == 1 }
+        XCTAssertEqual(item.status, .completed)
+        let output = try toolOutput()
+        XCTAssertFalse(output.contains("$"), output)
+        XCTAssertEqual(output, downloads.path + "/" + folderName + "/" + folderName + ".%(ext)s")
+        XCTAssertEqual(try contents(of: downloads), [folderName])
+        let folder = downloads.appendingPathComponent(folderName)
+        XCTAssertEqual(
+            try contents(of: folder),
+            ((1...3).map { "Synthetic Maker - Synthetic $HOME Title [test00124] #\($0).jpg" } + [folderName + ".mp4"]).sorted())
     }
 
     // MARK: - Failing
@@ -851,6 +985,9 @@ final class DmmDownloadManagerTests: XCTestCase {
         "https://cc3001.dmm.co.jp/pv/SYNTHETICtokenEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE/test00124hhb.mp4"
     /// The large pictures of dmm_preview_with_pictures.json, in gallery order.
     private let withClipNames = ["cover-large", "sample-1-large", "sample-2-large"]
+    /// Where the files of a work of two or more files go.
+    private var picturesOnlyFolder: URL { downloads.appendingPathComponent(picturesOnlyStem, isDirectory: true) }
+    private var withClipFolder: URL { downloads.appendingPathComponent(withClipStem, isDirectory: true) }
 
     private func pictureURL(_ contentID: String, _ name: String) throws -> URL {
         try XCTUnwrap(URL(string: "https://awsimgsrc.dmm.co.jp/pics_dig/digital/video/\(contentID)/SYNTHETIC\(name).jpg"))
@@ -882,16 +1019,38 @@ final class DmmDownloadManagerTests: XCTestCase {
     }
 
     /// What the tool does after recording its arguments: leaves a file
-    /// named `stem` and reports it the way yt-dlp reports a download.
+    /// named `stem` in the folder its output template names and reports it
+    /// the way yt-dlp reports a download.
     private func saving(_ stem: String) -> String {
-        let path = downloads.appendingPathComponent(stem + ".mp4").path
-        return """
-            printf 'synthetic' > "\(path)"
-            echo "[download] Destination: \(path)"
-            echo "[download] 100% of 9.00B in 00:00"
-            exit 0
+        """
+        \(intoOutputFolder)
+        path="$folder/\(stem).mp4"
+        printf 'synthetic' > "$path"
+        echo "[download] Destination: $path"
+        echo "[download] 100% of 9.00B in 00:00"
+        exit 0
 
-            """
+        """
+    }
+
+    /// Shell lines that set `folder` to the directory of the output
+    /// template the tool was handed, a doubled "%" read back as one, and
+    /// make that folder, as yt-dlp does before the first byte arrives.
+    private let intoOutputFolder = """
+        output=""
+        previous=""
+        for argument in "$@"; do
+            if [ "$previous" = "--output" ]; then output="$argument"; fi
+            previous="$argument"
+        done
+        folder=$(dirname "$output" | sed 's/%%/%/g')
+        mkdir -p "$folder"
+        """
+
+    /// The output template of the last start.
+    private func toolOutput() throws -> String {
+        let arguments = try toolArguments()
+        return arguments[try XCTUnwrap(arguments.firstIndex(of: "--output")) + 1]
     }
 
     private func toolStarts() throws -> Int {

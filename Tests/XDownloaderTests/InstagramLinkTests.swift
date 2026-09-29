@@ -299,6 +299,31 @@ final class InstagramLinkTests: XCTestCase {
         }
     }
 
+    /// A post's code is what its files and folder end in; a share link
+    /// carries a share id instead, and a profile or a story no code at all.
+    func testPostCode() {
+        let cases: [(link: String, code: String?)] = [
+            ("https://www.instagram.com/p/SYNpost0001_/", "SYNpost0001_"),
+            ("https://www.instagram.com/p/SYNpost0001_/?img_index=2", "SYNpost0001_"),
+            ("https://www.instagram.com/reel/SYNreel0001_/", "SYNreel0001_"),
+            ("https://www.instagram.com/reels/SYNreel0001_/", "SYNreel0001_"),
+            ("https://www.instagram.com/tv/SYNvideo001_/", "SYNvideo001_"),
+            ("https://www.instagram.com/someone.invented/p/SYNpost0001_/", "SYNpost0001_"),
+            ("https://instagram.com/p/SYN-post_01&igsh=abc", "SYN-post_01"),
+            ("https://www.instagram.com/share/p/SYNshare01/", nil),
+            ("https://www.instagram.com/share/SYNshare01/", nil),
+            ("https://www.instagram.com/stories/someone.invented/3456789012345678901/", nil),
+            ("https://www.instagram.com/someone.invented/", nil),
+            ("https://www.instagram.com/someone.invented/reels/", nil),
+            ("https://www.instagram.com/someone.invented/tagged/", nil),
+            ("https://www.instagram.com/reels/audio/1234567890/", nil),
+            ("https://example.com/p/SYNpost0001_/", nil),
+        ]
+        for c in cases {
+            XCTAssertEqual(InstagramLink.postCode(of: c.link), c.code, c.link)
+        }
+    }
+
     /// Every spelling of one profile is kept as the same link.
     func testProfileLinksAreKeptInOneSpelling() {
         let spellings = [

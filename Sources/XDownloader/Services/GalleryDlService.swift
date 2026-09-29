@@ -129,11 +129,14 @@ enum GalleryDlService {
 
     // MARK: - Download
 
+    /// A single post. `outputDirectory` is the download folder; where in it
+    /// the files go is `folderMode`'s (see `FolderMode`).
     @MainActor
     static func run(
         item: DownloadItem,
         executablePath: String,
         outputDirectory: URL,
+        folderMode: FolderMode = .flat,
         cookieBrowser: CookieBrowser,
         cookieBrowserProfile: String? = nil,
         cookiesFile: String? = nil,
@@ -144,16 +147,95 @@ enum GalleryDlService {
             item: item,
             executablePath: executablePath,
             arguments: arguments(
-                for: item.url, outputDirectory: outputDirectory,
+                for: item.url, outputDirectory: outputDirectory, folderMode: folderMode,
                 cookieBrowser: cookieBrowser, cookieBrowserProfile: cookieBrowserProfile,
                 cookiesFile: cookiesFile),
             outputDirectory: outputDirectory,
+            looseDirectory: outputDirectory,
             register: register,
             unregister: unregister,
             lineParser: { line, item in parseLine(line, item: item) },
             noMediaMessage: emptySuccessMessage(forProfileID: SiteRegistry.profile(for: item.url).id),
             stripsSingleFileSuffix: true,
             settlesErrorsAtExit: false)
+    }
+
+    /// Where a single post's files go inside the download folder.
+    enum FolderMode: Equatable {
+        /// Straight into the download folder, every file loose.
+        case flat
+        /// A post of two or more files into a folder of its own, named per
+        /// the site's `galleryDlFolderFormat`; a one-file post loose.
+        /// gallery-dl decides from the post's own file count before it
+        /// writes anything, so a post that saved one file of three still
+        /// gets its folder and a Retry finds the file there.
+        case perPostIfMultiple
+        /// As `perPostIfMultiple`, and the post `condition` names always
+        /// gets its folder, whatever its count: the photo pass, whose count
+        /// leaves out the video yt-dlp already saved.
+        case perPost(always: String)
+        /// The post `ownPost` names into this folder, found on disk from an
+        /// earlier run of the same post (see `RowFolder.existing`), whatever
+        /// its count; every other post the run meets (a quoted tweet) as
+        /// `perPostIfMultiple` places it. The destination stays the
+        /// download folder: flat into the found folder, a quoted tweet's
+        /// files would miss where the first run put them, be fetched again
+        /// and land in another post's folder.
+        case into(URL, ownPost: String)
+    }
+
+    /// The gallery-dl option that picks a post's folder from its own
+    /// keywords, nil when the files go flat into the destination. The
+    /// conditions are tried in order and the empty one is the fallback: no
+    /// folder at all. Given with "-o" after "-D", the value takes the place
+    /// of the directory "-D" set and of any "directory" in the user's own
+    /// config. A keyword a post lacks makes its condition false, so a post
+    /// without a `count` stays loose.
+    static func directoryOption(for mode: FolderMode, format: String?) -> String? {
+        var entries: [(condition: String, folder: String)] = []
+        switch mode {
+        case .flat: return nil
+        case .perPostIfMultiple: break
+        case .perPost(let always): if let format { entries.append((always, format)) }
+        case .into(let folder, let ownPost): entries.append((ownPost, literalSegment(folder.lastPathComponent)))
+        }
+        if let format { entries.append(("count > 1", format)) }
+        guard !entries.isEmpty else { return nil }
+        let rules = entries.map { "\(jsonString($0.condition)): [\(jsonString($0.folder))]" } + [#""": []"#]
+        return "directory={\(rules.joined(separator: ", "))}"
+    }
+
+    /// `name` as a directory format that yields exactly `name`: a brace
+    /// opens a field in gallery-dl's format strings, and doubled it is a
+    /// plain brace.
+    static func literalSegment(_ name: String) -> String {
+        name.replacingOccurrences(of: "{", with: "{{").replacingOccurrences(of: "}", with: "}}")
+    }
+
+    /// The condition that names the post `link` points at among the posts
+    /// one gallery-dl run meets (a quoted tweet is another post), nil when
+    /// the link carries no id to name it by.
+    static func ownPostCondition(for link: String) -> String? {
+        guard let id = RowFolder.postID(of: link) else { return nil }
+        switch SiteRegistry.profile(for: link).id {
+        // The condition is Python, where "0123" is a syntax error that
+        // aborts the whole run: the tweet id is written as the number it
+        // is, and an id too long for one names no post the condition could.
+        case SiteRegistry.twitter.id: return UInt64(id).map { "tweet_id == \($0)" }
+        // Ids and codes are of letters, digits, "_" and "-" only, so
+        // neither needs escaping in the condition.
+        case SiteRegistry.instagram.id: return "post_shortcode == \"\(id)\""
+        default: return nil
+        }
+    }
+
+    private static func jsonString(_ text: String) -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.withoutEscapingSlashes]
+        guard let data = try? encoder.encode(text), let encoded = String(data: data, encoding: .utf8) else {
+            return "\"\""
+        }
+        return encoded
     }
 
     /// An Instagram profile's newest posts, `postLimit` of them at most, in
@@ -187,6 +269,7 @@ enum GalleryDlService {
                 cookieBrowser: cookieBrowser, cookieBrowserProfile: cookieBrowserProfile,
                 cookiesFile: cookiesFile),
             outputDirectory: outputDirectory,
+            looseDirectory: nil,
             register: register,
             unregister: unregister,
             lineParser: { line, item in
@@ -244,12 +327,16 @@ enum GalleryDlService {
     /// `stripsSingleFileSuffix` drops the " #1" of a lone image;
     /// `settlesErrorsAtExit` is the line parser's (see `parseLine`), so no
     /// error line has set the status and the exit alone words the failure.
+    /// `looseDirectory` is the download folder of a single post, where its
+    /// one-file posts lie loose; nil for a profile, whose files all go into
+    /// the account's folder, `outputDirectory`.
     @MainActor
     private static func runAndSettle(
         item: DownloadItem,
         executablePath: String,
         arguments: [String],
         outputDirectory: URL,
+        looseDirectory: URL?,
         register: @escaping (Process) -> Void,
         unregister: @escaping () -> Void,
         lineParser: @escaping (String, DownloadItem) -> Void,
@@ -258,6 +345,7 @@ enum GalleryDlService {
         settlesErrorsAtExit: Bool
     ) async {
         let beforeFiles = Set((try? FileManager.default.contentsOfDirectory(atPath: outputDirectory.path)) ?? [])
+        let reported = ReportedFiles()
 
         let result = await ProcessRunner.run(
             executablePath: executablePath,
@@ -265,8 +353,29 @@ enum GalleryDlService {
             item: item,
             register: register,
             unregister: unregister,
-            lineParser: lineParser
+            lineParser: { line, item in
+                reported.record(line)
+                lineParser(line, item)
+            }
         )
+
+        // A download archive answers for a file saved before posts had
+        // folders with the path the file would have now, inside the folder,
+        // where it is not: the file is still loose in the download folder.
+        // The row points at a reported file that is really there, or else
+        // at such a loose file.
+        if let looseDirectory, let path = item.outputPath, !FileManager.default.fileExists(atPath: path) {
+            let paths = [path] + reported.all.map(\.path)
+            let isThere = { (candidate: String) in FileManager.default.fileExists(atPath: candidate) }
+            if let there = paths.first(where: isThere) {
+                item.outputPath = there
+            } else if let loose = paths.lazy
+                .map({ looseDirectory.appendingPathComponent(($0 as NSString).lastPathComponent).path })
+                .first(where: isThere)
+            {
+                item.outputPath = loose
+            }
+        }
 
         guard result.isSuccess else {
             // Partial failure: files DID land (counted by parseLine, skip
@@ -319,21 +428,9 @@ enum GalleryDlService {
             return
         }
 
-        // Detect newly created media files since the download started.
         let imageExts = MediaExtensions.image
         let videoExts = MediaExtensions.video
-        let afterFiles = (try? FileManager.default.contentsOfDirectory(atPath: outputDirectory.path)) ?? []
-
         func ext(_ name: String) -> String { URL(fileURLWithPath: name).pathExtension.lowercased() }
-        let newImages = afterFiles.filter { !beforeFiles.contains($0) && imageExts.contains(ext($0)) }.sorted()
-        let newVideos = afterFiles.filter { !beforeFiles.contains($0) && videoExts.contains(ext($0)) }.sorted()
-
-        if item.outputPath == nil {
-            let candidate = newImages.first ?? newVideos.first
-            if let first = candidate {
-                item.outputPath = outputDirectory.appendingPathComponent(first).path
-            }
-        }
 
         // gallery-dl exited 0 but neither new files appeared nor dry-run could
         // resolve a path — the tweet's media is genuinely unreachable (most
@@ -362,20 +459,34 @@ enum GalleryDlService {
             // the Done row counts only what this run saved, and Show in
             // Finder points at something that is really there. A reported
             // path can be an archive hit for a file since moved or deleted.
+            // Only one profile runs at a time, so what appeared in its own
+            // folder is this run's.
+            let afterFiles = (try? FileManager.default.contentsOfDirectory(atPath: outputDirectory.path)) ?? []
+            let newImages = afterFiles.filter { !beforeFiles.contains($0) && imageExts.contains(ext($0)) }.sorted()
+            let newVideos = afterFiles.filter { !beforeFiles.contains($0) && videoExts.contains(ext($0)) }.sorted()
             item.imageCount = newImages.isEmpty ? nil : newImages.count
             item.videoCount = newVideos.isEmpty ? nil : newVideos.count
             if let name = newVideos.first ?? newImages.first {
                 item.outputPath = outputDirectory.appendingPathComponent(name).path
             } else if let path = item.outputPath, !FileManager.default.fileExists(atPath: path) {
                 // Never nil: a Done row with no output reads as the old
-                // empty-success bug and is re-queued at launch.
-                item.outputPath = outputDirectory.path
+                // empty-success bug and is re-queued at launch. The run's
+                // directory is the account's own folder inside the download
+                // folder; when the tool never made it (every file an archive
+                // hit), the download folder is what is really there.
+                let isThere = FileManager.default.fileExists(atPath: outputDirectory.path)
+                item.outputPath = (isThere ? outputDirectory : outputDirectory.deletingLastPathComponent()).path
             }
             item.recomputeMediaCategory()
             item.markCompleted()
             return
         }
 
+        // The files this run saved are the ones it reported, never what
+        // else appeared in the download folder meanwhile: other rows save
+        // there too, and a post's own folder is not in that listing at all.
+        let newImages = reported.saved.filter { imageExts.contains(ext($0)) }
+        let newVideos = reported.saved.filter { videoExts.contains(ext($0)) }
         if !newImages.isEmpty { item.imageCount = newImages.count }
         if !newVideos.isEmpty { item.videoCount = newVideos.count }
 
@@ -389,15 +500,23 @@ enum GalleryDlService {
         // Sync category from final counts (overrides whatever parseLine may have set).
         item.recomputeMediaCategory()
 
-        // Rename single-image files: strip trailing " #1" suffix.
-        if stripsSingleFileSuffix, newImages.count == 1, let path = item.outputPath {
+        // Rename single-image files: strip trailing " #1" suffix. Only when
+        // the run saved that one image, as before posts had folders — a
+        // quoted tweet's lone photo beside a post of several keeps its
+        // number, so the next run finds it under the name it asks for —
+        // and only a file loose in the download folder is a one-file
+        // post's: inside a post's folder, " #1" is the first of several.
+        let isLoose = { (path: String) in looseDirectory.map { Self.isDirectlyInside(path, $0) } ?? false }
+        if stripsSingleFileSuffix, newImages.count == 1, let path = newImages.first, isLoose(path) {
             let u = URL(fileURLWithPath: path)
             let stem = u.deletingPathExtension().lastPathComponent
             if stem.hasSuffix(" #1") {
                 let clean = String(stem.dropLast(3))
                 let newPath = u.deletingLastPathComponent()
                     .appendingPathComponent(clean + "." + u.pathExtension).path
-                if (try? FileManager.default.moveItem(atPath: path, toPath: newPath)) != nil {
+                if (try? FileManager.default.moveItem(atPath: path, toPath: newPath)) != nil,
+                    item.outputPath == path
+                {
                     item.outputPath = newPath
                     item.title = displayTitle(forPath: newPath)
                 }
@@ -416,18 +535,23 @@ enum GalleryDlService {
     /// One command line for both the full fallback run and the image sweep —
     /// `extraArgs` (e.g. the sweep's `-o videos=false`) slot in after the
     /// profile's own args so they can override per-site option defaults.
+    /// `outputDirectory` is the download folder; `folderMode` says where in
+    /// it the post's files go.
     static func arguments(
         for url: String,
         outputDirectory: URL,
+        folderMode: FolderMode = .flat,
         cookieBrowser: CookieBrowser,
         cookieBrowserProfile: String? = nil,
         cookiesFile: String?,
         extraArgs: [String] = []
     ) -> [String] {
-        commandLine(
+        let profile = SiteRegistry.profile(for: url)
+        return commandLine(
             url: url, outputDirectory: outputDirectory,
+            directoryOption: directoryOption(for: folderMode, format: profile.galleryDlFolderFormat),
             cookieBrowser: cookieBrowser, cookieBrowserProfile: cookieBrowserProfile, cookiesFile: cookiesFile,
-            siteArgs: SiteRegistry.profile(for: url).galleryDlArgs + extraArgs)
+            siteArgs: profile.galleryDlArgs + extraArgs)
     }
 
     /// The command line for an Instagram profile's newest posts.
@@ -484,6 +608,7 @@ enum GalleryDlService {
     private static func commandLine(
         url: String,
         outputDirectory: URL,
+        directoryOption: String? = nil,
         cookieBrowser: CookieBrowser,
         cookieBrowserProfile: String?,
         cookiesFile: String?,
@@ -494,6 +619,10 @@ enum GalleryDlService {
         args += [
             "--dest", outputDirectory.path,
             "-D", ".",
+        ]
+        // After "-D", which it must override (see `directoryOption`).
+        if let directoryOption { args += ["-o", directoryOption] }
+        args += [
             // Large X/Reddit videos (multi-GB) drop the connection or read-time out
             // on a flaky link; the default ~4 retries / 30s aren't enough. Be generous.
             "--retries", "10",
@@ -518,43 +647,100 @@ enum GalleryDlService {
     /// returned (nil when the profile declares no sweep) so the caller can
     /// notice a SYSTEMATICALLY failing sweep — every run exiting non-zero —
     /// which silently loses all photos from mixed posts.
+    ///
+    /// `folderMode` places the photos as it places a post's files (see
+    /// `FolderMode`); the result names every photo the pass reported, saved
+    /// or already on disk, so the caller can see where the post's photos are.
     @MainActor
     @discardableResult
     static func runImageSweep(
         item: DownloadItem,
         executablePath: String,
         outputDirectory: URL,
+        folderMode: FolderMode = .flat,
         cookieBrowser: CookieBrowser,
         cookieBrowserProfile: String? = nil,
         cookiesFile: String? = nil,
         register: @escaping (Process) -> Void,
         unregister: @escaping () -> Void
-    ) async -> ProcessResult? {
+    ) async -> SweepResult? {
         guard let sweepArgs = SiteRegistry.profile(for: item.url).imageSweepArgs else { return nil }
-        let beforeFiles = Set((try? FileManager.default.contentsOfDirectory(atPath: outputDirectory.path)) ?? [])
+        let reported = ReportedFiles()
 
         let result = await ProcessRunner.run(
             executablePath: executablePath,
             arguments: arguments(
-                for: item.url, outputDirectory: outputDirectory,
+                for: item.url, outputDirectory: outputDirectory, folderMode: folderMode,
                 cookieBrowser: cookieBrowser, cookieBrowserProfile: cookieBrowserProfile,
                 cookiesFile: cookiesFile, extraArgs: sweepArgs),
             item: item,
             register: register,
             unregister: unregister,
-            lineParser: { _, _ in }  // the video owns status/title/outputPath
+            // Collects the photos' paths and nothing else: the video owns
+            // status/title/outputPath.
+            lineParser: { line, _ in reported.record(line) }
         )
 
-        let afterFiles = (try? FileManager.default.contentsOfDirectory(atPath: outputDirectory.path)) ?? []
-        let newImages = afterFiles.filter {
-            !beforeFiles.contains($0)
-                && MediaExtensions.image.contains(URL(fileURLWithPath: $0).pathExtension.lowercased())
+        let newImages = reported.saved.filter {
+            MediaExtensions.image.contains(URL(fileURLWithPath: $0).pathExtension.lowercased())
         }
         if !newImages.isEmpty {
             item.imageCount = (item.imageCount ?? 0) + newImages.count
             item.recomputeMediaCategory()
         }
-        return result
+        return SweepResult(
+            exit: result,
+            photos: reported.all.filter {
+                MediaExtensions.image.contains(URL(fileURLWithPath: $0.path).pathExtension.lowercased())
+            })
+    }
+
+    /// How a photo pass ended, and the photos it reported.
+    struct SweepResult {
+        let exit: ProcessResult
+        /// Every photo reported, saved by the pass or already on disk.
+        let photos: [ReportedMedia]
+
+        var isSuccess: Bool { exit.isSuccess }
+    }
+
+    /// A media file gallery-dl reported: saved by this run, or already on
+    /// disk and skipped ("# <path>").
+    struct ReportedMedia: Equatable {
+        let path: String
+        let wasSkipped: Bool
+    }
+
+    /// The media file a line reports, nil for any other line. gallery-dl
+    /// prints each saved file's path on its own line, and "# <path>" for a
+    /// file already there; Python/urllib3 warning lines also start with "/"
+    /// but name no media file.
+    static func reportedMedia(in line: String) -> ReportedMedia? {
+        let isSkipLine = line.hasPrefix("# /") || line.hasPrefix("# ~")
+        let pathLine = isSkipLine ? String(line.dropFirst(2)) : line
+        guard pathLine.hasPrefix("/") || pathLine.hasPrefix("~"),
+            MediaExtensions.all.contains((pathLine as NSString).pathExtension.lowercased())
+        else { return nil }
+        return ReportedMedia(path: pathLine, wasSkipped: isSkipLine)
+    }
+
+    /// The files one run reported, in order.
+    @MainActor
+    final class ReportedFiles {
+        private(set) var all: [ReportedMedia] = []
+
+        /// The paths of the files this run saved itself.
+        var saved: [String] { all.filter { !$0.wasSkipped }.map(\.path) }
+
+        func record(_ line: String) {
+            if let media = GalleryDlService.reportedMedia(in: line) { all.append(media) }
+        }
+    }
+
+    /// True when `path` names an entry directly inside `directory`.
+    static func isDirectlyInside(_ path: String, _ directory: URL) -> Bool {
+        URL(fileURLWithPath: path).deletingLastPathComponent().standardizedFileURL.path
+            == directory.standardizedFileURL.path
     }
 
     // MARK: - Output parsing
@@ -575,21 +761,19 @@ enum GalleryDlService {
         // embed the tweet id (see formatArgs), so a skip can only mean this
         // exact tweet's media is already on disk — treat it as this row's
         // output instead of letting the run end as "no media found".
-        // Python/urllib3 warning lines also start with "/" but contain ": ".
-        let isSkipLine = line.hasPrefix("# /") || line.hasPrefix("# ~")
-        let pathLine = isSkipLine ? String(line.dropFirst(2)) : line
-        if pathLine.hasPrefix("/") || pathLine.hasPrefix("~") {
-            let ext = (pathLine as NSString).pathExtension.lowercased()
-            guard MediaExtensions.all.contains(ext) else { return }
+        // Python/urllib3 warning lines also start with "/" but contain ": ",
+        // and are passed over here like any other path that names no media.
+        if let media = reportedMedia(in: line) {
+            let ext = (media.path as NSString).pathExtension.lowercased()
 
             let isImage = MediaExtensions.image.contains(ext)
             let isVideo = MediaExtensions.video.contains(ext)
-            if !isSkipLine { item.newToolFileCount += 1 }
+            if !media.wasSkipped { item.newToolFileCount += 1 }
             item.status = .downloading
             // A file landing means any backoff wait is over — a stale
             // "14 minutes (rate limited)" ETA must not outlive the wait.
             item.eta = nil
-            item.outputPath = pathLine
+            item.outputPath = media.path
             if isImage {
                 item.imageCount = (item.imageCount ?? 0) + 1
             } else if isVideo {
@@ -598,10 +782,12 @@ enum GalleryDlService {
             item.recomputeMediaCategory()  // update category progressively
 
             if item.title == nil {
-                item.title = displayTitle(forPath: pathLine)
+                item.title = displayTitle(forPath: media.path)
             }
             return
         }
+        let isSkipLine = line.hasPrefix("# /") || line.hasPrefix("# ~")
+        if line.hasPrefix("/") || line.hasPrefix("~") || isSkipLine { return }
 
         // Warnings aren't failures by themselves, but when the run ends with no
         // files they're the only clue why (age-restricted tweet, media removed
