@@ -7,12 +7,16 @@ enum YtDlpService {
     /// `folder` is the row's own folder when one is settled before the run
     /// (a work page's, or a post's found on disk): the files go flat into
     /// it. Without one they go into `outputDirectory`, where a list of two
-    /// or more takes a folder of its own (`playlistFolderArguments`).
+    /// or more takes a folder of its own (`playlistFolderArguments`) — or,
+    /// when the post already has a folder that yt-dlp has no video in
+    /// (`foundFolder`, directly inside `outputDirectory`), goes into that
+    /// one (`foundFolderArguments`), so no second folder is made for it.
     @MainActor
     static func buildArguments(
         for item: DownloadItem,
         outputDirectory: URL,
         folder: URL? = nil,
+        foundFolder: URL? = nil,
         format: YouTubeFormat,
         videoQuality: VideoQuality,
         audioQuality: AudioQuality,
@@ -41,9 +45,14 @@ enum YtDlpService {
         // A resolved address names one file, so only a page link can turn
         // out to be a list and needs the folder field.
         let groupsPlaylist = folder == nil && item.resolvedAddress == nil
+        let listFolder = groupsPlaylist ? foundFolder : nil
         let directory =
-            RowFolder.templateDirectory(folder ?? outputDirectory)
-            + (groupsPlaylist ? "/%(\(playlistFolderField)|)s" : "")
+            if let listFolder {
+                RowFolder.templateDirectory(listFolder) + "/%(\(foundFolderField)|)s"
+            } else {
+                RowFolder.templateDirectory(folder ?? outputDirectory)
+                    + (groupsPlaylist ? "/%(\(playlistFolderField)|)s" : "")
+            }
         let outputTemplate = directory + "/\(stem)\(profile.outputTemplateSuffix).%(ext)s"
         var args: [String] = []
         if profile.receivesBrowserCookies {
@@ -97,7 +106,11 @@ enum YtDlpService {
             if embedSubtitles { args += ["--embed-subs"] }
         }
 
-        if groupsPlaylist { args += playlistFolderArguments }
+        if listFolder != nil {
+            args += foundFolderArguments
+        } else if groupsPlaylist {
+            args += playlistFolderArguments
+        }
         args += [
             "--output", outputTemplate,
             "--socket-timeout", "10",
@@ -162,6 +175,34 @@ enum YtDlpService {
         "pre_process:%(playlist_count,n_entries|)s#%(playlist_title,playlist_id).160B [%(playlist_id).64B]"
             + ":(?s)^(?:[2-9]|[1-9][0-9]+)#(?P<\(playlistFolderField)>.+)",
         "--replace-in-metadata", "pre_process:\(playlistFolderField)", #"\x24"#, "＄",
+    ]
+
+    /// The field that takes a single video back out of a post's found
+    /// folder: ".." when the post turns out to hold one video, unset when
+    /// it holds a list of two or more.
+    static let foundFolderField = "xdl_up"
+
+    /// A post whose folder is on disk already — made by gallery-dl or the
+    /// fxtwitter rescue, so yt-dlp has no video in it — must not get a
+    /// second folder of yt-dlp's naming: the next run would find one of the
+    /// two and fetch what lies in the other again. A list of two or more
+    /// therefore goes into the found folder, and a single video stays loose
+    /// in the download folder, where yt-dlp saved and looks for it.
+    ///
+    /// The found folder's name cannot be a field's value: the tool swaps
+    /// ":", "?", '"' and the like in every value for look-alikes, and
+    /// gallery-dl keeps them, so the name would come out as another folder.
+    /// It stays literal text in the template, "<folder>/%(xdl_up|)s/<name>",
+    /// and the count gate turns the other way: the field is ".." — a step
+    /// back to the download folder, which the tool leaves as it is — for a
+    /// single video or a list of one, and unset for two or more, which
+    /// leaves "<folder>//<name>". Both are normalised wherever a path is
+    /// recorded (`RowFolder.normalized`). The step back reaches the download
+    /// folder only because the found folder is a real folder directly
+    /// inside it, never a link (the caller's to ensure).
+    static let foundFolderArguments: [String] = [
+        "--parse-metadata",
+        #"pre_process:%(playlist_count,n_entries|)s#..:^[01]?#(?P<"# + foundFolderField + #">\.\.)"#,
     ]
 
     // MARK: - Failure messages

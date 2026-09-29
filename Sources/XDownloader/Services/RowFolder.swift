@@ -102,6 +102,28 @@ enum RowFolder {
         }
     }
 
+    /// The id a row's folder is found by on a later run: a post's
+    /// (`postID`), or a YouTube list's, which its link carries as "list=".
+    /// yt-dlp names a list's folder "<list title> [<list id>]", so a list
+    /// renamed since its first run is still found by the id and nothing in
+    /// it is fetched again. Nil for every other link: a channel tab or a
+    /// page of several clips carries no id of its list.
+    static func folderID(of link: String) -> String? {
+        postID(of: link) ?? youTubeListID(of: link)
+    }
+
+    /// The "list=" of a YouTube link, when it is an id as yt-dlp reports it
+    /// — letters, digits, "-" and "_", no longer than the 64 bytes a list
+    /// folder keeps of it — or nil.
+    static func youTubeListID(of link: String) -> String? {
+        guard SiteRegistry.profile(for: link).id == SiteRegistry.youtube.id,
+            let list = URLComponents(string: link)?.queryItems?.first(where: { $0.name == "list" })?.value,
+            (1...64).contains(list.utf8.count),
+            list.unicodeScalars.allSatisfy({ $0.isASCII && (CharacterSet.alphanumerics.contains($0) || "-_".unicodeScalars.contains($0)) })
+        else { return nil }
+        return list
+    }
+
     /// Moves `file` into `folder` under its own name and returns where it
     /// went, or nil when it stayed where it was: the folder is not there,
     /// the name is taken in it, or the move failed. One rename that refuses
@@ -141,14 +163,27 @@ enum RowFolder {
     private static let finderMetadata = ".DS_Store"
 
     /// A reported path with the doubled separator a template leaves when its
-    /// folder segment is empty ("<root>//<name>.mp4"): the same file, and
-    /// the same string the row recorded before folders existed.
+    /// folder segment is empty ("<root>//<name>.mp4"), or with the step back
+    /// out of a found folder a single video takes ("<root>/<folder>/../
+    /// <name>.mp4"): the same file, and the same string the row recorded
+    /// before folders existed. The step back is undone as text, which is
+    /// the file it reaches only because the folder is never a link
+    /// (`YtDlpService.foundFolderArguments`).
     static func normalized(_ path: String) -> String {
-        var result = path
-        while result.contains("//") {
-            result = result.replacingOccurrences(of: "//", with: "/")
+        var parts: [Substring] = []
+        for part in path.split(separator: "/") {
+            if part == "..", let last = parts.last, last != ".." {
+                parts.removeLast()
+            } else {
+                parts.append(part)
+            }
         }
-        return result
+        return (path.hasPrefix("/") ? "/" : "") + parts.joined(separator: "/")
+    }
+
+    /// True when `url` is itself a symbolic link, whatever it points to.
+    static func isSymbolicLink(_ url: URL) -> Bool {
+        (try? FileManager.default.destinationOfSymbolicLink(atPath: url.path)) != nil
     }
 
     /// Points the row at `folder` (nil: the download folder itself) and

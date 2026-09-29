@@ -55,6 +55,26 @@ final class RowFolderTests: XCTestCase {
         XCTAssertEqual(RowFolder.normalized("/out/a [1]/a #1.jpg"), "/out/a [1]/a #1.jpg")
     }
 
+    /// A single video's step back out of a post's found folder is recorded
+    /// as the loose file it reaches, whatever the folder's name holds.
+    func testNormalizedUndoesTheStepBackOutOfAFoundFolder() {
+        XCTAssertEqual(RowFolder.normalized("/out/a: b? [1]/../a - b.mp4"), "/out/a - b.mp4")
+        XCTAssertEqual(RowFolder.normalized("/out/50% off [1]/..//a.mp4"), "/out/a.mp4")
+        // A list's files in the found folder keep it.
+        XCTAssertEqual(RowFolder.normalized("/out/a: b? [1]//a - b [01].mp4"), "/out/a: b? [1]/a - b [01].mp4")
+        // Only a whole ".." segment steps back; dots in a name are the name.
+        XCTAssertEqual(RowFolder.normalized("/out/a.. [1]/..b.mp4"), "/out/a.. [1]/..b.mp4")
+    }
+
+    func testIsSymbolicLinkTellsALinkFromAFolder() throws {
+        let folder = try makeFolder("a - b [123]")
+        let link = root.appendingPathComponent("linked [123]")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: folder)
+        XCTAssertFalse(RowFolder.isSymbolicLink(folder))
+        XCTAssertTrue(RowFolder.isSymbolicLink(link))
+        XCTAssertFalse(RowFolder.isSymbolicLink(root.appendingPathComponent("missing [123]")))
+    }
+
     // MARK: - A post's folder on disk
 
     func testExistingFindsTheFolderEndingInTheID() throws {
@@ -167,6 +187,25 @@ final class RowFolderTests: XCTestCase {
         XCTAssertNil(RowFolder.postID(of: "https://www.instagram.com/someone.invented/"))
         XCTAssertNil(RowFolder.postID(of: "https://www.youtube.com/watch?v=abcdefghijk"))
         XCTAssertNil(RowFolder.postID(of: "https://www.reddit.com/r/invented/comments/abc123/x/"))
+    }
+
+    /// A YouTube list's folder is found by the "list=" its link carries, as
+    /// a post's is by its id; a list with no id in its link is not.
+    func testFolderIDIsThePostsIDOrAYouTubeListsID() {
+        XCTAssertEqual(RowFolder.folderID(of: "https://x.com/someone/status/1234567890123"), "1234567890123")
+        XCTAssertEqual(RowFolder.folderID(of: "https://www.instagram.com/p/SYNpost0001_/"), "SYNpost0001_")
+        XCTAssertEqual(RowFolder.folderID(of: "https://www.youtube.com/playlist?list=PLsynthetic-List_01"), "PLsynthetic-List_01")
+        XCTAssertEqual(
+            RowFolder.folderID(of: "https://www.youtube.com/watch?v=abcdefghijk&list=PLsynthetic01&index=2"), "PLsynthetic01")
+        XCTAssertEqual(RowFolder.folderID(of: "https://youtu.be/abcdefghijk?list=PLsynthetic01"), "PLsynthetic01")
+        // No list, or none an id could be: nothing to find a folder by.
+        XCTAssertNil(RowFolder.folderID(of: "https://www.youtube.com/watch?v=abcdefghijk"))
+        XCTAssertNil(RowFolder.folderID(of: "https://www.youtube.com/@someone/videos"))
+        XCTAssertNil(RowFolder.folderID(of: "https://www.youtube.com/playlist?list="))
+        XCTAssertNil(RowFolder.folderID(of: "https://www.youtube.com/playlist?list=PL%20x%5D"))
+        XCTAssertNil(RowFolder.folderID(of: "https://www.youtube.com/playlist?list=" + String(repeating: "a", count: 65)))
+        // "list=" means a YouTube list only on YouTube.
+        XCTAssertNil(RowFolder.folderID(of: "https://example.com/page?list=PLsynthetic01"))
     }
 
     // MARK: - The one move

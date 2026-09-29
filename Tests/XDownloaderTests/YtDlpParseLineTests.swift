@@ -309,6 +309,38 @@ final class YtDlpParseLineTests: XCTestCase {
         XCTAssertEqual(percent.outputPath, "/tmp/out/maker - 50% more.mp4")
     }
 
+    /// A single video of a post whose folder is on disk steps back out of
+    /// it, "<root>/<folder>/../<name>": every path is recorded as the loose
+    /// file it reaches, the same string as before posts had folders.
+    func testTheStepBackOutOfAFoundFolderIsNeverRecorded() {
+        let found = "/tmp/out/someone: 50% off? [1]"
+        let video = DownloadItem(url: "https://x.com/a/status/1")
+        parse("[download] Destination: \(found)/../user - clip.mp4", into: video)
+        XCTAssertEqual(video.outputPath, "/tmp/out/user - clip.mp4")
+        XCTAssertEqual(video.videoPath, "/tmp/out/user - clip.mp4")
+        XCTAssertEqual(video.title, "user - clip")
+
+        let skipped = DownloadItem(url: "https://x.com/a/status/1")
+        parse("[download] \(found)/../user - clip.mp4 has already been downloaded", into: skipped)
+        XCTAssertEqual(skipped.outputPath, "/tmp/out/user - clip.mp4")
+
+        let merged = DownloadItem(url: "https://x.com/a/status/1")
+        parse("[download] Destination: \(found)/../user - clip.f1.mp4", into: merged)
+        parse("[download] Destination: \(found)/../user - clip.f2.m4a", into: merged)
+        parse(#"[Merger] Merging formats into "\#(found)/../user - clip.mp4""#, into: merged)
+        XCTAssertEqual(merged.outputPath, "/tmp/out/user - clip.mp4")
+        XCTAssertEqual(merged.videoPath, "/tmp/out/user - clip.mp4")
+
+        let audio = DownloadItem(url: "https://x.com/a/status/1")
+        parse("[ExtractAudio] Destination: \(found)/../user - clip.mp3", into: audio)
+        XCTAssertEqual(audio.outputPath, "/tmp/out/user - clip.mp3")
+
+        // Two or more stay in the found folder.
+        let list = DownloadItem(url: "https://x.com/a/status/1")
+        parse("[download] Destination: \(found)//user - clip [01].mp4", into: list)
+        XCTAssertEqual(list.outputPath, "\(found)/user - clip [01].mp4")
+    }
+
     /// A list's files lie in its folder, whose name holds the list's title:
     /// a "%" there must not turn a Destination line or a skip notice into
     /// progress, or the run ends with no file known.

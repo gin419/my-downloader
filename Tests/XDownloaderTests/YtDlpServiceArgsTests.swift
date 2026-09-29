@@ -282,6 +282,52 @@ final class YtDlpServiceArgsTests: XCTestCase {
             a[a.firstIndex(of: "--output")! + 1], "/out/someone - 50%% off [1]/%(title)s%(playlist_index& [{0:02d}]|)s.%(ext)s")
     }
 
+    // MARK: - A post's found folder
+
+    /// The step for a post whose folder is on disk, spelled out as the tool
+    /// reads it: ".." for one video or a list of one, nothing for two or
+    /// more, and no "$" of any kind.
+    private let foundFolderArguments = [
+        "--parse-metadata", #"pre_process:%(playlist_count,n_entries|)s#..:^[01]?#(?P<xdl_up>\.\.)"#,
+    ]
+
+    /// A post whose folder is on disk and holds no video of yt-dlp's: the
+    /// found folder's name is literal text in the template — a "%" doubled,
+    /// the ":" and "?" the tool would swap in a field's value kept — and
+    /// the step that sends a single video back out of it replaces the one
+    /// that would name a second folder.
+    func testAFoundFolderWithoutAVideoTakesAListUnderItsOwnName() {
+        let found = out.appendingPathComponent(#"someone - 50% off: why? "no" [1]"#, isDirectory: true)
+        let a = YtDlpService.buildArguments(
+            for: DownloadItem(url: "https://x.com/u/status/1"), outputDirectory: out, foundFolder: found,
+            format: .videoAndAudio, videoQuality: .best, audioQuality: .best, subtitleLanguage: .none,
+            embedSubtitles: false, cookieBrowser: .none)
+        let output = a.firstIndex(of: "--output")!
+        XCTAssertEqual(Array(a[(output - foundFolderArguments.count)..<output]), foundFolderArguments)
+        XCTAssertEqual(YtDlpService.foundFolderArguments, foundFolderArguments)
+        XCTAssertEqual(
+            a[output + 1], #"/out/someone - 50%% off: why? "no" [1]/%(xdl_up|)s/%(title)s%(playlist_index& [{0:02d}]|)s.%(ext)s"#)
+        XCTAssertEqual(a.filter { $0 == "--parse-metadata" }.count, 1)
+        XCTAssertFalse(a.contains("--replace-in-metadata"))
+        XCTAssertFalse(a.contains { $0.contains("xdl_folder") })
+        XCTAssertFalse(a.contains { $0.contains("$") }, "the tool would expand it: \(a)")
+    }
+
+    /// A folder the files go into flat, or a resolved address, wins over a
+    /// found folder: neither is ever walked as a list.
+    func testAFoundFolderIsIgnoredWhenTheFilesGoFlat() {
+        let found = out.appendingPathComponent("someone - found [1]", isDirectory: true)
+        let flat = out.appendingPathComponent("someone - flat [1]", isDirectory: true)
+        for (item, folder) in [(DownloadItem(url: "https://x.com/u/status/1"), flat), (resolvedItem(), nil)] {
+            let a = YtDlpService.buildArguments(
+                for: item, outputDirectory: out, folder: folder, foundFolder: found,
+                format: .videoAndAudio, videoQuality: .best, audioQuality: .best, subtitleLanguage: .none,
+                embedSubtitles: false, cookieBrowser: .none)
+            XCTAssertFalse(a.contains("--parse-metadata"), "\(a)")
+            XCTAssertFalse(a.contains { $0.contains("xdl_up") || $0.contains(found.lastPathComponent) }, "\(a)")
+        }
+    }
+
     /// A resolved address names one file and is never walked as a list, so
     /// it gets no folder step either, with or without a folder of its own.
     func testAResolvedAddressGetsNoListFolder() {
