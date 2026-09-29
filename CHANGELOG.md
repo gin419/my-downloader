@@ -9,13 +9,13 @@ Entries before _Unreleased_ were back-filled from git history.
 ## [Unreleased]
 
 ### Changed
-- **Posts of two or more files now get their own folder.** This covers X,
-  Instagram and Threads posts with several pictures, or pictures and one
-  video, and every Threads post of two or more files. X and Instagram
-  posts with several videos, playlists and Reddit galleries still save
-  their files loose. An Instagram profile's files go into a folder
-  named after the account. Files downloaded before this change are not
-  moved.
+- **Posts of two or more files now get their own folder.** This covers
+  most X, Instagram and Threads posts with several pictures, or pictures
+  and one video, and every Threads post of two or more files. X and
+  Instagram posts with several videos usually still save their files
+  loose, as do playlists and Reddit galleries. An Instagram profile's
+  files go into a folder named after the account. Files downloaded
+  before this change are not moved.
 
 ## [1.12.2] — 2026-09-28
 
