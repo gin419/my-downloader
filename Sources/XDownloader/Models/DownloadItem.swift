@@ -260,6 +260,12 @@ class DownloadItem: Identifiable, ObservableObject {
     /// on disk as the run began. Only a folder this run created may be
     /// removed again when the run leaves it empty.
     var destinationExistedAtStart = false
+    /// In-memory only (NOT persisted). True once yt-dlp wrote a video in
+    /// this run — a Destination or Merger line, never an "already
+    /// downloaded" notice. Only such a video may be moved into the folder
+    /// its post's photos went to: a video already on disk before this run
+    /// stays where it is. Cleared with the other per-attempt parse state.
+    var videoDownloadedThisRun = false
 
     init(url: String, addedAt: Date = Date()) {
         self.url = url
@@ -294,6 +300,7 @@ class DownloadItem: Identifiable, ObservableObject {
         newToolFileCount = 0
         extractorBreakage = .none
         ffmpegMissingForMerge = false
+        videoDownloadedThisRun = false
         resolvedAddress = nil
         resolvedFileStem = nil
         resolvedPictures = []

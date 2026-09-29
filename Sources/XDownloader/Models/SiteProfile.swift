@@ -97,6 +97,14 @@ struct SiteProfile {
         /// The failed row's whole message.
         let message: String
     }
+    /// Non-nil: the gallery-dl folder a single post of two or more files
+    /// goes into inside the download folder — the file-name template less
+    /// its " #{num}.{extension}", so the folder is named exactly as its
+    /// files are, number aside, and gallery-dl cleans it the same way.
+    /// gallery-dl picks it itself from the post's own file count before it
+    /// writes (see `GalleryDlService.FolderMode`). Declared last and
+    /// defaulted like `usesYtDlp`: a site without it stays loose.
+    var galleryDlFolderFormat: String? = nil
 
     /// The message `link` is turned down under, nil when it may run.
     func refusalMessage(for link: String) -> String? {
@@ -139,10 +147,15 @@ enum SiteRegistry {
         galleryDlArgs: [
             "-o", "quoted=true",
             "-o", "retweets=true",
-            "-f", "{author[nick]} - {content!s:.100} [{tweet_id}] #{num}.{extension}",
+            "-f", twitterFileStem + " #{num}.{extension}",
         ],
-        imageSweepArgs: ["-o", "videos=false"]
+        imageSweepArgs: ["-o", "videos=false"],
+        galleryDlFolderFormat: twitterFileStem
     )
+
+    /// A tweet's gallery-dl file name without its number and extension: the
+    /// files' stem and the folder of a tweet with two or more files.
+    private static let twitterFileStem = "{author[nick]} - {content!s:.100} [{tweet_id}]"
 
     static let youtube = SiteProfile(
         id: "youtube",
@@ -196,13 +209,18 @@ enum SiteRegistry {
         // unique; #{num} indexes carousel children, and the single-file " #1"
         // suffix is stripped after download like Twitter's.
         galleryDlArgs: [
-            "-f", "{username} - {description|''!s:.100} [{post_shortcode}] #{num}.{extension}",
+            "-f", instagramFileStem + " #{num}.{extension}",
         ],
         imageSweepArgs: ["-o", "videos=false"],
         singleItemGuard: .init(
             turnsDown: { InstagramLink.shape(of: $0) == .notASingleItem },
-            message: InstagramLink.notASingleItemMessage)
+            message: InstagramLink.notASingleItemMessage),
+        galleryDlFolderFormat: instagramFileStem
     )
+
+    /// A post's gallery-dl file name without its number and extension, as
+    /// `twitterFileStem` is for a tweet.
+    private static let instagramFileStem = "{username} - {description|''!s:.100} [{post_shortcode}]"
 
     /// Threads: neither yt-dlp nor gallery-dl can read it, so the in-app
     /// resolver is the only downloader and yt-dlp is skipped. (For a post

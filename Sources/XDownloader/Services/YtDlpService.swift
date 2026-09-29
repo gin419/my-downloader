@@ -269,7 +269,7 @@ enum YtDlpService {
         // it would parse as progress, the path would go unrecorded and a
         // finished download would read as an "empty success".
         if line.hasPrefix("[download] Destination: "), line.contains("%") {
-            Self.recordMediaPath(String(line.dropFirst("[download] Destination: ".count)), on: item)
+            Self.recordMediaPath(String(line.dropFirst("[download] Destination: ".count)), on: item, isWritten: true)
             return
         }
 
@@ -292,7 +292,7 @@ enum YtDlpService {
         if line.hasPrefix("[download]") && line.contains("Destination:"),
             let range = line.range(of: "Destination: ")
         {
-            Self.recordMediaPath(String(line[range.upperBound...]), on: item)
+            Self.recordMediaPath(String(line[range.upperBound...]), on: item, isWritten: true)
             return
         }
 
@@ -306,6 +306,7 @@ enum YtDlpService {
         {
             let path = String(line[line.index(after: q1)..<q2])
             item.videoPath = path
+            item.videoDownloadedThisRun = true
             item.outputPath = path
             item.videoCount = (item.videoCount ?? 0) + 1
             let stem = URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
@@ -468,13 +469,13 @@ enum YtDlpService {
     }
 
     /// Record a media file yt-dlp reports as on disk — a fresh "Destination:"
-    /// line or a "has already been downloaded" skip notice.
+    /// line (`isWritten`) or a "has already been downloaded" skip notice.
     ///
     /// Counts reflect **deliverables the user keeps**, not temporary streams:
     /// pre-merge `.f{format_id}` paths update progress/paths but do not bump
     /// `videoCount` / `imageCount`. Final names (and `[Merger]` lines) do.
     @MainActor
-    private static func recordMediaPath(_ path: String, on item: DownloadItem) {
+    private static func recordMediaPath(_ path: String, on item: DownloadItem, isWritten: Bool = false) {
         let ext = (path as NSString).pathExtension.lowercased()
         let isImage = MediaExtensions.image.contains(ext)
         let isAudioExt = MediaExtensions.audio.contains(ext)
@@ -498,6 +499,7 @@ enum YtDlpService {
                 }
             } else {
                 item.videoPath = path
+                if isWritten { item.videoDownloadedThisRun = true }
                 if !isIntermediate {
                     item.videoCount = (item.videoCount ?? 0) + 1
                 }

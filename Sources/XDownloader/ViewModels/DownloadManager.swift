@@ -1538,6 +1538,7 @@ class DownloadManager: ObservableObject {
             // Every run settles its own folder; the last run's is not
             // trusted, only worked out again.
             RowFolder.use(nil, for: item)
+            item.videoDownloadedThisRun = false
             Task {
                 await runDownload(item)
                 inFlightItemIDs.remove(item.id)
@@ -1812,6 +1813,17 @@ class DownloadManager: ObservableObject {
             item.status = .failed(message)
             finalize(item)
             return
+        }
+        // An X or Instagram post's folder ends in the post's id, and each
+        // tool spells the rest of its name its own way: a folder an earlier
+        // run made for this post is found by the id, and every tool of this
+        // run writes into it — so each finds what is already there. A found
+        // name holding a "$" is never handed to a tool, which would expand
+        // it; the tools then pick their own folder.
+        if let id = RowFolder.postID(of: item.url), let found = RowFolder.existing(in: outputDirectory, id: id),
+            RowFolder.isToolSafe(found.path)
+        {
+            RowFolder.use(found, for: item)
         }
         // The address comes first: without it there is nothing to hand
         // yt-dlp. Every run asks again — a first run, a Retry, a Resume and
@@ -2094,13 +2106,30 @@ class DownloadManager: ObservableObject {
             SiteRegistry.profile(for: item.url).imageSweepArgs != nil,
             let gdlPath = galleryDlPath
         else { return }
+        let root = outputDirectory
+        // The photos go where the video is when that is a folder already
+        // (one found for this post). A loose video's photos go into the
+        // post's own folder — its own id makes it one whatever the count,
+        // which here leaves the video out — and the video follows them in.
+        let videoFolder = item.videoPath.map { URL(fileURLWithPath: $0).deletingLastPathComponent() }
+        let folderMode: GalleryDlService.FolderMode
+        if let videoFolder, videoFolder.standardizedFileURL != root.standardizedFileURL,
+            RowFolder.isToolSafe(videoFolder.path)
+        {
+            folderMode = .into(videoFolder)
+        } else if let condition = GalleryDlService.ownPostCondition(for: item.url) {
+            folderMode = .perPost(always: condition)
+        } else {
+            folderMode = .perPostIfMultiple
+        }
         let cookies = resolveCookiesForDownload()
-        var sweepResult: ProcessResult?
+        var sweepResult: GalleryDlService.SweepResult?
         await cookieAccess.withScope(for: item.id, file: cookies.path, grantedURL: cookies.granted) {
             sweepResult = await GalleryDlService.runImageSweep(
                 item: item,
                 executablePath: gdlPath,
-                outputDirectory: outputDirectory,
+                outputDirectory: root,
+                folderMode: folderMode,
                 cookieBrowser: cookieBrowser,
                 cookieBrowserProfile: cookieBrowserProfile,
                 cookiesFile: cookies.path,
@@ -2116,8 +2145,37 @@ class DownloadManager: ObservableObject {
         // filtered inside recordImageSweepOutcome.
         let userPausedSweep = pausedItemIDs.remove(item.id) != nil
         if let sweepResult, !userPausedSweep {
-            recordImageSweepOutcome(result: sweepResult)
+            recordImageSweepOutcome(result: sweepResult.exit)
         }
+        if case .perPost = folderMode, let sweepResult {
+            Self.moveVideoToItsPhotos(item, photos: sweepResult.photos, root: root)
+        }
+    }
+
+    /// The one file ever moved after it was written: a post's single video,
+    /// saved loose by yt-dlp before its photos went into the post's folder,
+    /// follows them in, so the post's files end up together. Only a video
+    /// yt-dlp wrote in this very run moves — one that was on disk before
+    /// stays where it is — and only into a folder that is there and holds
+    /// at least one of this post's photos. A name already taken there, or a
+    /// failed move, leaves the video loose and the row pointing at it.
+    static func moveVideoToItsPhotos(_ item: DownloadItem, photos: [GalleryDlService.ReportedMedia], root: URL) {
+        guard item.videoDownloadedThisRun, item.videoCount == 1, let videoPath = item.videoPath,
+            GalleryDlService.isDirectlyInside(videoPath, root),
+            let id = RowFolder.postID(of: item.url)
+        else { return }
+        let folder = photos.lazy
+            .map { URL(fileURLWithPath: $0.path) }
+            .first { photo in
+                let parent = photo.deletingLastPathComponent()
+                return parent.lastPathComponent.hasSuffix(" [\(id)]")
+                    && GalleryDlService.isDirectlyInside(parent.path, root)
+                    && FileManager.default.fileExists(atPath: photo.path)
+            }?
+            .deletingLastPathComponent()
+        guard let folder, let moved = RowFolder.moveIn(URL(fileURLWithPath: videoPath), to: folder) else { return }
+        if item.outputPath == videoPath { item.outputPath = moved.path }
+        item.videoPath = moved.path
     }
 
     /// Resets yt-dlp's partial state, then runs the gallery-dl fallback (a
@@ -2127,12 +2185,17 @@ class DownloadManager: ObservableObject {
         item.status = .fetching
         item.resetForReattempt()
 
+        // A folder found for this post at the start of the run takes every
+        // file flat; otherwise gallery-dl gives a post of two or more files
+        // its own folder.
+        let folderMode: GalleryDlService.FolderMode = item.destination.map { .into($0) } ?? .perPostIfMultiple
         let cookies = resolveCookiesForDownload()
         await cookieAccess.withScope(for: item.id, file: cookies.path, grantedURL: cookies.granted) {
             await GalleryDlService.run(
                 item: item,
                 executablePath: executablePath,
                 outputDirectory: outputDirectory,
+                folderMode: folderMode,
                 cookieBrowser: cookieBrowser,
                 cookieBrowserProfile: cookieBrowserProfile,
                 cookiesFile: cookies.path,
@@ -2454,8 +2517,9 @@ class DownloadManager: ObservableObject {
     /// Stop mid-run (see `runResolverTask`).
     private func runFxTwitterFallback(_ item: DownloadItem) async -> Bool {
         let directory = outputDirectory
+        let foundFolder = item.destination
         return await runResolverTask(item) {
-            await FxTwitterService.run(item: item, outputDirectory: directory)
+            await FxTwitterService.run(item: item, outputDirectory: directory, foundFolder: foundFolder)
         }
     }
 

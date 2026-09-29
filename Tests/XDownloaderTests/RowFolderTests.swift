@@ -154,6 +154,59 @@ final class RowFolderTests: XCTestCase {
         XCTAssertEqual(item.destination, folder)
     }
 
+    // MARK: - A post's id
+
+    func testPostIDIsTheTweetIDOrThePostCode() {
+        XCTAssertEqual(RowFolder.postID(of: "https://x.com/someone/status/1234567890123"), "1234567890123")
+        XCTAssertEqual(RowFolder.postID(of: "https://twitter.com/someone/status/1234567890123?s=20"), "1234567890123")
+        XCTAssertEqual(RowFolder.postID(of: "https://www.instagram.com/p/SYNpost0001_/"), "SYNpost0001_")
+        XCTAssertEqual(RowFolder.postID(of: "https://www.instagram.com/reel/SYNreel0001_/"), "SYNreel0001_")
+        // No id to find a folder by.
+        XCTAssertNil(RowFolder.postID(of: "https://x.com/someone"))
+        XCTAssertNil(RowFolder.postID(of: "https://www.instagram.com/share/SYNshare01/"))
+        XCTAssertNil(RowFolder.postID(of: "https://www.instagram.com/someone.invented/"))
+        XCTAssertNil(RowFolder.postID(of: "https://www.youtube.com/watch?v=abcdefghijk"))
+        XCTAssertNil(RowFolder.postID(of: "https://www.reddit.com/r/invented/comments/abc123/x/"))
+    }
+
+    // MARK: - The one move
+
+    func testMoveInMovesTheFileUnderItsOwnName() throws {
+        let folder = try makeFolder("a - b [123]")
+        let file = root.appendingPathComponent("a - b.mp4")
+        try Data("video".utf8).write(to: file)
+
+        let moved = try XCTUnwrap(RowFolder.moveIn(file, to: folder))
+
+        XCTAssertEqual(moved.path, folder.appendingPathComponent("a - b.mp4").path)
+        XCTAssertEqual(try Data(contentsOf: moved), Data("video".utf8))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
+    }
+
+    func testMoveInNeverReplacesAFileAndLeavesTheOriginalWhereItWas() throws {
+        let folder = try makeFolder("a - b [123]")
+        let taken = folder.appendingPathComponent("a - b.mp4")
+        try Data("already there".utf8).write(to: taken)
+        let file = root.appendingPathComponent("a - b.mp4")
+        try Data("video".utf8).write(to: file)
+
+        XCTAssertNil(RowFolder.moveIn(file, to: folder))
+
+        XCTAssertEqual(try Data(contentsOf: taken), Data("already there".utf8))
+        XCTAssertEqual(try Data(contentsOf: file), Data("video".utf8))
+    }
+
+    func testMoveInMakesNoFolder() throws {
+        let file = root.appendingPathComponent("a - b.mp4")
+        try Data("video".utf8).write(to: file)
+        let missing = root.appendingPathComponent("a - b [123]", isDirectory: true)
+
+        XCTAssertNil(RowFolder.moveIn(file, to: missing))
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: missing.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: file.path))
+    }
+
     // MARK: - Helpers
 
     @discardableResult

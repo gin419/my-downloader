@@ -18,14 +18,19 @@ enum FxTwitterService {
     /// files saved because the destination disk is full or unwritable → a
     /// disk failure, because restoring the prior "No media found…" message
     /// would blame the tweet for a local problem.
+    ///
+    /// `foundFolder` is a folder an earlier run made for this tweet (see
+    /// `RowFolder.existing`); the files go into it whatever their number.
     @MainActor
-    static func run(item: DownloadItem, outputDirectory: URL) async -> Bool {
+    static func run(
+        item: DownloadItem, outputDirectory: URL, foundFolder: URL? = nil, session: URLSession = .shared
+    ) async -> Bool {
         guard let id = tweetID(from: item.url) else { return false }
 
         let priorStatus = item.status
         item.status = .fetching
 
-        guard let tweet = await fetchTweet(id: id) else {
+        guard let tweet = await fetchTweet(id: id, session: session) else {
             item.status = priorStatus
             return false
         }
@@ -53,6 +58,12 @@ enum FxTwitterService {
         // Mirror gallery-dl's filename scheme (see GalleryDlService.formatArgs)
         // so re-downloads of the same tweet dedupe across both backends.
         let stemBase = sanitize("\(nick) - \(String(text.prefix(100))) [\(id)]")
+        // Two or more files get a folder named after the stem, unless an
+        // earlier run's folder for this tweet is there: the other tools
+        // spell the stem their own way, and only its " [<id>]" is shared.
+        // The folder is made only with a complete file to put in it.
+        let directory =
+            foundFolder ?? RowFolder.folder(in: outputDirectory, name: stemBase, fileCount: urls.count) ?? outputDirectory
 
         var savedPaths: [String] = []
         var imageCount = 0
@@ -80,14 +91,14 @@ enum FxTwitterService {
                 ? "mp4"
                 : (entry.url.pathExtension.isEmpty ? "jpg" : entry.url.pathExtension.lowercased())
             let name = "\(stemBase) #\(index + 1).\(ext)"
-            let dest = outputDirectory.appendingPathComponent(name)
+            let dest = directory.appendingPathComponent(name)
 
             let existedBefore = FileManager.default.fileExists(atPath: dest.path)
             if !existedBefore {
                 item.status = .downloading
                 let tmp: URL
                 do {
-                    let (downloaded, response) = try await URLSession.shared.download(from: entry.url)
+                    let (downloaded, response) = try await session.download(from: entry.url)
                     if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
                         // The CDN answered with an error page, not the file —
                         // saving it would masquerade as media (e.g. a twimg
@@ -102,6 +113,7 @@ enum FxTwitterService {
                     continue
                 }
                 do {
+                    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
                     try FileManager.default.moveItem(at: tmp, to: dest)
                 } catch {
                     // Don't strand the downloaded bytes in the temp dir when the
@@ -188,18 +200,20 @@ enum FxTwitterService {
         DirectDownload.zeroSavedFailureMessage(lastFailure: lastFailure)
     }
 
-    // MARK: - Private
-
-    private static func tweetID(from url: String) -> String? {
+    /// The tweet id a link names — the "[<id>]" every file and folder of the
+    /// tweet ends in — nil for a link that names no tweet.
+    static func tweetID(from url: String) -> String? {
         guard let r = url.range(of: #"/status/(\d+)"#, options: .regularExpression) else { return nil }
         return String(url[r]).components(separatedBy: "/").last
     }
 
-    private static func fetchTweet(id: String) async -> [String: Any]? {
+    // MARK: - Private
+
+    private static func fetchTweet(id: String, session: URLSession) async -> [String: Any]? {
         guard let url = URL(string: "https://api.fxtwitter.com/i/status/\(id)") else { return nil }
         var request = URLRequest(url: url, timeoutInterval: 20)
         request.setValue("XDownloader/1.4 (macOS)", forHTTPHeaderField: "User-Agent")
-        guard let (data, response) = try? await URLSession.shared.data(for: request),
+        guard let (data, response) = try? await session.data(for: request),
             (response as? HTTPURLResponse)?.statusCode == 200,
             let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
             json["code"] as? Int == 200,

@@ -62,6 +62,36 @@ enum RowFolder {
         return nil
     }
 
+    /// The id an X or Instagram post's folder ends in, " [<id>]", read off
+    /// the link: the tweet id, or the post's code. Nil for every other link,
+    /// and for an Instagram share link, which carries no code. yt-dlp,
+    /// gallery-dl and the fxtwitter rescue spell the rest of the name each
+    /// their own way, so the id is what lets a later run find the folder.
+    static func postID(of link: String) -> String? {
+        switch SiteRegistry.profile(for: link).id {
+        case SiteRegistry.twitter.id: return FxTwitterService.tweetID(from: link)
+        case SiteRegistry.instagram.id: return InstagramLink.postCode(of: link)
+        default: return nil
+        }
+    }
+
+    /// Moves `file` into `folder` under its own name and returns where it
+    /// went, or nil when it stayed where it was: the folder is not there,
+    /// the name is taken in it, or the move failed. One rename that refuses
+    /// to replace anything, so no file is ever overwritten, and a failure
+    /// leaves the file untouched at its old path.
+    static func moveIn(_ file: URL, to folder: URL) -> URL? {
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: folder.path, isDirectory: &isDirectory), isDirectory.boolValue
+        else { return nil }
+        let target = folder.appendingPathComponent(file.lastPathComponent)
+        guard !FileManager.default.fileExists(atPath: target.path) else { return nil }
+        // RENAME_EXCL: the check above and the rename are not one step, and
+        // a file arriving in between must fail the rename, not be replaced.
+        guard renamex_np(file.path, target.path, UInt32(RENAME_EXCL)) == 0 else { return nil }
+        return target
+    }
+
     /// Removes `url` when this run created it and nothing is in it: a tool
     /// can make its folder before the first byte arrives (yt-dlp does), and
     /// a run that then saved nothing must not leave an empty folder behind.

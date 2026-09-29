@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Entries before _Unreleased_ were back-filled from git history.
 
+## [Unreleased]
+
+### Changed
+- **Downloads of two or more files now get their own folder.** An
+  Instagram profile's files go into a folder named after the account.
+  Files downloaded before this change are not moved.
+
 ## [1.12.2] — 2026-09-28
 
 ### Added

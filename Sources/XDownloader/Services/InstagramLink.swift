@@ -88,6 +88,27 @@ enum InstagramLink {
         return username
     }
 
+    /// The code of the one post, reel or video post a link names — the
+    /// "[<code>]" every file and folder of it ends in — nil for any other
+    /// link. A "/share/" link carries a share id instead, which names the
+    /// post only to Instagram itself.
+    static func postCode(of link: String) -> String? {
+        guard shape(of: link) == .singleItem,
+            let components = URLComponents(string: link.trimmingCharacters(in: .whitespacesAndNewlines))
+        else { return nil }
+        var segments = components.percentEncodedPath.split(separator: "/").map(String.init)
+        // "/<username>/p/<code>" names the same post as "/p/<code>".
+        if let first = segments.first, !reservedFirstSegments.contains(first.lowercased()), segments.count > 1,
+            itemKinds.contains(segments[1])
+        {
+            segments.removeFirst()
+        }
+        guard segments.count > 1, itemKinds.contains(segments[0]) else { return nil }
+        // Read as `namesItem` reads it: the code ends where a glued "&…" begins.
+        let code = segments[1].prefix { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "_" || $0 == "-") }
+        return code.isEmpty ? nil : String(code)
+    }
+
     /// The one spelling a profile link is kept in, whatever host, letter
     /// case, tab or query it was pasted with, so that two spellings of one
     /// profile are one row. Nil for any other link.

@@ -134,6 +134,51 @@ final class ImageSweepExitResultTests: XCTestCase {
         XCTAssertEqual(item.status, .queued, "the sweep must never touch the item's status")
     }
 
+    /// The pass collects the photos it reports, saved or already there, and
+    /// nothing else: the video owns the row's status, title and output, and
+    /// an error line of the pass changes none of them.
+    func testSweepCollectsItsPhotosAndLeavesTheRowAlone() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("sweep-lines-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let folder = dir.appendingPathComponent("a - b [123]").path
+        let lines = [
+            "\(folder)/a - b [123] #1.jpg",
+            "# \(folder)/a - b [123] #2.jpg",
+            "\(dir.path)/a - b [123] #3.txt",
+            "/usr/lib/python3/site-packages/urllib3/x.py:1: NotOpenSSLWarning: Error: something",
+            "[twitter][error] HttpError: 404 Not Found for media 3",
+            "[twitter][warning] a warning",
+        ]
+        let output = dir.appendingPathComponent("fake-gallery-dl.out")
+        try lines.map { $0 + "\n" }.joined().write(to: output, atomically: true, encoding: .utf8)
+        let script = dir.appendingPathComponent("fake-gallery-dl")
+        try "#!/bin/sh\ncat \"$0.out\"\nexit 0\n".write(to: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+        let item = DownloadItem(url: "https://x.com/a/status/123")
+        item.status = .downloading
+        item.title = "a - b"
+        item.outputPath = "\(dir.path)/a - b.mp4"
+        item.videoCount = 1
+
+        let result = await GalleryDlService.runImageSweep(
+            item: item, executablePath: script.path, outputDirectory: dir,
+            cookieBrowser: .none, register: { _ in }, unregister: {})
+
+        XCTAssertEqual(
+            result?.photos,
+            [
+                .init(path: "\(folder)/a - b [123] #1.jpg", wasSkipped: false),
+                .init(path: "\(folder)/a - b [123] #2.jpg", wasSkipped: true),
+            ])
+        XCTAssertEqual(item.status, .downloading)
+        XCTAssertEqual(item.title, "a - b")
+        XCTAssertEqual(item.outputPath, "\(dir.path)/a - b.mp4")
+        XCTAssertNil(item.firstToolError)
+        // Only the photo this pass saved is added to the row's count.
+        XCTAssertEqual(item.imageCount, 1)
+    }
+
     func testProfilesWithoutASweepReportNothing() async throws {
         let (script, dir) = try makeScript(exitCode: 0)
         let item = DownloadItem(url: "https://www.youtube.com/watch?v=abcdefghijk")
