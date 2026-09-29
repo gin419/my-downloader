@@ -489,6 +489,45 @@ final class PostFolderManagerTests: XCTestCase {
         XCTAssertTrue(DownloadManager.holdsAVideo(numbered))
     }
 
+    /// A found folder is judged as yt-dlp starts. Holding only gallery-dl's
+    /// files, it takes a list, and a single video steps back out of it;
+    /// holding a video of yt-dlp's, being a link, or gone since the scan —
+    /// the owner may remove it while the run waits on the cookies — it is
+    /// handed flat, so the step back never makes a folder again, empty.
+    /// Judging it touches nothing on disk.
+    func testAFoundFolderIsJudgedAsYtDlpStarts() throws {
+        let folder = downloads.appendingPathComponent(stem, isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try Data("earlier".utf8).write(to: folder.appendingPathComponent("\(stem) #1.mp4"))
+        var folders = DownloadManager.ytDlpFolders(for: folder)
+        XCTAssertNil(folders.flat)
+        XCTAssertEqual(folders.list, folder)
+
+        let target = root.appendingPathComponent("elsewhere", isDirectory: true)
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        let linked = downloads.appendingPathComponent("linked [\(id)]")
+        try FileManager.default.createSymbolicLink(at: linked, withDestinationURL: target)
+        folders = DownloadManager.ytDlpFolders(for: linked)
+        XCTAssertEqual(folders.flat, linked)
+        XCTAssertNil(folders.list)
+
+        try Data("video".utf8).write(to: folder.appendingPathComponent(videoName))
+        folders = DownloadManager.ytDlpFolders(for: folder)
+        XCTAssertEqual(folders.flat, folder)
+        XCTAssertNil(folders.list)
+
+        let gone = downloads.appendingPathComponent("gone - removed [\(id)]", isDirectory: true)
+        try FileManager.default.createDirectory(at: gone, withIntermediateDirectories: true)
+        XCTAssertEqual(DownloadManager.ytDlpFolders(for: gone).list, gone)
+        try FileManager.default.removeItem(at: gone)
+        folders = DownloadManager.ytDlpFolders(for: gone)
+        XCTAssertEqual(folders.flat, gone)
+        XCTAssertNil(folders.list)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: gone.path))
+        XCTAssertEqual(try contents(of: downloads), [linked.lastPathComponent, stem].sorted())
+        XCTAssertEqual(try contents(of: folder), ["\(stem) #1.mp4", videoName].sorted())
+    }
+
     // MARK: - A photo post's found folder
 
     /// A found folder holding photos only takes gallery-dl's files for the

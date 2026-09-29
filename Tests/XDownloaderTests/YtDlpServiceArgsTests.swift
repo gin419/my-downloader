@@ -328,6 +328,47 @@ final class YtDlpServiceArgsTests: XCTestCase {
         }
     }
 
+    /// The options of the owner's yt-dlp config that would respell a path
+    /// the app spells out, set back to the tool's defaults, spelled out as
+    /// the tool reads them.
+    private let pinnedPathArguments = [
+        "--no-windows-filenames", "--compat-options", "-filename-sanitization",
+    ]
+
+    /// A template naming a folder of the app's — a found folder taking a
+    /// list, a folder the files go into flat, a work page's — pins how the
+    /// tool writes a path, so a "--windows-filenames" or a
+    /// "--compat-options filename-sanitization" in the owner's config can
+    /// neither respell the folder's name nor turn the ".." step into "_".
+    /// Without such a folder, the command line is unchanged.
+    func testATemplateNamingAFolderOfTheAppsPinsHowPathsAreWritten() {
+        XCTAssertEqual(YtDlpService.pinnedPathArguments, pinnedPathArguments)
+        let found = out.appendingPathComponent("someone - x: y [1]", isDirectory: true)
+        let listed = YtDlpService.buildArguments(
+            for: DownloadItem(url: "https://x.com/u/status/1"), outputDirectory: out, foundFolder: found,
+            format: .videoAndAudio, videoQuality: .best, audioQuality: .best, subtitleLanguage: .none,
+            embedSubtitles: false, cookieBrowser: .none)
+        let output = listed.firstIndex(of: "--output")!
+        let steps = pinnedPathArguments + foundFolderArguments
+        XCTAssertEqual(Array(listed[(output - steps.count)..<output]), steps)
+
+        let workPage = resolvedItem()
+        for (item, folder) in [(DownloadItem(url: "https://x.com/u/status/1"), found), (workPage, found)] {
+            let a = YtDlpService.buildArguments(
+                for: item, outputDirectory: out, folder: folder,
+                format: .videoAndAudio, videoQuality: .best, audioQuality: .best, subtitleLanguage: .none,
+                embedSubtitles: false, cookieBrowser: .none)
+            let output = a.firstIndex(of: "--output")!
+            XCTAssertEqual(Array(a[(output - pinnedPathArguments.count)..<output]), pinnedPathArguments, "\(a)")
+            XCTAssertEqual(a.filter { $0 == "--compat-options" }.count, 1, "\(a)")
+        }
+
+        for a in [args(DownloadItem(url: "https://x.com/u/status/1")), args(resolvedItem())] {
+            XCTAssertFalse(a.contains("--no-windows-filenames"), "\(a)")
+            XCTAssertFalse(a.contains("--compat-options"), "\(a)")
+        }
+    }
+
     /// A resolved address names one file and is never walked as a list, so
     /// it gets no folder step either, with or without a folder of its own.
     func testAResolvedAddressGetsNoListFolder() {

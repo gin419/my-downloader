@@ -1860,15 +1860,15 @@ class DownloadManager: ObservableObject {
         // or whitespace at either end, which it drops); the tools then pick
         // their own folder.
         // A YouTube list's folder is found the same way, by the list's id.
-        // yt-dlp is handed the folder flat only when a video of its own is
-        // in it. Otherwise a single video lies loose in the download folder,
+        // yt-dlp is handed the folder flat when a video of its own is in it
+        // (or the folder is a link, or gone by the time yt-dlp starts:
+        // `ytDlpFolders`). Otherwise a single video lies loose in the download folder,
         // where yt-dlp saved and looks for it (as does one saved before
         // posts had folders), and a list of two or more goes into the found
         // folder: were yt-dlp to name one of its own for them, the post
         // would have two folders of the same id, and the next run would
-        // find one and fetch what lies in the other again. A found folder
-        // that is a link is handed flat: the step back out of it that sends
-        // a single video to the download folder would lead elsewhere.
+        // find one and fetch what lies in the other again. Which of the two
+        // is judged when yt-dlp starts.
         let folderID = RowFolder.folderID(of: item.url)
         let found =
             folderID
@@ -1876,8 +1876,6 @@ class DownloadManager: ObservableObject {
             .flatMap { RowFolder.isReusable($0) ? $0 : nil }
         if let found { RowFolder.use(found, for: item) }
         if let folderID { notePostFolders(of: item, id: folderID) }
-        let ytDlpFolder = found.flatMap { Self.holdsAVideo($0) || RowFolder.isSymbolicLink($0) ? $0 : nil }
-        let listFolder = ytDlpFolder == nil ? found : nil
         // The address comes first: without it there is nothing to hand
         // yt-dlp. Every run asks again — a first run, a Retry, a Resume and
         // the re-runs below all pass through here.
@@ -1908,11 +1906,12 @@ class DownloadManager: ObservableObject {
         let runYtDlp = { [self] () async -> ProcessResult in
             // Without a post folder found, the row's own folder is a work
             // page's, settled by the resolver above.
+            let folders = found.map(Self.ytDlpFolders(for:)) ?? (flat: item.destination, list: nil)
             let args = YtDlpService.buildArguments(
                 for: item,
                 outputDirectory: outputDirectory,
-                folder: found == nil ? item.destination : ytDlpFolder,
-                foundFolder: listFolder,
+                folder: folders.flat,
+                foundFolder: folders.list,
                 format: youtubeFormat,
                 videoQuality: videoQuality,
                 audioQuality: audioQuality,
@@ -2256,6 +2255,24 @@ class DownloadManager: ObservableObject {
             MediaExtensions.video.contains((name as NSString).pathExtension.lowercased())
                 && name.range(of: #"\] #\d+\.[^.]+$"#, options: .regularExpression) == nil
         }
+    }
+
+    /// How yt-dlp is handed a post's folder found on disk, judged just
+    /// before the tool starts — the scan comes before the address and the
+    /// cookies, which may wait on the owner. As the folder a list of two or
+    /// more takes, from which a single video steps back out to the download
+    /// folder (`YtDlpService.foundFolderArguments`), when yt-dlp has no
+    /// video in it; flat otherwise, and flat whenever the step back could
+    /// go wrong: the folder is a link, so the step would lead out of the
+    /// folder it points into, or it is gone, and the tool would make it
+    /// again, empty, before stepping out of it. Handed flat, a gone folder
+    /// comes back only with the files written into it.
+    static func ytDlpFolders(for found: URL) -> (flat: URL?, list: URL?) {
+        let flat =
+            RowFolder.isSymbolicLink(found)
+            || !FileManager.default.fileExists(atPath: found.path)
+            || holdsAVideo(found)
+        return flat ? (found, nil) : (nil, found)
     }
 
     /// The folder `path` lies in when that is a folder of the post `id` —

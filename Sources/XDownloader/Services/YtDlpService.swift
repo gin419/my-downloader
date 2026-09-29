@@ -106,6 +106,7 @@ enum YtDlpService {
             if embedSubtitles { args += ["--embed-subs"] }
         }
 
+        if folder != nil || listFolder != nil { args += pinnedPathArguments }
         if listFolder != nil {
             args += foundFolderArguments
         } else if groupsPlaylist {
@@ -199,10 +200,28 @@ enum YtDlpService {
     /// leaves "<folder>//<name>". Both are normalised wherever a path is
     /// recorded (`RowFolder.normalized`). The step back reaches the download
     /// folder only because the found folder is a real folder directly
-    /// inside it, never a link (the caller's to ensure).
+    /// inside it, never a link, and is there when the tool starts: the tool
+    /// makes the folder before it steps back out of it (the caller's to
+    /// ensure, `DownloadManager.ytDlpFolders`). The run also pins how the
+    /// tool writes a path (`pinnedPathArguments`).
     static let foundFolderArguments: [String] = [
         "--parse-metadata",
         #"pre_process:%(playlist_count,n_entries|)s#..:^[01]?#(?P<"# + foundFolderField + #">\.\.)"#,
+    ]
+
+    /// yt-dlp also reads the owner's own config files, and two options
+    /// there change a path the app spells out: "--windows-filenames" swaps
+    /// ":", "?" and the like in the literal text of the template too — a
+    /// found folder's name, which then comes out as a second folder of the
+    /// post — and "--compat-options filename-sanitization" turns the ".."
+    /// step into "_", a new folder inside the found one. A run whose
+    /// template names a folder of the app's (`folder` or `foundFolder`)
+    /// sets both back to the tool's defaults on macOS, so every such run
+    /// spells its paths alike; the command line comes after the config
+    /// files and wins, and any other compatibility option there is kept.
+    static let pinnedPathArguments: [String] = [
+        "--no-windows-filenames",
+        "--compat-options", "-filename-sanitization",
     ]
 
     // MARK: - Failure messages
