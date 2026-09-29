@@ -10,10 +10,10 @@ Entries before _Unreleased_ were back-filled from git history.
 
 ### Changed
 - **Posts of two or more files now get their own folder.** This covers
-  most X, Instagram and Threads posts with several pictures, or pictures
-  and one video, and every Threads post of two or more files. X and
-  Instagram posts with several videos usually still save their files
-  loose, as do playlists and Reddit galleries. An Instagram profile's
+  most X and Instagram posts with several pictures, several videos, or
+  both, and every Threads post of two or more files. A playlist, or any
+  other page with several videos, goes into a folder named after it.
+  Reddit galleries still save their files loose. An Instagram profile's
   files go into a folder named after the account. Files downloaded
   before this change are not moved.
 

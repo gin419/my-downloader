@@ -4,10 +4,15 @@ enum YtDlpService {
 
     // MARK: - Argument building
 
+    /// `folder` is the row's own folder when one is settled before the run
+    /// (a work page's, or a post's found on disk): the files go flat into
+    /// it. Without one they go into `outputDirectory`, where a list of two
+    /// or more takes a folder of its own (`playlistFolderArguments`).
     @MainActor
     static func buildArguments(
         for item: DownloadItem,
         outputDirectory: URL,
+        folder: URL? = nil,
         format: YouTubeFormat,
         videoQuality: VideoQuality,
         audioQuality: AudioQuality,
@@ -33,8 +38,13 @@ enum YtDlpService {
             ?? (profile.extractorTitleIncludesUploader ? "%(title)s" : "%(uploader)s - %(title)s")
         // The directory is text in the template too: a row's own folder is
         // named after its stem, so a "%" there must not open a field.
-        let outputTemplate =
-            RowFolder.templateDirectory(outputDirectory) + "/\(stem)\(profile.outputTemplateSuffix).%(ext)s"
+        // A resolved address names one file, so only a page link can turn
+        // out to be a list and needs the folder field.
+        let groupsPlaylist = folder == nil && item.resolvedAddress == nil
+        let directory =
+            RowFolder.templateDirectory(folder ?? outputDirectory)
+            + (groupsPlaylist ? "/%(\(playlistFolderField)|)s" : "")
+        let outputTemplate = directory + "/\(stem)\(profile.outputTemplateSuffix).%(ext)s"
         var args: [String] = []
         if profile.receivesBrowserCookies {
             args += CookieArgs.make(
@@ -87,6 +97,7 @@ enum YtDlpService {
             if embedSubtitles { args += ["--embed-subs"] }
         }
 
+        if groupsPlaylist { args += playlistFolderArguments }
         args += [
             "--output", outputTemplate,
             "--socket-timeout", "10",
@@ -111,6 +122,47 @@ enum YtDlpService {
     static func literalTemplateText(_ text: String) -> String {
         text.replacingOccurrences(of: "%", with: "%%").replacingOccurrences(of: "$", with: "＄")
     }
+
+    // MARK: - A list's own folder
+
+    /// The field the output template reads a list's folder from. Unset, it
+    /// is empty, and the template's directory is the download folder itself
+    /// followed by a doubled separator ("<root>//<name>"): the same file a
+    /// single video has always been saved as, which is why every path the
+    /// tool reports is normalised before it is recorded.
+    static let playlistFolderField = "xdl_folder"
+
+    /// A post or page that yt-dlp reads as a list of two or more — an X or
+    /// Instagram post with several videos, a playlist link, a page with
+    /// several clips — saves them in a folder of their own:
+    /// "<list title> [<list id>]". Only the tool knows the count, so the
+    /// tool decides: before it builds a file name ("pre_process") it sets
+    /// the field from the list's own title and id when the count is two or
+    /// more, and leaves it unset otherwise, so a single video keeps today's
+    /// path exactly. The decision rests on the list's declared count, not
+    /// on what arrives, so a partial run and its Retry meet in one folder.
+    ///
+    /// - The id ends the name, " [<id>]", as every post folder does: for X
+    ///   the list's id is the tweet id and its title "<author> - <text>",
+    ///   for Instagram the id is the post's code, so a later run of the post
+    ///   finds the folder whichever tool made it (`RowFolder.existing`).
+    /// - The title is cut at 160 bytes and the id at 64, so the name stays
+    ///   within the 255 bytes a folder name may have even after the tool
+    ///   swaps a character like ":" or "/" for its three-byte look-alike.
+    /// - The value is never read as a template or expanded ("%", "$" stay
+    ///   as they are), but the folder is handed to the tools again on a
+    ///   later run, where a "$" would be expanded: it becomes its
+    ///   full-width twin, as in every folder the app names
+    ///   (`RowFolder.appNamed`). The steps spell the sign "\x24" and need
+    ///   no end anchor, so no "$" of any kind reaches the tool.
+    /// - Both steps print "[MetadataParser] …" lines, which echo the title
+    ///   and are never read as an error (`parseLine`).
+    static let playlistFolderArguments: [String] = [
+        "--parse-metadata",
+        "pre_process:%(playlist_count,n_entries|)s#%(playlist_title,playlist_id).160B [%(playlist_id).64B]"
+            + ":(?s)^(?:[2-9]|[1-9][0-9]+)#(?P<\(playlistFolderField)>.+)",
+        "--replace-in-metadata", "pre_process:\(playlistFolderField)", #"\x24"#, "＄",
+    ]
 
     // MARK: - Failure messages
 
@@ -244,6 +296,11 @@ enum YtDlpService {
     static func parseLine(_ line: String, item: DownloadItem, terminate: () -> Void) {
         guard !line.isEmpty else { return }
 
+        // The list-folder steps report what they parsed, and the report
+        // quotes the list's title: a title reading "… Error: …" must not
+        // fail the row, nor one holding "%" read as progress.
+        if line.hasPrefix("[MetadataParser] ") { return }
+
         // Skip notice: the file already exists on disk from a prior download.
         // yt-dlp then exits 0 printing only this line — no Destination:/[Merger]
         // follows — so it must count as the captured output or the run reads as
@@ -304,7 +361,7 @@ enum YtDlpService {
             let q2 = line.lastIndex(of: "\""),
             q1 != q2
         {
-            let path = String(line[line.index(after: q1)..<q2])
+            let path = RowFolder.normalized(String(line[line.index(after: q1)..<q2]))
             item.videoPath = path
             item.videoDownloadedThisRun = true
             item.outputPath = path
@@ -319,7 +376,7 @@ enum YtDlpService {
         if line.hasPrefix("[ExtractAudio]") && line.contains("Destination:"),
             let range = line.range(of: "Destination: ")
         {
-            let path = String(line[range.upperBound...])
+            let path = RowFolder.normalized(String(line[range.upperBound...]))
             item.audioPath = path
             item.outputPath = path
             item.mediaCategory = .audio
@@ -474,8 +531,14 @@ enum YtDlpService {
     /// Counts reflect **deliverables the user keeps**, not temporary streams:
     /// pre-merge `.f{format_id}` paths update progress/paths but do not bump
     /// `videoCount` / `imageCount`. Final names (and `[Merger]` lines) do.
+    ///
+    /// A path reported with the doubled separator of an empty list folder
+    /// is recorded as the single path it names, as are the Merger and
+    /// ExtractAudio paths: history, the duplicate check and the next run
+    /// compare the same strings as before lists had folders.
     @MainActor
-    private static func recordMediaPath(_ path: String, on item: DownloadItem, isWritten: Bool = false) {
+    private static func recordMediaPath(_ reported: String, on item: DownloadItem, isWritten: Bool = false) {
+        let path = RowFolder.normalized(reported)
         let ext = (path as NSString).pathExtension.lowercased()
         let isImage = MediaExtensions.image.contains(ext)
         let isAudioExt = MediaExtensions.audio.contains(ext)

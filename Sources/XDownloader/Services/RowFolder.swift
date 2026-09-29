@@ -70,17 +70,23 @@ enum RowFolder {
     /// is every longer id that merely ends in the same digits: the bracket
     /// must open right before it. One directory listing, no request.
     static func existing(in root: URL, id: String) -> URL? {
-        guard !id.isEmpty else { return nil }
+        all(in: root, id: id).first
+    }
+
+    /// Every folder directly inside `root` whose name ends in " [<id>]", in
+    /// name order: `existing` takes the first, and the end of a run looks
+    /// for any the run made and left empty.
+    static func all(in root: URL, id: String) -> [URL] {
+        guard !id.isEmpty else { return [] }
         let suffix = " [\(id)]"
         let names = (try? FileManager.default.contentsOfDirectory(atPath: root.path)) ?? []
-        for name in names.sorted() where name.hasSuffix(suffix) {
+        return names.sorted().filter { $0.hasSuffix(suffix) }.compactMap { name in
             let candidate = root.appendingPathComponent(name, isDirectory: true)
             var isDirectory: ObjCBool = false
-            if FileManager.default.fileExists(atPath: candidate.path, isDirectory: &isDirectory), isDirectory.boolValue {
-                return candidate
-            }
+            guard FileManager.default.fileExists(atPath: candidate.path, isDirectory: &isDirectory), isDirectory.boolValue
+            else { return nil }
+            return candidate
         }
-        return nil
     }
 
     /// The id an X or Instagram post's folder ends in, " [<id>]", read off
