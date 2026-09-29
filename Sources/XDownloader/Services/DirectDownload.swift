@@ -94,12 +94,17 @@ enum DirectDownload {
     // MARK: - File names
 
     /// Keep filenames in step with what gallery-dl produces for the same
-    /// post: path separators become "_", newlines collapse to spaces.
+    /// post: path separators become "_", newlines collapse to spaces, and
+    /// every other control character (a tab, say) is dropped, as gallery-dl
+    /// drops it from the names it makes. A name made here is then one
+    /// gallery-dl writes to exactly (see `RowFolder.isReusable`).
     static func sanitize(_ s: String) -> String {
-        s.replacingOccurrences(of: "/", with: "_")
+        let spaced = s.replacingOccurrences(of: "/", with: "_")
             .replacingOccurrences(of: "\n", with: " ")
             .replacingOccurrences(of: "\r", with: " ")
-            .trimmingCharacters(in: .whitespaces)
+        var kept = String.UnicodeScalarView()
+        kept.append(contentsOf: spaced.unicodeScalars.filter { !RowFolder.isControl($0) })
+        return String(kept).trimmingCharacters(in: .whitespaces)
     }
 
     /// The file a previous run saved under `baseName`, whatever its

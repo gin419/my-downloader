@@ -1819,14 +1819,16 @@ class DownloadManager: ObservableObject {
         // run made for this post is found by the id, and the tools of this
         // run write into it — so each finds what is already there. A found
         // name holding a "$" is never handed to a tool, which would expand
-        // it; the tools then pick their own folder.
-        // yt-dlp is handed the folder only when a video is in it. Otherwise
-        // the post's videos, if any, lie loose — saved before posts had
-        // folders, or several of them, which yt-dlp saves loose — and yt-dlp
-        // finds them only where it saved them.
+        // it, nor one gallery-dl would write elsewhere (a control character
+        // or whitespace at either end, which it drops); the tools then pick
+        // their own folder.
+        // yt-dlp is handed the folder only when a video of its own is in it.
+        // Otherwise the post's videos, if any, lie loose — saved before
+        // posts had folders, or several of them, which yt-dlp saves loose —
+        // and yt-dlp finds them only where it saved them.
         let found = RowFolder.postID(of: item.url)
             .flatMap { RowFolder.existing(in: outputDirectory, id: $0) }
-            .flatMap { RowFolder.isToolSafe($0.path) ? $0 : nil }
+            .flatMap { RowFolder.isReusable($0) ? $0 : nil }
         if let found { RowFolder.use(found, for: item) }
         let ytDlpDirectory = found.map { Self.holdsAVideo($0) ? $0 : outputDirectory }
         // The address comes first: without it there is nothing to hand
@@ -2127,7 +2129,7 @@ class DownloadManager: ObservableObject {
         let videoCanFollow = Self.videoCanFollowItsPhotos(item, root: root)
         let folderMode: GalleryDlService.FolderMode
         if let condition, let videoFolder, GalleryDlService.isDirectlyInside(videoFolder.path, root),
-            RowFolder.isToolSafe(videoFolder.path)
+            RowFolder.isReusable(videoFolder)
         {
             folderMode = .into(videoFolder, ownPost: condition)
         } else if let condition, let found = item.destination {
@@ -2175,10 +2177,19 @@ class DownloadManager: ObservableObject {
         return GalleryDlService.isDirectlyInside(videoPath, root)
     }
 
-    /// True when `folder` holds a video file directly.
+    /// True when `folder` directly holds a video yt-dlp could have saved.
+    /// gallery-dl and the fxtwitter rescue number every file of a post,
+    /// "<stem> [<id>] #<n>.<ext>"; yt-dlp names its own after the title
+    /// alone and never takes one of theirs for its copy. A folder holding
+    /// only their videos is not yt-dlp's: handed it, yt-dlp would fetch the
+    /// video again beside them, though its own copy lies loose in the
+    /// download folder.
     static func holdsAVideo(_ folder: URL) -> Bool {
         let names = (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
-        return names.contains { MediaExtensions.video.contains(($0 as NSString).pathExtension.lowercased()) }
+        return names.contains { name in
+            MediaExtensions.video.contains((name as NSString).pathExtension.lowercased())
+                && name.range(of: #"\] #\d+\.[^.]+$"#, options: .regularExpression) == nil
+        }
     }
 
     /// The one file ever moved after it was written: a post's single video,

@@ -218,7 +218,10 @@ enum GalleryDlService {
     static func ownPostCondition(for link: String) -> String? {
         guard let id = RowFolder.postID(of: link) else { return nil }
         switch SiteRegistry.profile(for: link).id {
-        case SiteRegistry.twitter.id: return "tweet_id == \(id)"
+        // The condition is Python, where "0123" is a syntax error that
+        // aborts the whole run: the tweet id is written as the number it
+        // is, and an id too long for one names no post the condition could.
+        case SiteRegistry.twitter.id: return UInt64(id).map { "tweet_id == \($0)" }
         // Ids and codes are of letters, digits, "_" and "-" only, so
         // neither needs escaping in the condition.
         case SiteRegistry.instagram.id: return "post_shortcode == \"\(id)\""

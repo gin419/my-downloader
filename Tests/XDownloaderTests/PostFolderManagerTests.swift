@@ -244,6 +244,55 @@ final class PostFolderManagerTests: XCTestCase {
         XCTAssertEqual(item.videoPath, loose.path)
     }
 
+    /// A folder holding the post's video as gallery-dl numbered it — saved
+    /// by the fallback after a partial yt-dlp run — is not yt-dlp's: yt-dlp
+    /// keeps to the download folder, where its own copy lies, and pasted
+    /// again the post fetches nothing.
+    func testAGalleryDlVideoInTheFolderKeepsYtDlpWithItsLooseVideo() async throws {
+        let loose = downloads.appendingPathComponent(videoName)
+        try Data("earlier".utf8).write(to: loose)
+        let folder = downloads.appendingPathComponent(stem, isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        for name in ["\(stem) #1.jpg", "\(stem) #2.jpg", "\(stem) #3.mp4"] {
+            try Data("earlier".utf8).write(to: folder.appendingPathComponent(name))
+        }
+        let manager = try makeManager(ytDlp: savesVideo, galleryDl: photoPass(photos: 2))
+
+        manager.capture(text: link, source: .field)
+
+        let item = try XCTUnwrap(manager.items.first)
+        try await waitUntil("the download finished") { self.history.count() == 1 }
+        XCTAssertEqual(item.status, .completed)
+        let ytDlp = try XCTUnwrap(try runs(ytDlpArguments).last)
+        XCTAssertEqual(value(after: "--output", in: ytDlp)?.hasPrefix(downloads.path + "/"), true)
+        XCTAssertEqual(value(after: "--output", in: ytDlp)?.hasPrefix(folder.path + "/"), false)
+        XCTAssertEqual(try fetched(), [], "nothing was fetched")
+        XCTAssertEqual(try contents(of: downloads), [stem, videoName])
+        XCTAssertEqual(try contents(of: folder), ["\(stem) #1.jpg", "\(stem) #2.jpg", "\(stem) #3.mp4"])
+        XCTAssertEqual(try Data(contentsOf: loose), Data("earlier".utf8))
+        XCTAssertEqual(item.outputPath, loose.path)
+    }
+
+    /// Only a video named as yt-dlp names its own makes a folder yt-dlp's:
+    /// gallery-dl's and the fxtwitter rescue's numbered videos do not, nor
+    /// do photos.
+    func testOnlyAVideoOfYtDlpsOwnMakesAFolderItsOwn() throws {
+        let folder = downloads.appendingPathComponent(stem, isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        XCTAssertFalse(DownloadManager.holdsAVideo(folder))
+        for name in ["\(stem) #1.jpg", "\(stem) #2.mp4", "\(stem) #10.MOV"] {
+            try Data("earlier".utf8).write(to: folder.appendingPathComponent(name))
+        }
+        XCTAssertFalse(DownloadManager.holdsAVideo(folder))
+        try Data("video".utf8).write(to: folder.appendingPathComponent(videoName))
+        XCTAssertTrue(DownloadManager.holdsAVideo(folder))
+
+        let numbered = downloads.appendingPathComponent("numbered [\(id)]", isDirectory: true)
+        try FileManager.default.createDirectory(at: numbered, withIntermediateDirectories: true)
+        try Data("video".utf8).write(to: numbered.appendingPathComponent("someone - mixed [01].mp4"))
+        XCTAssertTrue(DownloadManager.holdsAVideo(numbered))
+    }
+
     // MARK: - A photo post's found folder
 
     /// A found folder holding photos only takes gallery-dl's files for the
@@ -294,6 +343,31 @@ final class PostFolderManagerTests: XCTestCase {
         XCTAssertEqual(value(after: "--dest", in: galleryDl), downloads.path)
         XCTAssertTrue(galleryDl.contains { $0.hasPrefix(#"directory={"count > 1": "#) })
         XCTAssertFalse(galleryDl.contains { $0.contains("$") })
+        XCTAssertEqual(try contents(of: odd), ["kept.jpg"])
+        XCTAssertEqual(item.outputPath, downloads.appendingPathComponent("someone - one photo [\(id)].jpg").path)
+    }
+
+    /// A found folder whose name holds a tab is not the folder gallery-dl
+    /// would write to — it drops the tab — so it is never handed to a tool
+    /// either; the tools pick their own folder, and the found one is left
+    /// as it was.
+    func testAFolderWhoseNameHoldsATabIsNeverHandedToATool() async throws {
+        let odd = downloads.appendingPathComponent("someone - tab\there [\(id)]", isDirectory: true)
+        try FileManager.default.createDirectory(at: odd, withIntermediateDirectories: true)
+        try Data("photo".utf8).write(to: odd.appendingPathComponent("kept.jpg"))
+        let manager = try makeManager(ytDlp: findsNoVideo, galleryDl: postRun(stem: "someone - one photo [\(id)]", photos: 1))
+
+        manager.capture(text: link, source: .field)
+
+        let item = try XCTUnwrap(manager.items.first)
+        try await waitUntil("the download finished") { self.history.count() == 1 }
+        XCTAssertEqual(item.status, .completed)
+        let ytDlp = try XCTUnwrap(try runs(ytDlpArguments).last)
+        XCTAssertEqual(value(after: "--output", in: ytDlp)?.hasPrefix(downloads.path + "/"), true)
+        XCTAssertFalse(ytDlp.contains { $0.contains("\t") })
+        let galleryDl = try XCTUnwrap(try runs(galleryDlArguments).last)
+        XCTAssertTrue(galleryDl.contains { $0.hasPrefix(#"directory={"count > 1": "#) })
+        XCTAssertFalse(galleryDl.contains { $0.contains("\t") || $0.contains(#"\t"#) })
         XCTAssertEqual(try contents(of: odd), ["kept.jpg"])
         XCTAssertEqual(item.outputPath, downloads.appendingPathComponent("someone - one photo [\(id)].jpg").path)
     }

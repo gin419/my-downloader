@@ -24,6 +24,15 @@ final class FxTwitterSanitizeTests: XCTestCase {
         XCTAssertEqual(FxTwitterService.sanitize("  trim  "), "trim")
     }
 
+    /// gallery-dl drops every other control character from the names it
+    /// makes, so a tab in the tweet text never reaches a folder name that
+    /// gallery-dl would write elsewhere.
+    func testOtherControlCharactersAreDropped() {
+        XCTAssertEqual(FxTwitterService.sanitize("a\tb\u{7F}c\u{01}d"), "abcd")
+        XCTAssertEqual(FxTwitterService.sanitize("\tlead [1]"), "lead [1]")
+        XCTAssertTrue(RowFolder.isReusable(URL(fileURLWithPath: "/downloads/" + FxTwitterService.sanitize("nick - a\tb [1]"))))
+    }
+
     func testCombinedReplacements() {
         XCTAssertEqual(FxTwitterService.sanitize("x/y\nz"), "x_y z")
     }

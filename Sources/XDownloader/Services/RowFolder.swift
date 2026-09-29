@@ -36,6 +36,27 @@ enum RowFolder {
         !path.contains("$")
     }
 
+    /// True for a folder found on disk that a later run may write into:
+    /// its path is tool-safe, and gallery-dl, handed the name, writes to
+    /// exactly that folder. gallery-dl drops control characters from a
+    /// folder name and trims whitespace around it, so a name holding
+    /// either would send the post's files into a second folder of the
+    /// cleaned name. Such a folder is passed over like one whose name
+    /// holds a "$", and the tools pick their own.
+    static func isReusable(_ folder: URL) -> Bool {
+        let name = folder.lastPathComponent
+        guard isToolSafe(folder.path), let first = name.unicodeScalars.first, let last = name.unicodeScalars.last
+        else { return false }
+        let edges = CharacterSet.whitespacesAndNewlines
+        return !name.unicodeScalars.contains(where: isControl) && !edges.contains(first) && !edges.contains(last)
+    }
+
+    /// The characters gallery-dl removes from every path segment it makes
+    /// (its "path-remove" default): U+0000 to U+001F and U+007F.
+    static func isControl(_ scalar: Unicode.Scalar) -> Bool {
+        scalar.value < 0x20 || scalar.value == 0x7F
+    }
+
     /// The directory part of a yt-dlp output template. "%" opens a field
     /// there, so a folder named "50% off" would be read as a broken one;
     /// doubled, it is a plain percent sign. A path without "%" comes out

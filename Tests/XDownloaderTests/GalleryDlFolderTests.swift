@@ -123,6 +123,35 @@ final class GalleryDlFolderArgumentTests: XCTestCase {
         try assertValidJSON(expectedPost)
     }
 
+    /// A found name gallery-dl would clean — a control character in it, or
+    /// whitespace at either end — is not the folder it would write to, so
+    /// it is never handed over; names it keeps as they are may be.
+    func testAFoundNameGalleryDlWouldCleanIsPassedOver() {
+        for name in [
+            "someone - tab\there [1234567890123]", " someone - lead space [1234567890123]",
+            "someone - trail space [1234567890123] ", "someone - del\u{7F} [1234567890123]",
+            "someone - $HOME [1234567890123]",
+        ] {
+            XCTAssertFalse(RowFolder.isReusable(downloads.appendingPathComponent(name, isDirectory: true)), name)
+        }
+        for name in [
+            #"someone - {braces} "quoted" \ [1234567890123]"#, "someone - 日本語 café [1234567890123]",
+            "someone - two photos [1234567890123]",
+        ] {
+            XCTAssertTrue(RowFolder.isReusable(downloads.appendingPathComponent(name, isDirectory: true)), name)
+        }
+    }
+
+    /// The condition is Python: a tweet id with leading zeros would be a
+    /// syntax error that aborts the whole run, so the id is written as the
+    /// number it is; one too long for a number names no post at all.
+    func testTheOwnPostConditionWritesTheTweetIDAsANumber() {
+        XCTAssertEqual(
+            GalleryDlService.ownPostCondition(for: "https://x.com/someone/status/0001234567890123"),
+            "tweet_id == 1234567890123")
+        XCTAssertNil(GalleryDlService.ownPostCondition(for: "https://x.com/someone/status/123456789012345678901234"))
+    }
+
     // MARK: - Helpers
 
     private func value(after flag: String, in args: [String]) -> String? {

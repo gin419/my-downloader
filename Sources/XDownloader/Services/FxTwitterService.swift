@@ -59,10 +59,11 @@ enum FxTwitterService {
         // spell the stem their own way, and only its " [<id>]" is shared.
         // Looked up here, as the rescue starts, so a partial run and its
         // Retry meet in that one folder whatever their number of files. A
-        // name holding a "$" is passed over, as it is for the tools, so
-        // every run settles on the same folder. The folder is made only
-        // with a complete file to put in it.
-        let found = RowFolder.existing(in: outputDirectory, id: id).flatMap { RowFolder.isToolSafe($0.path) ? $0 : nil }
+        // name holding a "$", a control character or whitespace at either
+        // end is passed over, as it is for the tools, so every run settles
+        // on the same folder. The folder is made only with a complete file
+        // to put in it.
+        let found = RowFolder.existing(in: outputDirectory, id: id).flatMap { RowFolder.isReusable($0) ? $0 : nil }
         let directory =
             found ?? RowFolder.folder(in: outputDirectory, name: stemBase, fileCount: urls.count) ?? outputDirectory
 
