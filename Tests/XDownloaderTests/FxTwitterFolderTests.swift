@@ -68,12 +68,50 @@ final class FxTwitterFolderTests: XCTestCase {
         try FileManager.default.createDirectory(at: found, withIntermediateDirectories: true)
         let item = DownloadItem(url: "https://x.com/someone/status/\(id)")
 
-        let finished = await FxTwitterService.run(
-            item: item, outputDirectory: downloads, foundFolder: found, session: stubSession())
+        let finished = await FxTwitterService.run(item: item, outputDirectory: downloads, session: stubSession())
 
         XCTAssertTrue(finished)
         XCTAssertEqual(try contents(of: found), ["someone - one photo [\(id)] #1.jpg"])
         XCTAssertEqual(try contents(of: downloads), [found.lastPathComponent])
+    }
+
+    /// A folder gallery-dl made for the tweet moments before, in the same
+    /// run and under its own spelling of the stem, takes the rescue's files:
+    /// the tweet is not split across two folders, and the next run finds
+    /// the one folder there is.
+    func testAFolderMadeEarlierInTheSameRunTakesTheFiles() async throws {
+        stubTweet(text: "two photos", photos: 2)
+        let item = DownloadItem(url: "https://x.com/someone/status/\(id)")
+        let madeByGalleryDl = downloads.appendingPathComponent("someone - two  photos [\(id)]", isDirectory: true)
+        try FileManager.default.createDirectory(at: madeByGalleryDl, withIntermediateDirectories: true)
+        try Data("synthetic".utf8).write(to: madeByGalleryDl.appendingPathComponent("someone - two  photos [\(id)] #1.jpg"))
+
+        let finished = await FxTwitterService.run(item: item, outputDirectory: downloads, session: stubSession())
+
+        XCTAssertTrue(finished)
+        XCTAssertEqual(try contents(of: downloads), [madeByGalleryDl.lastPathComponent])
+        XCTAssertEqual(
+            try contents(of: madeByGalleryDl),
+            [
+                "someone - two  photos [\(id)] #1.jpg", "someone - two photos [\(id)] #1.jpg",
+                "someone - two photos [\(id)] #2.jpg",
+            ])
+    }
+
+    /// A found folder whose name holds a "$" is passed over, as the tools
+    /// pass it over: the rescue makes the tweet's own folder.
+    func testAFoundFolderWhoseNameHoldsADollarSignIsPassedOver() async throws {
+        stubTweet(text: "two photos", photos: 2)
+        let odd = downloads.appendingPathComponent("someone - $HOME [\(id)]", isDirectory: true)
+        try FileManager.default.createDirectory(at: odd, withIntermediateDirectories: true)
+        let item = DownloadItem(url: "https://x.com/someone/status/\(id)")
+
+        let finished = await FxTwitterService.run(item: item, outputDirectory: downloads, session: stubSession())
+
+        XCTAssertTrue(finished)
+        XCTAssertEqual(try contents(of: odd), [])
+        let stem = "someone - two photos [\(id)]"
+        XCTAssertEqual(try contents(of: downloads.appendingPathComponent(stem)), ["\(stem) #1.jpg", "\(stem) #2.jpg"])
     }
 
     /// Every transfer failing leaves no folder, and the prior failure stands.

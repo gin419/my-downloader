@@ -2517,9 +2517,8 @@ class DownloadManager: ObservableObject {
     /// Stop mid-run (see `runResolverTask`).
     private func runFxTwitterFallback(_ item: DownloadItem) async -> Bool {
         let directory = outputDirectory
-        let foundFolder = item.destination
         return await runResolverTask(item) {
-            await FxTwitterService.run(item: item, outputDirectory: directory, foundFolder: foundFolder)
+            await FxTwitterService.run(item: item, outputDirectory: directory)
         }
     }
 

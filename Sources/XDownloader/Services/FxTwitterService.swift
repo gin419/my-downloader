@@ -18,13 +18,8 @@ enum FxTwitterService {
     /// files saved because the destination disk is full or unwritable → a
     /// disk failure, because restoring the prior "No media found…" message
     /// would blame the tweet for a local problem.
-    ///
-    /// `foundFolder` is a folder an earlier run made for this tweet (see
-    /// `RowFolder.existing`); the files go into it whatever their number.
     @MainActor
-    static func run(
-        item: DownloadItem, outputDirectory: URL, foundFolder: URL? = nil, session: URLSession = .shared
-    ) async -> Bool {
+    static func run(item: DownloadItem, outputDirectory: URL, session: URLSession = .shared) async -> Bool {
         guard let id = tweetID(from: item.url) else { return false }
 
         let priorStatus = item.status
@@ -58,12 +53,18 @@ enum FxTwitterService {
         // Mirror gallery-dl's filename scheme (see GalleryDlService.formatArgs)
         // so re-downloads of the same tweet dedupe across both backends.
         let stemBase = sanitize("\(nick) - \(String(text.prefix(100))) [\(id)]")
-        // Two or more files get a folder named after the stem, unless an
-        // earlier run's folder for this tweet is there: the other tools
+        // Two or more files get a folder named after the stem, unless a
+        // folder for this tweet is there — an earlier run's, or one
+        // gallery-dl made moments ago in this very run: the other tools
         // spell the stem their own way, and only its " [<id>]" is shared.
-        // The folder is made only with a complete file to put in it.
+        // Looked up here, as the rescue starts, so a partial run and its
+        // Retry meet in that one folder whatever their number of files. A
+        // name holding a "$" is passed over, as it is for the tools, so
+        // every run settles on the same folder. The folder is made only
+        // with a complete file to put in it.
+        let found = RowFolder.existing(in: outputDirectory, id: id).flatMap { RowFolder.isToolSafe($0.path) ? $0 : nil }
         let directory =
-            foundFolder ?? RowFolder.folder(in: outputDirectory, name: stemBase, fileCount: urls.count) ?? outputDirectory
+            found ?? RowFolder.folder(in: outputDirectory, name: stemBase, fileCount: urls.count) ?? outputDirectory
 
         var savedPaths: [String] = []
         var imageCount = 0
