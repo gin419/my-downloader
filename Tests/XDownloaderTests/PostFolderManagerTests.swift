@@ -3,11 +3,14 @@ import XCTest
 @testable import XDownloader
 
 /// An X post's folder through DownloadManager itself: a folder an earlier
-/// run made for the post is found by the id its name ends in and handed to
-/// every tool of the run; a folder whose name holds a "$" is never handed to
-/// a tool; and a mixed post's video, saved loose by yt-dlp before its photos
-/// went into the post's folder, follows them in — only when yt-dlp saved it
-/// in this very run, and never over a file already there. The yt-dlp and
+/// run made for the post is found by the id its name ends in and takes the
+/// post's files — yt-dlp's only when a video is in it; a folder whose name
+/// holds a "$" is never handed to a tool; a mixed post's video, saved loose
+/// by yt-dlp before its photos went into the post's folder, follows them in
+/// — only when yt-dlp saved it in this very run, it is the post's only one,
+/// and never over a file already there — and any other loose video keeps
+/// its photos loose beside it; and a post pasted again fetches nothing it
+/// already has. The yt-dlp and
 /// gallery-dl the manager is given are scripts that record their arguments
 /// and save or skip files the way the tools report them, so nothing here
 /// touches the network, a browser or a cookie. Every name and id is
@@ -98,8 +101,8 @@ final class PostFolderManagerTests: XCTestCase {
         let ytDlp = try XCTUnwrap(try runs(ytDlpArguments).last)
         XCTAssertEqual(value(after: "--output", in: ytDlp)?.hasPrefix(folder.path + "/"), true)
         let secondSweep = try XCTUnwrap(try runs(galleryDlArguments).last)
-        XCTAssertEqual(value(after: "--dest", in: secondSweep), folder.path)
-        XCTAssertFalse(secondSweep.contains { $0.hasPrefix("directory=") })
+        XCTAssertEqual(value(after: "--dest", in: secondSweep), downloads.path)
+        XCTAssertTrue(secondSweep.contains { $0.hasPrefix(#"directory={"tweet_id == \#(id)": ["\#(stem)"]"#) })
         XCTAssertEqual(try contents(of: downloads), [stem])
         XCTAssertEqual(try contents(of: folder), ["\(stem) #1.jpg", "\(stem) #2.jpg", videoName])
         XCTAssertEqual(item.outputPath, moved)
@@ -119,7 +122,8 @@ final class PostFolderManagerTests: XCTestCase {
     }
 
     /// A video saved before posts had folders stays where it is: yt-dlp
-    /// only reported it as already there.
+    /// only reported it as already there. Its photos stay loose beside it,
+    /// so the post is not split between a folder and the download folder.
     func testAVideoAlreadyOnDiskIsNeverMoved() async throws {
         let loose = downloads.appendingPathComponent(videoName)
         try Data("earlier".utf8).write(to: loose)
@@ -130,11 +134,94 @@ final class PostFolderManagerTests: XCTestCase {
         let item = try XCTUnwrap(manager.items.first)
         try await waitUntil("the download finished") { self.history.count() == 1 }
         XCTAssertEqual(item.status, .completed)
+        XCTAssertEqual(try contents(of: downloads), ["\(stem) #1.jpg", "\(stem) #2.jpg", videoName])
+        XCTAssertEqual(try Data(contentsOf: loose), Data("earlier".utf8))
+        XCTAssertEqual(item.outputPath, loose.path)
+        let sweep = try XCTUnwrap(try runs(galleryDlArguments).last)
+        XCTAssertEqual(value(after: "--dest", in: sweep), downloads.path)
+        XCTAssertFalse(sweep.contains { $0.hasPrefix("directory=") })
+    }
+
+    /// A post whose several videos yt-dlp saves loose keeps its photos
+    /// loose beside them, and pasted again fetches nothing: no folder sends
+    /// the next run's yt-dlp away from where it saved the videos.
+    func testSeveralVideosAndTheirPhotosStayLooseAndARerunFetchesNothing() async throws {
+        let manager = try makeManager(ytDlp: savesTwoVideos, galleryDl: photoPass(photos: 2))
+
+        manager.capture(text: link, source: .field)
+
+        let item = try XCTUnwrap(manager.items.first)
+        try await waitUntil("the download finished") { self.history.count() == 1 }
+        XCTAssertEqual(item.status, .completed)
+        XCTAssertEqual(item.videoCount, 2)
+        let everything = ["someone - mixed [01].mp4", "someone - mixed [02].mp4", "\(stem) #1.jpg", "\(stem) #2.jpg"]
+        XCTAssertEqual(try contents(of: downloads), everything)
+        XCTAssertFalse(try XCTUnwrap(try runs(galleryDlArguments).last).contains { $0.hasPrefix("directory=") })
+        XCTAssertEqual(try fetched().count, 4)
+
+        try await waitUntil("the retry was taken") {
+            manager.retryItem(item)
+            return item.status != .completed
+        }
+        try await waitUntil("the second run finished") {
+            ((try? self.runs(self.ytDlpArguments).count) ?? 0) == 2 && item.status == .completed
+        }
+        let ytDlp = try XCTUnwrap(try runs(ytDlpArguments).last)
+        XCTAssertEqual(value(after: "--output", in: ytDlp)?.hasPrefix(downloads.path + "/"), true)
+        XCTAssertEqual(try contents(of: downloads), everything)
+        XCTAssertEqual(try fetched().count, 4, "nothing was fetched again")
+    }
+
+    /// A post split before this fix — its video loose, its photos in the
+    /// post's folder — pasted again: yt-dlp looks where the video is, the
+    /// photo pass where the photos are, and nothing is fetched or moved.
+    func testASplitPostPastedAgainFetchesNothing() async throws {
+        let loose = downloads.appendingPathComponent(videoName)
+        try Data("earlier".utf8).write(to: loose)
         let folder = downloads.appendingPathComponent(stem, isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        for n in 1...2 {
+            try Data("photo".utf8).write(to: folder.appendingPathComponent("\(stem) #\(n).jpg"))
+        }
+        let manager = try makeManager(ytDlp: savesVideo, galleryDl: photoPass(photos: 2))
+
+        manager.capture(text: link, source: .field)
+
+        let item = try XCTUnwrap(manager.items.first)
+        try await waitUntil("the download finished") { self.history.count() == 1 }
+        XCTAssertEqual(item.status, .completed)
+        let ytDlp = try XCTUnwrap(try runs(ytDlpArguments).last)
+        XCTAssertEqual(value(after: "--output", in: ytDlp)?.hasPrefix(downloads.path + "/"), true)
+        let sweep = try XCTUnwrap(try runs(galleryDlArguments).last)
+        XCTAssertEqual(value(after: "--dest", in: sweep), downloads.path)
+        XCTAssertTrue(sweep.contains { $0.hasPrefix(#"directory={"tweet_id == \#(id)": ["\#(stem)"]"#) })
+        XCTAssertEqual(try fetched(), [], "nothing was fetched")
         XCTAssertEqual(try contents(of: downloads), [stem, videoName])
         XCTAssertEqual(try contents(of: folder), ["\(stem) #1.jpg", "\(stem) #2.jpg"])
         XCTAssertEqual(try Data(contentsOf: loose), Data("earlier".utf8))
         XCTAssertEqual(item.outputPath, loose.path)
+    }
+
+    /// A folder found with the post's photos and no video: yt-dlp saves the
+    /// video loose, where it looks for it, and the video then follows the
+    /// photos into the folder, as on a first run.
+    func testAVideoSavedBesideAFoundFolderFollowsItsPhotosIn() async throws {
+        let folder = downloads.appendingPathComponent(stem, isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        for n in 1...2 {
+            try Data("photo".utf8).write(to: folder.appendingPathComponent("\(stem) #\(n).jpg"))
+        }
+        let manager = try makeManager(ytDlp: savesVideo, galleryDl: photoPass(photos: 2))
+
+        manager.capture(text: link, source: .field)
+
+        let item = try XCTUnwrap(manager.items.first)
+        try await waitUntil("the download finished") { self.history.count() == 1 }
+        XCTAssertEqual(item.status, .completed)
+        XCTAssertEqual(try fetched().count, 1, "only the video was fetched")
+        XCTAssertEqual(try contents(of: downloads), [stem])
+        XCTAssertEqual(try contents(of: folder), ["\(stem) #1.jpg", "\(stem) #2.jpg", videoName])
+        XCTAssertEqual(item.outputPath, folder.appendingPathComponent(videoName).path)
     }
 
     /// A file of the video's name already in the folder is never replaced:
@@ -159,7 +246,10 @@ final class PostFolderManagerTests: XCTestCase {
 
     // MARK: - A photo post's found folder
 
-    func testAFoundFolderIsHandedToEveryToolOfTheRun() async throws {
+    /// A found folder holding photos only takes gallery-dl's files for the
+    /// post; yt-dlp keeps to the download folder, where a video of the post
+    /// would be.
+    func testAFoundFolderTakesThePostsFilesFromGalleryDl() async throws {
         let folder = downloads.appendingPathComponent("someone - two photos [\(id)]", isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         for n in 1...2 {
@@ -173,10 +263,12 @@ final class PostFolderManagerTests: XCTestCase {
         try await waitUntil("the download finished") { self.history.count() == 1 }
         XCTAssertEqual(item.status, .completed)
         let ytDlp = try XCTUnwrap(try runs(ytDlpArguments).last)
-        XCTAssertEqual(value(after: "--output", in: ytDlp)?.hasPrefix(folder.path + "/"), true)
+        XCTAssertEqual(value(after: "--output", in: ytDlp)?.hasPrefix(downloads.path + "/"), true)
         let galleryDl = try XCTUnwrap(try runs(galleryDlArguments).last)
-        XCTAssertEqual(value(after: "--dest", in: galleryDl), folder.path)
-        XCTAssertFalse(galleryDl.contains { $0.hasPrefix("directory=") })
+        XCTAssertEqual(value(after: "--dest", in: galleryDl), downloads.path)
+        XCTAssertTrue(
+            galleryDl.contains { $0.hasPrefix(#"directory={"tweet_id == \#(id)": ["someone - two photos [\#(id)]"]"#) })
+        XCTAssertEqual(try contents(of: downloads), [folder.lastPathComponent])
         XCTAssertEqual(URL(fileURLWithPath: try XCTUnwrap(item.outputPath)).deletingLastPathComponent().path, folder.path)
         XCTAssertEqual(try contents(of: folder).count, 2)
         XCTAssertFalse(FileManager.default.fileExists(atPath: fetchLog.path), "nothing was fetched")
@@ -229,6 +321,32 @@ final class PostFolderManagerTests: XCTestCase {
         """
     }
 
+    /// yt-dlp saving a post's two videos, each numbered by its place in the
+    /// post as the Instagram and X templates number them, or reporting them
+    /// already there.
+    private var savesTwoVideos: String {
+        """
+        for n in 01 02; do
+            file="$dir/someone - mixed [$n].mp4"
+            if [ -f "$file" ]; then
+                echo "[download] $file has already been downloaded"
+            else
+                printf 'video' > "$file"
+                echo "$file" >> "\(fetchLog.path)"
+                echo "[download] Destination: $file"
+                echo "[download] 100% of 5.00B in 00:00"
+            fi
+        done
+        exit 0
+
+        """
+    }
+
+    private func fetched() throws -> [String] {
+        guard FileManager.default.fileExists(atPath: fetchLog.path) else { return [] }
+        return try String(contentsOf: fetchLog, encoding: .utf8).split(separator: "\n").map(String.init)
+    }
+
     /// yt-dlp on a photo post.
     private var findsNoVideo: String {
         """
@@ -267,17 +385,24 @@ final class PostFolderManagerTests: XCTestCase {
         """
     }
 
-    /// gallery-dl's run on a photo post: `photos` photos flat into the
-    /// destination (the post's folder when one was handed over), each saved
-    /// or reported as already there.
+    /// gallery-dl's run on a photo post: `photos` photos placed as the
+    /// "directory" option asks — into the folder it names for the post, or
+    /// into a folder of the stem for two or more when it asks by count — or
+    /// flat into the destination, each saved or reported as already there.
     private func postRun(stem: String, photos: Int = 2) -> String {
         """
+        folder="$dest"
+        case "$directory" in
+            *'"tweet_id == \(id)": ["\(stem)"]'*) folder="$dest/\(stem)" ;;
+            *'"count > 1"'*) if [ \(photos) -gt 1 ]; then folder="$dest/\(stem)"; fi ;;
+        esac
         n=1
         while [ $n -le \(photos) ]; do
-            file="$dest/\(stem) #$n.jpg"
+            file="$folder/\(stem) #$n.jpg"
             if [ -f "$file" ]; then
                 echo "# $file"
             else
+                mkdir -p "$folder"
                 printf 'photo' > "$file"
                 echo "$file" >> "\(fetchLog.path)"
                 echo "$file"

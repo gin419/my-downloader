@@ -1816,15 +1816,19 @@ class DownloadManager: ObservableObject {
         }
         // An X or Instagram post's folder ends in the post's id, and each
         // tool spells the rest of its name its own way: a folder an earlier
-        // run made for this post is found by the id, and every tool of this
-        // run writes into it — so each finds what is already there. A found
+        // run made for this post is found by the id, and the tools of this
+        // run write into it — so each finds what is already there. A found
         // name holding a "$" is never handed to a tool, which would expand
         // it; the tools then pick their own folder.
-        if let id = RowFolder.postID(of: item.url), let found = RowFolder.existing(in: outputDirectory, id: id),
-            RowFolder.isToolSafe(found.path)
-        {
-            RowFolder.use(found, for: item)
-        }
+        // yt-dlp is handed the folder only when a video is in it. Otherwise
+        // the post's videos, if any, lie loose — saved before posts had
+        // folders, or several of them, which yt-dlp saves loose — and yt-dlp
+        // finds them only where it saved them.
+        let found = RowFolder.postID(of: item.url)
+            .flatMap { RowFolder.existing(in: outputDirectory, id: $0) }
+            .flatMap { RowFolder.isToolSafe($0.path) ? $0 : nil }
+        if let found { RowFolder.use(found, for: item) }
+        let ytDlpDirectory = found.map { Self.holdsAVideo($0) ? $0 : outputDirectory }
         // The address comes first: without it there is nothing to hand
         // yt-dlp. Every run asks again — a first run, a Retry, a Resume and
         // the re-runs below all pass through here.
@@ -1855,7 +1859,7 @@ class DownloadManager: ObservableObject {
         let runYtDlp = { [self] () async -> ProcessResult in
             let args = YtDlpService.buildArguments(
                 for: item,
-                outputDirectory: item.destination ?? outputDirectory,
+                outputDirectory: ytDlpDirectory ?? item.destination ?? outputDirectory,
                 format: youtubeFormat,
                 videoQuality: videoQuality,
                 audioQuality: audioQuality,
@@ -2107,20 +2111,31 @@ class DownloadManager: ObservableObject {
             let gdlPath = galleryDlPath
         else { return }
         let root = outputDirectory
+        let condition = GalleryDlService.ownPostCondition(for: item.url)
         // The photos go where the video is when that is a folder already
-        // (one found for this post). A loose video's photos go into the
-        // post's own folder — its own id makes it one whatever the count,
-        // which here leaves the video out — and the video follows them in.
+        // (one found for this post), or else into a folder found for the
+        // post, where an earlier run put them. Without one, a video yt-dlp
+        // saved loose in this run, the post's only one, can follow its
+        // photos into the post's own folder — its own id makes it one
+        // whatever the count, which here leaves the video out. Any other
+        // loose video (one of several, or one saved before posts had
+        // folders) stays where it is, so the photos stay loose beside it:
+        // a post split between a folder and the download folder would send
+        // the next run's yt-dlp into the folder, where it would fetch the
+        // videos again.
         let videoFolder = item.videoPath.map { URL(fileURLWithPath: $0).deletingLastPathComponent() }
+        let videoCanFollow = Self.videoCanFollowItsPhotos(item, root: root)
         let folderMode: GalleryDlService.FolderMode
-        if let videoFolder, videoFolder.standardizedFileURL != root.standardizedFileURL,
+        if let condition, let videoFolder, GalleryDlService.isDirectlyInside(videoFolder.path, root),
             RowFolder.isToolSafe(videoFolder.path)
         {
-            folderMode = .into(videoFolder)
-        } else if let condition = GalleryDlService.ownPostCondition(for: item.url) {
+            folderMode = .into(videoFolder, ownPost: condition)
+        } else if let condition, let found = item.destination {
+            folderMode = .into(found, ownPost: condition)
+        } else if let condition, videoCanFollow {
             folderMode = .perPost(always: condition)
         } else {
-            folderMode = .perPostIfMultiple
+            folderMode = .flat
         }
         let cookies = resolveCookiesForDownload()
         var sweepResult: GalleryDlService.SweepResult?
@@ -2147,9 +2162,23 @@ class DownloadManager: ObservableObject {
         if let sweepResult, !userPausedSweep {
             recordImageSweepOutcome(result: sweepResult.exit)
         }
-        if case .perPost = folderMode, let sweepResult {
+        if videoCanFollow, let sweepResult {
             Self.moveVideoToItsPhotos(item, photos: sweepResult.photos, root: root)
         }
+    }
+
+    /// True when the row's video may follow its photos into the post's
+    /// folder: yt-dlp saved it loose in this very run, and it is the post's
+    /// only one. Several videos stay loose together, as yt-dlp saved them.
+    static func videoCanFollowItsPhotos(_ item: DownloadItem, root: URL) -> Bool {
+        guard item.videoDownloadedThisRun, item.videoCount == 1, let videoPath = item.videoPath else { return false }
+        return GalleryDlService.isDirectlyInside(videoPath, root)
+    }
+
+    /// True when `folder` holds a video file directly.
+    static func holdsAVideo(_ folder: URL) -> Bool {
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
+        return names.contains { MediaExtensions.video.contains(($0 as NSString).pathExtension.lowercased()) }
     }
 
     /// The one file ever moved after it was written: a post's single video,
@@ -2160,8 +2189,7 @@ class DownloadManager: ObservableObject {
     /// at least one of this post's photos. A name already taken there, or a
     /// failed move, leaves the video loose and the row pointing at it.
     static func moveVideoToItsPhotos(_ item: DownloadItem, photos: [GalleryDlService.ReportedMedia], root: URL) {
-        guard item.videoDownloadedThisRun, item.videoCount == 1, let videoPath = item.videoPath,
-            GalleryDlService.isDirectlyInside(videoPath, root),
+        guard videoCanFollowItsPhotos(item, root: root), let videoPath = item.videoPath,
             let id = RowFolder.postID(of: item.url)
         else { return }
         let folder = photos.lazy
@@ -2185,10 +2213,14 @@ class DownloadManager: ObservableObject {
         item.status = .fetching
         item.resetForReattempt()
 
-        // A folder found for this post at the start of the run takes every
-        // file flat; otherwise gallery-dl gives a post of two or more files
-        // its own folder.
-        let folderMode: GalleryDlService.FolderMode = item.destination.map { .into($0) } ?? .perPostIfMultiple
+        // A folder found for this post at the start of the run takes the
+        // post's files; otherwise gallery-dl gives a post of two or more
+        // files its own folder. Other posts the run meets go where their own
+        // count puts them either way.
+        let folderMode: GalleryDlService.FolderMode =
+            item.destination.flatMap { folder in
+                GalleryDlService.ownPostCondition(for: item.url).map { .into(folder, ownPost: $0) }
+            } ?? .perPostIfMultiple
         let cookies = resolveCookiesForDownload()
         await cookieAccess.withScope(for: item.id, file: cookies.path, grantedURL: cookies.granted) {
             await GalleryDlService.run(

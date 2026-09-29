@@ -150,7 +150,7 @@ enum GalleryDlService {
                 for: item.url, outputDirectory: outputDirectory, folderMode: folderMode,
                 cookieBrowser: cookieBrowser, cookieBrowserProfile: cookieBrowserProfile,
                 cookiesFile: cookiesFile),
-            outputDirectory: folderMode.destination(in: outputDirectory),
+            outputDirectory: outputDirectory,
             looseDirectory: outputDirectory,
             register: register,
             unregister: unregister,
@@ -174,15 +174,14 @@ enum GalleryDlService {
         /// gets its folder, whatever its count: the photo pass, whose count
         /// leaves out the video yt-dlp already saved.
         case perPost(always: String)
-        /// Flat into this folder, found on disk from an earlier run of the
-        /// same post (see `RowFolder.existing`).
-        case into(URL)
-
-        /// The folder gallery-dl is handed as its destination.
-        func destination(in downloadFolder: URL) -> URL {
-            if case .into(let folder) = self { return folder }
-            return downloadFolder
-        }
+        /// The post `ownPost` names into this folder, found on disk from an
+        /// earlier run of the same post (see `RowFolder.existing`), whatever
+        /// its count; every other post the run meets (a quoted tweet) as
+        /// `perPostIfMultiple` places it. The destination stays the
+        /// download folder: flat into the found folder, a quoted tweet's
+        /// files would miss where the first run put them, be fetched again
+        /// and land in another post's folder.
+        case into(URL, ownPost: String)
     }
 
     /// The gallery-dl option that picks a post's folder from its own
@@ -193,16 +192,24 @@ enum GalleryDlService {
     /// config. A keyword a post lacks makes its condition false, so a post
     /// without a `count` stays loose.
     static func directoryOption(for mode: FolderMode, format: String?) -> String? {
-        guard let format else { return nil }
-        let conditions: [String]
+        var entries: [(condition: String, folder: String)] = []
         switch mode {
-        case .flat, .into: return nil
-        case .perPostIfMultiple: conditions = ["count > 1"]
-        case .perPost(let always): conditions = [always, "count > 1"]
+        case .flat: return nil
+        case .perPostIfMultiple: break
+        case .perPost(let always): if let format { entries.append((always, format)) }
+        case .into(let folder, let ownPost): entries.append((ownPost, literalSegment(folder.lastPathComponent)))
         }
-        let folder = "[\(jsonString(format))]"
-        let entries = conditions.map { "\(jsonString($0)): \(folder)" } + [#""": []"#]
-        return "directory={\(entries.joined(separator: ", "))}"
+        if let format { entries.append(("count > 1", format)) }
+        guard !entries.isEmpty else { return nil }
+        let rules = entries.map { "\(jsonString($0.condition)): [\(jsonString($0.folder))]" } + [#""": []"#]
+        return "directory={\(rules.joined(separator: ", "))}"
+    }
+
+    /// `name` as a directory format that yields exactly `name`: a brace
+    /// opens a field in gallery-dl's format strings, and doubled it is a
+    /// plain brace.
+    static func literalSegment(_ name: String) -> String {
+        name.replacingOccurrences(of: "{", with: "{{").replacingOccurrences(of: "}", with: "}}")
     }
 
     /// The condition that names the post `link` points at among the posts
@@ -490,13 +497,14 @@ enum GalleryDlService {
         // Sync category from final counts (overrides whatever parseLine may have set).
         item.recomputeMediaCategory()
 
-        // Rename single-image files: strip trailing " #1" suffix. Only a
-        // file loose in the download folder is a one-file post's: inside a
-        // post's folder, " #1" is the first of several and keeps its number.
-        let looseImages = newImages.filter { path in
-            looseDirectory.map { Self.isDirectlyInside(path, $0) } ?? false
-        }
-        if stripsSingleFileSuffix, looseImages.count == 1, let path = looseImages.first {
+        // Rename single-image files: strip trailing " #1" suffix. Only when
+        // the run saved that one image, as before posts had folders — a
+        // quoted tweet's lone photo beside a post of several keeps its
+        // number, so the next run finds it under the name it asks for —
+        // and only a file loose in the download folder is a one-file
+        // post's: inside a post's folder, " #1" is the first of several.
+        let isLoose = { (path: String) in looseDirectory.map { Self.isDirectlyInside(path, $0) } ?? false }
+        if stripsSingleFileSuffix, newImages.count == 1, let path = newImages.first, isLoose(path) {
             let u = URL(fileURLWithPath: path)
             let stem = u.deletingPathExtension().lastPathComponent
             if stem.hasSuffix(" #1") {
@@ -537,7 +545,7 @@ enum GalleryDlService {
     ) -> [String] {
         let profile = SiteRegistry.profile(for: url)
         return commandLine(
-            url: url, outputDirectory: folderMode.destination(in: outputDirectory),
+            url: url, outputDirectory: outputDirectory,
             directoryOption: directoryOption(for: folderMode, format: profile.galleryDlFolderFormat),
             cookieBrowser: cookieBrowser, cookieBrowserProfile: cookieBrowserProfile, cookiesFile: cookiesFile,
             siteArgs: profile.galleryDlArgs + extraArgs)

@@ -64,15 +64,38 @@ final class GalleryDlFolderArgumentTests: XCTestCase {
         XCTAssertEqual(directoryOptions(profile), [])
     }
 
-    /// A folder found for the post takes every file flat: it is the
-    /// destination, and no folder is asked for inside it.
-    func testAFoundFolderIsTheDestinationAndGetsNoFolderInside() {
+    /// A folder found for the post takes the pasted post's files only: the
+    /// destination stays the download folder, the post is named first and
+    /// sent into the found folder by its literal name, and every other post
+    /// of the run (a quoted tweet) goes where its own count puts it.
+    func testAFoundFolderTakesOnlyThePastedPost() throws {
+        let condition = try XCTUnwrap(GalleryDlService.ownPostCondition(for: tweet))
         let folder = downloads.appendingPathComponent("someone - two photos [1234567890123]", isDirectory: true)
         let args = GalleryDlService.arguments(
-            for: tweet, outputDirectory: downloads, folderMode: .into(folder), cookieBrowser: .chrome, cookiesFile: nil)
-        XCTAssertEqual(value(after: "--dest", in: args), folder.path)
+            for: tweet, outputDirectory: downloads, folderMode: .into(folder, ownPost: condition),
+            cookieBrowser: .chrome, cookiesFile: nil)
+        XCTAssertEqual(value(after: "--dest", in: args), downloads.path)
         XCTAssertEqual(value(after: "-D", in: args), ".")
-        XCTAssertEqual(directoryOptions(args), [])
+        let expected =
+            #"directory={"tweet_id == 1234567890123": ["someone - two photos [1234567890123]"], "count > 1": \#(twitterFolder), "": []}"#
+        XCTAssertEqual(directoryOptions(args), [expected])
+        try assertValidJSON(expected)
+    }
+
+    /// A found name is a literal, not a format: its braces are doubled, and
+    /// a quote or backslash in it is escaped for the JSON value.
+    func testAFoundFolderNameIsPassedLiterally() throws {
+        let condition = try XCTUnwrap(GalleryDlService.ownPostCondition(for: post))
+        let name = #"someone - {braces} "quoted" \ [SYNpost0001_]"#
+        let folder = downloads.appendingPathComponent(name, isDirectory: true)
+        let args = GalleryDlService.arguments(
+            for: post, outputDirectory: downloads, folderMode: .into(folder, ownPost: condition),
+            cookieBrowser: .chrome, cookiesFile: nil)
+        let option = try XCTUnwrap(directoryOptions(args).first)
+        let json = String(option.dropFirst("directory=".count))
+        let object = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: [String]])
+        XCTAssertEqual(object[condition], [#"someone - {{braces}} "quoted" \ [SYNpost0001_]"#])
+        XCTAssertEqual(GalleryDlService.literalSegment("a {b} c"), "a {{b}} c")
     }
 
     /// The photo pass names the pasted post first: its count leaves out the
@@ -157,9 +180,10 @@ final class GalleryDlFolderRunTests: XCTestCase {
         XCTAssertEqual(item.title, "someone - two photos")
     }
 
-    /// A quoted tweet's one photo lies loose beside the main tweet's folder:
-    /// only the loose one loses its " #1".
-    func testOnlyTheLooseFileLosesItsNumber() async throws {
+    /// A quoted tweet's one photo lies loose beside the main tweet's folder
+    /// and keeps its " #1", as it did when all three lay loose: the run
+    /// saved more than one image, and the next run asks for that name.
+    func testALooseFileBesideOthersKeepsItsNumber() async throws {
         let folder = downloads.appendingPathComponent(stem, isDirectory: true)
         let quoted = "other - quoted [9876543210987]"
         let item = try await run(saving: [
@@ -169,7 +193,7 @@ final class GalleryDlFolderRunTests: XCTestCase {
         ])
 
         XCTAssertEqual(item.status, .completed)
-        XCTAssertEqual(try contents(of: downloads), ["\(quoted).jpg", stem])
+        XCTAssertEqual(try contents(of: downloads), ["\(quoted) #1.jpg", stem])
         XCTAssertEqual(try contents(of: folder), ["\(stem) #1.jpg", "\(stem) #2.jpg"])
         let output = try XCTUnwrap(item.outputPath)
         XCTAssertTrue(FileManager.default.fileExists(atPath: output), output)
@@ -203,20 +227,50 @@ final class GalleryDlFolderRunTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: loose), Data("earlier".utf8))
     }
 
-    /// Into a folder found for the post, flat, and a lone file there keeps
-    /// its number: it is one of the post's files, not a one-file post.
-    func testAFoundFolderTakesTheFilesFlatAndKeepsTheirNumbers() async throws {
+    /// Into a folder found for the post, and a lone file there keeps its
+    /// number: it is one of the post's files, not a one-file post.
+    func testAFoundFolderTakesThePostsFilesAndKeepsTheirNumbers() async throws {
         let folder = downloads.appendingPathComponent(stem, isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let item = try await run(
-            saving: [folder.appendingPathComponent("\(stem) #2.jpg")], folderMode: .into(folder))
+            saving: [folder.appendingPathComponent("\(stem) #2.jpg")],
+            folderMode: .into(folder, ownPost: "tweet_id == 1234567890123"))
 
         XCTAssertEqual(item.status, .completed)
         XCTAssertEqual(try contents(of: folder), ["\(stem) #2.jpg"])
         XCTAssertEqual(item.outputPath, folder.appendingPathComponent("\(stem) #2.jpg").path)
         let args = try String(contentsOf: argumentsLog, encoding: .utf8).split(separator: "\n").map(String.init)
-        XCTAssertEqual(args[try XCTUnwrap(args.firstIndex(of: "--dest")) + 1], folder.path)
-        XCTAssertFalse(args.contains { $0.hasPrefix("directory=") })
+        XCTAssertEqual(args[try XCTUnwrap(args.firstIndex(of: "--dest")) + 1], downloads.path)
+        XCTAssertTrue(args.contains { $0.hasPrefix(#"directory={"tweet_id == 1234567890123": ["\#(stem)"]"#) })
+    }
+
+    /// A quoted tweet's files stay where the first run put them — loose
+    /// for a one-file tweet, in its own folder for several — when a later
+    /// run finds the pasted post's folder: nothing is fetched again, and
+    /// nothing of the quoted tweet lands in the pasted post's folder.
+    func testAQuotedTweetIsFoundWhereTheFirstRunPutIt() async throws {
+        let condition = "tweet_id == 1234567890123"
+        let folder = downloads.appendingPathComponent(stem, isDirectory: true)
+        for quotedCount in [1, 2] {
+            try? FileManager.default.removeItem(at: downloads)
+            try FileManager.default.createDirectory(at: downloads, withIntermediateDirectories: true)
+            try? FileManager.default.removeItem(at: fetchLog)
+            let quoted = "other - quoted [9876543210987]"
+            let posts = [("1234567890123", stem, 2), ("9876543210987", quoted, quotedCount)]
+
+            let first = try await run(posts: posts, folderMode: .perPostIfMultiple)
+            XCTAssertEqual(first.status, .completed)
+            let afterFirst = try contents(of: downloads)
+            XCTAssertEqual(
+                afterFirst, quotedCount == 1 ? ["\(quoted) #1.jpg", stem] : [quoted, stem], "quoted: \(quotedCount)")
+            XCTAssertEqual(try fetched().count, 2 + quotedCount)
+
+            let second = try await run(posts: posts, folderMode: .into(folder, ownPost: condition))
+            XCTAssertEqual(second.status, .completed)
+            XCTAssertEqual(try fetched().count, 2 + quotedCount, "nothing fetched again, quoted: \(quotedCount)")
+            XCTAssertEqual(try contents(of: downloads), afterFirst)
+            XCTAssertEqual(try contents(of: folder), ["\(stem) #1.jpg", "\(stem) #2.jpg"])
+        }
     }
 
     /// A file in the download folder the run did not report — another row's
@@ -260,6 +314,70 @@ final class GalleryDlFolderRunTests: XCTestCase {
         try script.write(to: tool, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: tool.path)
 
+        return await run(tool: tool, folderMode: folderMode)
+    }
+
+    /// One line per file the placing fake saved.
+    private var fetchLog: URL { root.appendingPathComponent("fetched") }
+
+    private func fetched() throws -> [String] {
+        guard FileManager.default.fileExists(atPath: fetchLog.path) else { return [] }
+        return try String(contentsOf: fetchLog, encoding: .utf8).split(separator: "\n").map(String.init)
+    }
+
+    /// Runs a fake gallery-dl that places each of `posts` (tweet id, file
+    /// stem, file count) the way gallery-dl reads its "directory" option: a
+    /// post named by id goes into the folder named for it, one of two or
+    /// more files into a folder of its stem when "count > 1" is asked for,
+    /// and anything else loose in the destination. Each file is saved and
+    /// reported, or reported as already there.
+    private func run(posts: [(String, String, Int)], folderMode: GalleryDlService.FolderMode) async throws -> DownloadItem {
+        var script = #"""
+            #!/bin/sh
+            printf '%s\n' "$@" > "\#(argumentsLog.path)"
+            dest=""
+            directory=""
+            previous=""
+            for argument in "$@"; do
+                if [ "$previous" = "--dest" ]; then dest="$argument"; fi
+                case "$argument" in directory=*) directory="$argument" ;; esac
+                previous="$argument"
+            done
+            post() {
+                folder="$dest"
+                named=$(printf '%s' "$directory" | sed -n "s/.*\"tweet_id == $1\": \[\"\([^\"]*\)\"\].*/\1/p")
+                if [ -n "$named" ]; then
+                    folder="$dest/$named"
+                elif [ "$3" -gt 1 ]; then
+                    case "$directory" in *'"count > 1"'*) folder="$dest/$2" ;; esac
+                fi
+                n=1
+                while [ $n -le "$3" ]; do
+                    file="$folder/$2 #$n.jpg"
+                    if [ -f "$file" ]; then
+                        echo "# $file"
+                    else
+                        mkdir -p "$folder"
+                        printf 'synthetic' > "$file"
+                        echo "$file" >> "\#(fetchLog.path)"
+                        echo "$file"
+                    fi
+                    n=$((n + 1))
+                done
+            }
+
+            """#
+        for (id, stem, count) in posts {
+            script += "post \(id) \"\(stem)\" \(count)\n"
+        }
+        script += "exit 0\n"
+        let tool = root.appendingPathComponent("placing-gallery-dl")
+        try script.write(to: tool, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: tool.path)
+        return await run(tool: tool, folderMode: folderMode)
+    }
+
+    private func run(tool: URL, folderMode: GalleryDlService.FolderMode) async -> DownloadItem {
         let item = DownloadItem(url: link)
         await GalleryDlService.run(
             item: item, executablePath: tool.path, outputDirectory: downloads, folderMode: folderMode,
