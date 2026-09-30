@@ -266,6 +266,19 @@ class DownloadItem: Identifiable, ObservableObject {
     /// its post's photos went to: a video already on disk before this run
     /// stays where it is. Cleared with the other per-attempt parse state.
     var videoDownloadedThisRun = false
+    /// In-memory only (NOT persisted). While a Threads row tries the
+    /// Instagram post its post shows as its only video, that post's
+    /// address: the tools are handed it, and judge the site by it, in place
+    /// of `url` (see `toolLink`). `url` stays the Threads link — the row's
+    /// identity in the list, in duplicate detection and in history. Set and
+    /// cleared by DownloadManager around that one try, and deliberately NOT
+    /// cleared in resetForReattempt(): the gallery-dl fallback resets the
+    /// row inside the try.
+    var embeddedPostLink: String?
+
+    /// The link the download tools are handed and the site they run for is
+    /// judged by: the row's own, except during the try above.
+    var toolLink: String { embeddedPostLink ?? url }
 
     init(url: String, addedAt: Date = Date()) {
         self.url = url

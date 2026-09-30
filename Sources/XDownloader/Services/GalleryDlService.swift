@@ -147,7 +147,7 @@ enum GalleryDlService {
             item: item,
             executablePath: executablePath,
             arguments: arguments(
-                for: item.url, outputDirectory: outputDirectory, folderMode: folderMode,
+                for: item.toolLink, outputDirectory: outputDirectory, folderMode: folderMode,
                 cookieBrowser: cookieBrowser, cookieBrowserProfile: cookieBrowserProfile,
                 cookiesFile: cookiesFile),
             outputDirectory: outputDirectory,
@@ -155,7 +155,7 @@ enum GalleryDlService {
             register: register,
             unregister: unregister,
             lineParser: { line, item in parseLine(line, item: item) },
-            noMediaMessage: emptySuccessMessage(forProfileID: SiteRegistry.profile(for: item.url).id),
+            noMediaMessage: emptySuccessMessage(forProfileID: SiteRegistry.profile(for: item.toolLink).id),
             stripsSingleFileSuffix: true,
             settlesErrorsAtExit: false)
     }
@@ -664,13 +664,13 @@ enum GalleryDlService {
         register: @escaping (Process) -> Void,
         unregister: @escaping () -> Void
     ) async -> SweepResult? {
-        guard let sweepArgs = SiteRegistry.profile(for: item.url).imageSweepArgs else { return nil }
+        guard let sweepArgs = SiteRegistry.profile(for: item.toolLink).imageSweepArgs else { return nil }
         let reported = ReportedFiles()
 
         let result = await ProcessRunner.run(
             executablePath: executablePath,
             arguments: arguments(
-                for: item.url, outputDirectory: outputDirectory, folderMode: folderMode,
+                for: item.toolLink, outputDirectory: outputDirectory, folderMode: folderMode,
                 cookieBrowser: cookieBrowser, cookieBrowserProfile: cookieBrowserProfile,
                 cookiesFile: cookiesFile, extraArgs: sweepArgs),
             item: item,
@@ -844,7 +844,7 @@ enum GalleryDlService {
         if line.lowercased().contains("error") {
             // Known raw errors get app-native copy naming the true cause and
             // the in-app fix; everything else stays verbatim.
-            let profileID = profileID ?? SiteRegistry.profile(for: item.url).id
+            let profileID = profileID ?? SiteRegistry.profile(for: item.toolLink).id
             let mapped = Self.mappedErrorMessage(for: line, profileID: profileID)
             if settlesErrorsAtExit {
                 if let mapped { recordFirstError(mapped, item: item) }

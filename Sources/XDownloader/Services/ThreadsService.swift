@@ -27,10 +27,16 @@ enum ThreadsService {
     /// `signedInPage` is the signed-in second try, nil where there is none
     /// to offer. It is called at most once per run, and only after the
     /// logged-out page came back restricted or as the login page.
+    /// `instagramPost` is the Instagram try for a post whose only video is
+    /// an Instagram post shown under its link card (see
+    /// `ResolvedPost.instagramPost`), nil where there is none to offer. It
+    /// is called at most once per run, after the page resolved and before
+    /// any file of the Threads copy is fetched; the Threads copy is
+    /// downloaded only when it saved nothing.
     @MainActor
     static func run(
         item: DownloadItem, outputDirectory: URL, session: URLSession = DirectDownload.session,
-        signedInPage: SignedInPageFetch? = nil
+        signedInPage: SignedInPageFetch? = nil, instagramPost: InstagramPostDownload? = nil
     ) async -> Bool {
         item.status = .fetching
         // While fetching, any eta is shown as a rate-limit wait.
@@ -72,6 +78,22 @@ enum ThreadsService {
             case .failed(let message, _, _, _):
                 item.status = .failed(message)
                 return false
+            }
+        }
+
+        // The Threads copy of an Instagram post is a smaller one (720 wide
+        // where the original is 1440): the original is tried first, through
+        // the app's own Instagram download, and the copy only stands in for
+        // it. Stop and the row's ✕ end the run there.
+        if let link = post.instagramPost, let instagramPost {
+            switch await instagramPost(link) {
+            case .saved: return true
+            case .stopped: return false
+            case .notSaved:
+                if Task.isCancelled { return false }
+                item.status = .fetching
+                item.eta = nil
+                item.emptySuccessFailure = false
             }
         }
 
@@ -203,6 +225,24 @@ enum ThreadsService {
     /// DownloadManager, which owns the settings, the tool and the process
     /// registry; a seam for tests.
     typealias SignedInPageFetch = @MainActor (URL) async -> ThreadsSignedInPage.Outcome
+
+    /// Downloads the Instagram post at the address given for the row, with
+    /// whatever Instagram downloads always use. Supplied by DownloadManager,
+    /// which owns the tools, the settings and the process registry; a seam
+    /// for tests. Nothing of Threads — the page, its login — is handed over.
+    typealias InstagramPostDownload = @MainActor (String) async -> InstagramPostOutcome
+
+    /// What the Instagram try left.
+    enum InstagramPostOutcome: Equatable {
+        /// The row is Done with the Instagram post's files.
+        case saved
+        /// Nothing was saved, or the try could not be made (no tool, or the
+        /// address is turned down): the Threads copy is downloaded instead.
+        /// The row carries nothing of the try.
+        case notSaved
+        /// Stop or the row's ✕: the run ends without an outcome.
+        case stopped
+    }
 
     /// The two answers a login can change. Every other failure is the same
     /// signed in, so the login is not sent for it.
@@ -624,6 +664,12 @@ enum ThreadsService {
         let code: String
         let source: MediaSource
         let media: [Media]
+        /// The Instagram post or reel whose Threads copy `media` is — only
+        /// for media from `linkedInlineMedia` whose link card points at one,
+        /// as its one address (`InstagramLink.canonicalPostLink`). Nil for
+        /// everything else, the post's own media, quotes and reposts
+        /// included.
+        var instagramPost: String? = nil
     }
 
     /// Why a page yielded nothing to download.
@@ -673,9 +719,22 @@ enum ThreadsService {
                 text: (node["caption"] as? [String: Any])?["text"] as? String ?? "",
                 code: node["code"] as? String ?? linkCode,
                 source: source,
-                media: media)
+                media: media,
+                instagramPost: source == .linkedInlineMedia ? linkCardInstagramPost(info) : nil)
         }
         return nil
+    }
+
+    /// The Instagram post or reel a post's link card points at, as its one
+    /// address; nil when the card points anywhere else — a profile, a
+    /// story, another site — or there is no card. The card's resolved
+    /// address comes first, then the one it shows.
+    static func linkCardInstagramPost(_ info: [String: Any]) -> String? {
+        let candidates = [
+            (info["link_preview_response"] as? [String: Any])?["url"],
+            (info["link_preview_attachment"] as? [String: Any])?["url"],
+        ]
+        return candidates.lazy.compactMap { $0 as? String }.compactMap(InstagramLink.canonicalPostLink(for:)).first
     }
 
     /// Display name when the account has one, else the username — the same

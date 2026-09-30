@@ -24,6 +24,10 @@ final class ThreadsDownloadManagerTests: XCTestCase {
     private var ytDlpArguments: URL!
     /// The process the tool last ran as.
     private var ytDlpProcessID: URL!
+    /// Exists only if the manager started gallery-dl; one line per start.
+    private var galleryDlMark: URL!
+    /// The arguments of gallery-dl's last start, one per line.
+    private var galleryDlArguments: URL!
 
     override func setUpWithError() throws {
         root = FileManager.default.temporaryDirectory.appendingPathComponent("ThreadsDownloadManagerTests-\(UUID().uuidString)")
@@ -33,6 +37,8 @@ final class ThreadsDownloadManagerTests: XCTestCase {
         ytDlpMark = root.appendingPathComponent("yt-dlp-ran")
         ytDlpArguments = root.appendingPathComponent("yt-dlp-arguments")
         ytDlpProcessID = root.appendingPathComponent("yt-dlp-process")
+        galleryDlMark = root.appendingPathComponent("gallery-dl-ran")
+        galleryDlArguments = root.appendingPathComponent("gallery-dl-arguments")
     }
 
     override func tearDownWithError() throws {
@@ -194,7 +200,9 @@ final class ThreadsDownloadManagerTests: XCTestCase {
     // MARK: - Signed-in second try
 
     func testPublicLinkNeverStartsTheToolWhateverTheCookieSettings() async throws {
-        let post = try fixture("threads_linked_inline_video.html")
+        // A post with its own video: the linked-inline fixture now tries
+        // the Instagram original first (see the Instagram section below).
+        let post = try fixture("threads_single_video.html")
         StubProtocol.set(page(post.html), for: post.pageURL)
         StubProtocol.set(mp4(), for: post.media[0])
         // A tool that would hand back a page, and a browser to take the
@@ -214,7 +222,8 @@ final class ThreadsDownloadManagerTests: XCTestCase {
     }
 
     func testRestrictedLinkStartsTheToolOnceAndDownloadsThePost() async throws {
-        let post = try fixture("threads_linked_inline_video.html")
+        // A post with its own video, so the one start is the signed-in page's.
+        let post = try fixture("threads_single_video.html")
         let restricted = try fixture("threads_fail_restricted_audience.html")
         StubProtocol.set(page(restricted.html), for: post.pageURL)
         StubProtocol.set(mp4(), for: post.media[0])
@@ -229,7 +238,7 @@ final class ThreadsDownloadManagerTests: XCTestCase {
         XCTAssertEqual(item.status, .completed)
         let saved = try contents(of: downloads)
         XCTAssertEqual(saved.count, 1)
-        XCTAssertTrue(saved[0].hasSuffix(" [SYNreel00001].mp4"), saved[0])
+        XCTAssertTrue(saved[0].hasSuffix(" [SYNvideo0001].mp4"), saved[0])
         XCTAssertEqual(try toolStarts(), 1)
         XCTAssertEqual(
             try toolArguments(),
@@ -300,6 +309,219 @@ final class ThreadsDownloadManagerTests: XCTestCase {
         // touch a row the user has removed.
         try await Task.sleep(nanoseconds: 500_000_000)
         XCTAssertEqual(item.status, .fetching)
+        XCTAssertEqual(history.count(), 0)
+        XCTAssertEqual(try contents(of: downloads), [])
+    }
+
+    // MARK: - An Instagram post shown under the link card
+
+    /// The reel the linked-inline fixture's link card points at.
+    private let embeddedReel = "https://www.instagram.com/reel/SYNreel00001/"
+
+    /// A yt-dlp that saves `name` in the download folder and reports it the
+    /// way yt-dlp reports a download.
+    private func ytDlpSaving(_ name: String) -> String {
+        let path = downloads.appendingPathComponent(name).path
+        return """
+            printf 'synthetic' > "\(path)"
+            echo "[download] Destination: \(path)"
+            echo "[download] 100% of 9.00B in 00:00"
+            exit 0
+
+            """
+    }
+
+    func testAnInstagramReelUnderTheLinkCardIsDownloadedThroughInstagramFirst() async throws {
+        let post = try fixture("threads_linked_inline_video.html")
+        StubProtocol.set(page(post.html), for: post.pageURL)
+        StubProtocol.set(mp4(), for: post.media[0])
+        let manager = try makeManager(tool: ytDlpSaving("Reel Maker - Video by reel_maker.mp4"), galleryDl: "exit 1\n")
+        manager.cookieBrowser = .chrome
+        manager.cookieBrowserProfile = ""
+
+        manager.capture(text: post.link, source: .field)
+
+        let item = try XCTUnwrap(manager.items.first)
+        try await waitUntil("the download finished") { self.history.count() == 1 }
+        XCTAssertEqual(item.status, .completed)
+        XCTAssertEqual(item.progress, 1)
+        // The Instagram path's own file, loose: one file gets no folder.
+        XCTAssertEqual(try contents(of: downloads), ["Reel Maker - Video by reel_maker.mp4"])
+        XCTAssertEqual(item.outputPath, downloads.appendingPathComponent("Reel Maker - Video by reel_maker.mp4").path)
+        XCTAssertNil(item.destination)
+        // yt-dlp was handed the reel exactly as a pasted reel link is.
+        XCTAssertEqual(try toolStarts(), 1)
+        let expected = YtDlpService.buildArguments(
+            for: DownloadItem(url: embeddedReel), outputDirectory: downloads, format: manager.youtubeFormat,
+            videoQuality: manager.videoQuality, audioQuality: manager.audioQuality,
+            subtitleLanguage: manager.subtitleLanguage, embedSubtitles: manager.embedSubtitles,
+            cookieBrowser: .chrome, cookieBrowserProfile: "", cookiesFile: nil)
+        XCTAssertEqual(try toolArguments(), expected)
+        XCTAssertEqual(expected.last, embeddedReel)
+        // After it, the photo sweep every Instagram post gets, of the reel.
+        XCTAssertEqual(try starts(of: galleryDlMark), 1)
+        let sweep = try String(contentsOf: galleryDlArguments, encoding: .utf8).split(separator: "\n").map(String.init)
+        XCTAssertEqual(sweep.last, embeddedReel)
+        XCTAssertTrue(sweep.contains("videos=false"), "\(sweep)")
+        // The Threads copy was never fetched; the page once, logged out.
+        XCTAssertEqual(StubProtocol.requests(to: post.media[0]).count, 0)
+        XCTAssertEqual(StubProtocol.requests(to: post.pageURL).count, 1)
+        // The row is still the Threads post's.
+        XCTAssertEqual(item.url, post.link)
+        XCTAssertNil(item.embeddedPostLink)
+        XCTAssertEqual(item.toolLink, post.link)
+        let entry = try XCTUnwrap(history.mostRecentCompleted(for: post.link))
+        XCTAssertEqual(entry.site, "threads")
+        XCTAssertNil(history.mostRecentCompleted(for: embeddedReel))
+        XCTAssertEqual(manager.capture(text: post.link, source: .field).alreadyPresent, 1)
+    }
+
+    func testTheThreadsCopyIsTheFallbackWhenInstagramSavesNothing() async throws {
+        let post = try fixture("threads_linked_inline_video.html")
+        StubProtocol.set(page(post.html), for: post.pageURL)
+        StubProtocol.set(mp4(), for: post.media[0])
+        let manager = try makeManager(
+            tool: "echo 'ERROR: [Instagram] SYNreel00001: Requested content is not available' >&2\nexit 1\n",
+            galleryDl: "echo '[instagram][error] synthetic failure' >&2\nexit 4\n")
+        manager.cookieBrowser = .chrome
+
+        manager.capture(text: post.link, source: .field)
+
+        let item = try XCTUnwrap(manager.items.first)
+        try await waitUntil("the download finished") { self.history.count() == 1 }
+        // Instagram first — yt-dlp, then gallery-dl — and then the copy.
+        XCTAssertEqual(try toolStarts(), 1)
+        XCTAssertEqual(try toolArguments().last, embeddedReel)
+        XCTAssertEqual(try starts(of: galleryDlMark), 1)
+        XCTAssertEqual(try String(contentsOf: galleryDlArguments, encoding: .utf8).split(separator: "\n").last, Substring(embeddedReel))
+        XCTAssertEqual(item.status, .completed)
+        XCTAssertFalse(item.autoRetryAttempted)
+        let saved = try contents(of: downloads)
+        XCTAssertEqual(saved, ["Reel Maker - Synthetic reel caption [SYNreel00001].mp4"])
+        XCTAssertEqual(item.outputPath, downloads.appendingPathComponent(saved[0]).path)
+        XCTAssertEqual(item.title, "Reel Maker - Synthetic reel caption")
+        XCTAssertEqual(item.videoCount, 1)
+        XCTAssertNil(item.imageCount)
+        XCTAssertNil(item.embeddedPostLink)
+        XCTAssertEqual(StubProtocol.requests(to: post.media[0]).count, 1)
+        XCTAssertEqual(StubProtocol.requests(to: post.media[0]).first?.allHTTPHeaderFields ?? [:], [:])
+        XCTAssertEqual(history.mostRecentCompleted(for: post.link)?.site, "threads")
+    }
+
+    func testTheThreadsCopyStandsWhenYtDlpIsNotInstalled() async throws {
+        let post = try fixture("threads_linked_inline_video.html")
+        StubProtocol.set(page(post.html), for: post.pageURL)
+        StubProtocol.set(mp4(), for: post.media[0])
+        let manager = try makeManager(galleryDl: "exit 0\n", ytDlpInstalled: false)
+        manager.cookieBrowser = .chrome
+
+        manager.capture(text: post.link, source: .field)
+
+        let item = try XCTUnwrap(manager.items.first)
+        try await waitUntil("the download finished") { self.history.count() == 1 }
+        XCTAssertEqual(item.status, .completed)
+        XCTAssertEqual(try contents(of: downloads), ["Reel Maker - Synthetic reel caption [SYNreel00001].mp4"])
+        XCTAssertEqual(try toolStarts(), 0)
+        XCTAssertEqual(try starts(of: galleryDlMark), 0)
+    }
+
+    /// A link card that points at Instagram, but not at one post or reel:
+    /// nothing is handed to the tools, and the copy downloads as before.
+    func testALinkCardThatIsNotAnInstagramPostNeverStartsATool() async throws {
+        let post = try fixture("threads_linked_inline_video.html")
+        let cards = [
+            "https:\\/\\/www.instagram.com\\/someone.invented\\/",
+            "https:\\/\\/www.instagram.com\\/someone.invented\\/tagged\\/",
+            "https:\\/\\/www.instagram.com\\/stories\\/someone.invented\\/3456789012345678901\\/",
+            "https:\\/\\/example.com\\/reel\\/SYNreel00001\\/",
+        ]
+        for (index, card) in cards.enumerated() {
+            let html = post.html.replacingOccurrences(of: "https:\\/\\/www.instagram.com\\/reel\\/SYNreel00001\\/", with: card)
+            XCTAssertNotEqual(html, post.html)
+            StubProtocol.set(page(html), for: post.pageURL)
+            StubProtocol.set(mp4(), for: post.media[0])
+            try? FileManager.default.removeItem(at: downloads)
+            try FileManager.default.createDirectory(at: downloads, withIntermediateDirectories: true)
+            // A history of its own: the same link again would otherwise be
+            // held back as a duplicate.
+            history = HistoryStore(directory: root.appendingPathComponent("history-\(index)"))
+            let manager = try makeManager(tool: ytDlpSaving("unexpected.mp4"), galleryDl: "exit 0\n")
+            manager.cookieBrowser = .chrome
+
+            manager.capture(text: post.link, source: .field)
+
+            let item = try XCTUnwrap(manager.items.first)
+            try await waitUntil("the download finished (\(card))") { self.history.count() == 1 }
+            XCTAssertEqual(item.status, .completed, card)
+            XCTAssertEqual(try contents(of: downloads), ["Reel Maker - Synthetic reel caption [SYNreel00001].mp4"], card)
+            XCTAssertEqual(try toolStarts(), 0, card)
+            XCTAssertEqual(try starts(of: galleryDlMark), 0, card)
+        }
+    }
+
+    /// Posts with media of their own, quotes: the Instagram path is never
+    /// tried, whatever tools and login there are.
+    func testAPostWithItsOwnMediaOrAQuoteNeverTriesInstagram() async throws {
+        for (index, name) in ["threads_single_video.html", "threads_single_image.html", "threads_quote_with_video.html"].enumerated() {
+            let post = try fixture(name)
+            StubProtocol.set(page(post.html), for: post.pageURL)
+            for address in post.media { StubProtocol.set(name.contains("image") ? jpeg() : mp4(), for: address) }
+            let manager = try makeManager(tool: ytDlpSaving("unexpected-\(index).mp4"), galleryDl: "exit 0\n")
+            manager.cookieBrowser = .chrome
+
+            manager.capture(text: post.link, source: .field)
+
+            let item = try XCTUnwrap(manager.items.first, name)
+            try await waitUntil("the download finished (\(name))") { self.history.count() == index + 1 }
+            XCTAssertEqual(item.status, .completed, name)
+            XCTAssertEqual(try toolStarts(), 0, name)
+            XCTAssertEqual(try starts(of: galleryDlMark), 0, name)
+            XCTAssertEqual(StubProtocol.requests(to: post.media[0]).count, 1, name)
+        }
+    }
+
+    func testStopDuringTheInstagramTryEndsPausedAndFetchesNoCopy() async throws {
+        let post = try fixture("threads_linked_inline_video.html")
+        StubProtocol.set(page(post.html), for: post.pageURL)
+        StubProtocol.set(mp4(), for: post.media[0])
+        let manager = try makeManager(tool: "exec sleep 30\n", galleryDl: "exit 0\n")
+        manager.cookieBrowser = .chrome
+        manager.capture(text: post.link, source: .field)
+        let item = try XCTUnwrap(manager.items.first)
+        try await waitUntil("the tool started") { FileManager.default.fileExists(atPath: self.ytDlpMark.path) }
+
+        manager.pauseItem(item)
+
+        // Far inside the tool's 30 seconds: it was terminated, not waited out.
+        try await waitUntil("the row is paused", seconds: 5) { item.status == .paused }
+        XCTAssertFalse(toolIsRunning())
+        try await Task.sleep(nanoseconds: 300_000_000)
+        XCTAssertEqual(item.status, .paused)
+        XCTAssertNil(item.embeddedPostLink)
+        XCTAssertEqual(try toolStarts(), 1)
+        XCTAssertEqual(try starts(of: galleryDlMark), 0)
+        XCTAssertEqual(StubProtocol.requests(to: post.media[0]).count, 0)
+        XCTAssertEqual(history.count(), 0, "a paused download is not a finished one")
+        XCTAssertEqual(try contents(of: downloads), [])
+    }
+
+    func testRemoveDuringTheInstagramTryLeavesNoOutcomeAndFetchesNoCopy() async throws {
+        let post = try fixture("threads_linked_inline_video.html")
+        StubProtocol.set(page(post.html), for: post.pageURL)
+        StubProtocol.set(mp4(), for: post.media[0])
+        let manager = try makeManager(tool: "exec sleep 30\n", galleryDl: "exit 0\n")
+        manager.cookieBrowser = .chrome
+        manager.capture(text: post.link, source: .field)
+        let item = try XCTUnwrap(manager.items.first)
+        try await waitUntil("the tool started") { FileManager.default.fileExists(atPath: self.ytDlpMark.path) }
+
+        manager.removeItem(item)
+
+        XCTAssertTrue(manager.items.isEmpty)
+        try await waitUntil("the tool was terminated", seconds: 5) { !self.toolIsRunning() }
+        try await Task.sleep(nanoseconds: 500_000_000)
+        XCTAssertEqual(try starts(of: galleryDlMark), 0)
+        XCTAssertEqual(StubProtocol.requests(to: post.media[0]).count, 0)
         XCTAssertEqual(history.count(), 0)
         XCTAssertEqual(try contents(of: downloads), [])
     }
@@ -391,8 +613,12 @@ final class ThreadsDownloadManagerTests: XCTestCase {
     }
 
     private func toolStarts() throws -> Int {
-        guard FileManager.default.fileExists(atPath: ytDlpMark.path) else { return 0 }
-        return try String(contentsOf: ytDlpMark, encoding: .utf8).split(separator: "\n").count
+        try starts(of: ytDlpMark)
+    }
+
+    private func starts(of mark: URL) throws -> Int {
+        guard FileManager.default.fileExists(atPath: mark.path) else { return 0 }
+        return try String(contentsOf: mark, encoding: .utf8).split(separator: "\n").count
     }
 
     /// Whether the process the tool last ran as is still there.
@@ -409,8 +635,12 @@ final class ThreadsDownloadManagerTests: XCTestCase {
 
     /// A manager on temporary stores whose Threads requests go to the stub
     /// and whose yt-dlp, if it were ever started, leaves `ytDlpMark` and
-    /// then does what `tool` says.
-    private func makeManager(tool: String = "exit 1\n") throws -> DownloadManager {
+    /// then does what `tool` says. gallery-dl is installed only when
+    /// `galleryDl` says what it does after leaving `galleryDlMark`, and
+    /// yt-dlp is not installed at all when `ytDlpInstalled` is false.
+    private func makeManager(
+        tool: String = "exit 1\n", galleryDl: String? = nil, ytDlpInstalled: Bool = true
+    ) throws -> DownloadManager {
         let stores = root.appendingPathComponent("stores")
         let script = root.appendingPathComponent("yt-dlp")
         let header = """
@@ -422,15 +652,30 @@ final class ThreadsDownloadManagerTests: XCTestCase {
             """
         try Data((header + tool).utf8).write(to: script)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+        var galleryDlScript: URL?
+        if let galleryDl {
+            let path = root.appendingPathComponent("gallery-dl")
+            let header = """
+                #!/bin/sh
+                printf '%s\\n' "$@" > "\(galleryDlArguments.path)"
+                echo started >> "\(galleryDlMark.path)"
+
+                """
+            try Data((header + galleryDl).utf8).write(to: path)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: path.path)
+            galleryDlScript = path
+        }
         let configuration = DirectDownload.sessionConfiguration()
         configuration.protocolClasses = [StubProtocol.self]
         let manager = DownloadManager(
             history: history,
-            queueStore: QueueStore(directory: stores),
+            // A queue of its own: a test that builds several managers must
+            // not hand one the rows of another.
+            queueStore: QueueStore(directory: root.appendingPathComponent("queue-\(UUID().uuidString)")),
             settingsStore: SettingsStore(defaults: try XCTUnwrap(UserDefaults(suiteName: "threads-mgr-\(UUID().uuidString)"))),
             likesSyncStore: LikesSyncStore(directory: stores),
-            galleryDlPathProvider: { nil },
-            ytDlpPathProvider: { script.path },
+            galleryDlPathProvider: { galleryDlScript?.path },
+            ytDlpPathProvider: { ytDlpInstalled ? script.path : nil },
             threadsSession: URLSession(configuration: configuration))
         manager.outputDirectory = downloads
         XCTAssertTrue(manager.items.isEmpty)
