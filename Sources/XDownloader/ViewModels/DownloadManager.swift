@@ -110,6 +110,8 @@ class DownloadManager: ObservableObject {
     /// `recordImageSweepOutcome`. Any clean exit resets it.
     private var consecutiveImageSweepFailures = 0
     private var cookieSaveFeedbackShown = false
+    /// Latch for `surfaceEmbeddedUnmergedFeedback`.
+    private var embeddedUnmergedFeedbackShown = false
     /// IDs of items the user explicitly paused — distinguishes a user-initiated
     /// `terminate()` from a real download failure when the process exits.
     private var pausedItemIDs: Set<UUID> = []
@@ -2511,6 +2513,15 @@ class DownloadManager: ObservableObject {
             item.markCompleted()
             return .saved
         }
+        // ffmpeg is missing: yt-dlp left the reel's video and audio as two
+        // unmerged streams. A pasted link keeps them for its Retry; this row
+        // has no Retry of the try — it ends with gallery-dl's file or the
+        // Threads copy — so the pieces go, and the user hears why the full
+        // size did not come.
+        if Self.unmergedStreamsFailure(for: item) != nil {
+            Self.removeUnmergedStreams(of: item, root: outputDirectory)
+            surfaceEmbeddedUnmergedFeedback(for: item)
+        }
         if let galleryDl = galleryDlPath {
             await runGalleryDlFallback(item, executablePath: galleryDl)
             if stopped() { return .stopped }
@@ -2519,6 +2530,36 @@ class DownloadManager: ObservableObject {
         item.resetForReattempt()
         RowFolder.use(nil, for: item)
         return .notSaved
+    }
+
+    /// Deletes the pre-merge streams yt-dlp left for the row — the paths it
+    /// reported, only those named as a `.f{format_id}` piece and only inside
+    /// `root`, the download folder. A finished file is never one of them.
+    static func removeUnmergedStreams(of item: DownloadItem, root: URL) {
+        let rootPath = root.standardizedFileURL.path
+        let pieces = Set([item.outputPath, item.videoPath, item.audioPath].compactMap { $0 })
+            .filter(YtDlpService.isIntermediateFormatPath)
+            .filter { URL(fileURLWithPath: $0).standardizedFileURL.path.hasPrefix(rootPath + "/") }
+        for piece in pieces {
+            try? FileManager.default.removeItem(atPath: piece)
+        }
+    }
+
+    /// Shown when a Threads post's Instagram video could not be merged
+    /// (see `downloadInstagramPost`); the row still finishes, with
+    /// gallery-dl's file or the Threads copy, so there is nothing to Retry.
+    static let embeddedUnmergedStreamsMessage =
+        "The full-size Instagram video could not be merged — ffmpeg is missing, so a smaller copy may have been saved. Install it (brew install ffmpeg) for full-size Instagram videos."
+
+    /// Once per session: one missing ffmpeg is the same news for every row.
+    private func surfaceEmbeddedUnmergedFeedback(for item: DownloadItem) {
+        guard !embeddedUnmergedFeedbackShown else { return }
+        embeddedUnmergedFeedbackShown = true
+        showFeedback(
+            CaptureFeedback(
+                kind: .warning,
+                message: Self.embeddedUnmergedStreamsMessage,
+                highlightItemID: item.id))
     }
 
     /// What a signed-in Threads request is made with, as Settings stand now.

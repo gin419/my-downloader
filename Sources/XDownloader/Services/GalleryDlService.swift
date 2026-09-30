@@ -149,7 +149,7 @@ enum GalleryDlService {
             arguments: arguments(
                 for: item.toolLink, outputDirectory: outputDirectory, folderMode: folderMode,
                 cookieBrowser: cookieBrowser, cookieBrowserProfile: cookieBrowserProfile,
-                cookiesFile: cookiesFile),
+                cookiesFile: cookiesFile, extraArgs: embeddedPostArgs(for: item)),
             outputDirectory: outputDirectory,
             looseDirectory: outputDirectory,
             register: register,
@@ -554,6 +554,19 @@ enum GalleryDlService {
             siteArgs: profile.galleryDlArgs + extraArgs)
     }
 
+    /// Added while a row tries the post its own post shows
+    /// (`DownloadItem.embeddedPostLink`): a "429 Too Many Requests" then
+    /// ends the run at once instead of gallery-dl sleeping through it —
+    /// a minute per retry by default, "Waiting for N minutes" when told to —
+    /// because that row has its own copy to fall back on, and a
+    /// rate-limited login should not hold it up. Nothing else changes.
+    static let embeddedPostFailFastArgs = ["-o", "extractor.sleep-429=0"]
+
+    @MainActor
+    static func embeddedPostArgs(for item: DownloadItem) -> [String] {
+        item.embeddedPostLink == nil ? [] : embeddedPostFailFastArgs
+    }
+
     /// The command line for an Instagram profile's newest posts.
     ///
     /// The posts tab ("/<username>/posts/") is the account's own timeline —
@@ -672,7 +685,7 @@ enum GalleryDlService {
             arguments: arguments(
                 for: item.toolLink, outputDirectory: outputDirectory, folderMode: folderMode,
                 cookieBrowser: cookieBrowser, cookieBrowserProfile: cookieBrowserProfile,
-                cookiesFile: cookiesFile, extraArgs: sweepArgs),
+                cookiesFile: cookiesFile, extraArgs: sweepArgs + embeddedPostArgs(for: item)),
             item: item,
             register: register,
             unregister: unregister,

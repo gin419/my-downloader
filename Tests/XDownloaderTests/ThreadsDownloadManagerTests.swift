@@ -363,6 +363,8 @@ final class ThreadsDownloadManagerTests: XCTestCase {
         let sweep = try String(contentsOf: galleryDlArguments, encoding: .utf8).split(separator: "\n").map(String.init)
         XCTAssertEqual(sweep.last, embeddedReel)
         XCTAssertTrue(sweep.contains("videos=false"), "\(sweep)")
+        // A rate limit ends the sweep instead of holding the row up.
+        XCTAssertTrue(sweep.contains("extractor.sleep-429=0"), "\(sweep)")
         // The Threads copy was never fetched; the page once, logged out.
         XCTAssertEqual(StubProtocol.requests(to: post.media[0]).count, 0)
         XCTAssertEqual(StubProtocol.requests(to: post.pageURL).count, 1)
@@ -394,6 +396,9 @@ final class ThreadsDownloadManagerTests: XCTestCase {
         XCTAssertEqual(try toolArguments().last, embeddedReel)
         XCTAssertEqual(try starts(of: galleryDlMark), 1)
         XCTAssertEqual(try String(contentsOf: galleryDlArguments, encoding: .utf8).split(separator: "\n").last, Substring(embeddedReel))
+        // gallery-dl gives up on a rate limit at once: the copy stands in.
+        XCTAssertTrue(
+            try String(contentsOf: galleryDlArguments, encoding: .utf8).split(separator: "\n").contains("extractor.sleep-429=0"))
         XCTAssertEqual(item.status, .completed)
         XCTAssertFalse(item.autoRetryAttempted)
         let saved = try contents(of: downloads)
@@ -423,6 +428,79 @@ final class ThreadsDownloadManagerTests: XCTestCase {
         XCTAssertEqual(try contents(of: downloads), ["Reel Maker - Synthetic reel caption [SYNreel00001].mp4"])
         XCTAssertEqual(try toolStarts(), 0)
         XCTAssertEqual(try starts(of: galleryDlMark), 0)
+    }
+
+    /// ffmpeg missing: yt-dlp saves the reel as two unmerged streams and
+    /// exits 0. They are not left behind next to the file the row ends
+    /// with, and the user is told why the full size did not come.
+    func testUnmergedStreamsOfTheInstagramTryAreRemovedAndTheCopyStandsIn() async throws {
+        let post = try fixture("threads_linked_inline_video.html")
+        StubProtocol.set(page(post.html), for: post.pageURL)
+        StubProtocol.set(mp4(), for: post.media[0])
+        // A file of the same shape that this run did not report stays.
+        let unrelated = downloads.appendingPathComponent("Someone else.f137.mp4")
+        try Data("keep".utf8).write(to: unrelated)
+        let video = downloads.appendingPathComponent("Reel Maker - Video by reel_maker.f1080.mp4").path
+        let audio = downloads.appendingPathComponent("Reel Maker - Video by reel_maker.f140.m4a").path
+        let manager = try makeManager(
+            tool: """
+                echo "WARNING: You have requested merging of multiple formats but ffmpeg is not installed. The formats won't be merged"
+                printf 'v' > "\(video)"
+                echo "[download] Destination: \(video)"
+                echo "[download] 100% of 1.00B in 00:00"
+                printf 'a' > "\(audio)"
+                echo "[download] Destination: \(audio)"
+                echo "[download] 100% of 1.00B in 00:00"
+                exit 0
+
+                """,
+            galleryDl: "echo '[instagram][error] synthetic failure' >&2\nexit 4\n")
+        manager.cookieBrowser = .chrome
+
+        manager.capture(text: post.link, source: .field)
+
+        let item = try XCTUnwrap(manager.items.first)
+        try await waitUntil("the download finished") { self.history.count() == 1 }
+        XCTAssertEqual(try toolStarts(), 1)
+        XCTAssertEqual(try starts(of: galleryDlMark), 1)
+        XCTAssertEqual(item.status, .completed)
+        XCTAssertEqual(
+            try contents(of: downloads),
+            ["Reel Maker - Synthetic reel caption [SYNreel00001].mp4", "Someone else.f137.mp4"])
+        XCTAssertEqual(try String(contentsOf: unrelated, encoding: .utf8), "keep")
+        XCTAssertEqual(item.outputPath, downloads.appendingPathComponent("Reel Maker - Synthetic reel caption [SYNreel00001].mp4").path)
+        XCTAssertFalse(item.ffmpegMissingForMerge)
+        XCTAssertEqual(manager.captureFeedback?.message, DownloadManager.embeddedUnmergedStreamsMessage)
+        XCTAssertEqual(manager.captureFeedback?.kind, .warning)
+        XCTAssertEqual(manager.captureFeedback?.highlightItemID, item.id)
+        XCTAssertEqual(StubProtocol.requests(to: post.media[0]).count, 1)
+    }
+
+    func testUnmergedStreamRemovalKeepsFinishedFilesAndFilesOutsideTheFolder() throws {
+        try FileManager.default.createDirectory(at: downloads, withIntermediateDirectories: true)
+        let inside = downloads.appendingPathComponent("clip.f1080.mp4")
+        let finished = downloads.appendingPathComponent("clip.mp4")
+        let outside = root.appendingPathComponent("clip.f140.m4a")
+        for file in [inside, finished, outside] { try Data("x".utf8).write(to: file) }
+        let item = DownloadItem(url: "https://www.threads.com/@someone/post/SYNreel00001")
+        item.outputPath = inside.path
+        item.videoPath = finished.path
+        item.audioPath = outside.path
+
+        DownloadManager.removeUnmergedStreams(of: item, root: downloads)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: inside.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: finished.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: outside.path))
+    }
+
+    func testOnlyTheInstagramTryTellsGalleryDlToGiveUpOnARateLimit() {
+        let item = DownloadItem(url: "https://www.threads.com/@someone/post/SYNreel00001")
+        XCTAssertEqual(GalleryDlService.embeddedPostArgs(for: item), [])
+        let pasted = DownloadItem(url: embeddedReel)
+        XCTAssertEqual(GalleryDlService.embeddedPostArgs(for: pasted), [])
+        item.embeddedPostLink = embeddedReel
+        XCTAssertEqual(GalleryDlService.embeddedPostArgs(for: item), ["-o", "extractor.sleep-429=0"])
     }
 
     /// A link card that points at Instagram, but not at one post or reel:
