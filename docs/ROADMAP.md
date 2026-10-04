@@ -24,7 +24,7 @@ See [FEATURES.md](FEATURES.md) for the live feature list and
 
 ---
 
-## Shipped (current: v1.12.3)
+## Shipped (current: v1.12.4)
 
 Pillars 1 and 2 are live. Pillar 3 is live except the primed hero button:
 v1.11 added a brew-free first launch (standalone downloads, two-step
