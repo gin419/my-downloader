@@ -8,6 +8,9 @@ Entries before _Unreleased_ were back-filled from git history.
 
 ## [Unreleased]
 
+### Fixed
+- **An Instagram profile pasted again now fetches every post whose file is missing from its folder**, even when gallery-dl's own download archive (set in your gallery-dl config) lists the post as already downloaded. The same holds for single posts and photos saved through gallery-dl: what is skipped is decided by the files in the folder. X Likes Sync keeps its own archive as before.
+
 ### Changed
 - **A Threads post whose only video is an Instagram reel or post shown under its link card now downloads the Instagram original** (full size, through the app's usual Instagram download with your browser login), and falls back to the smaller Threads copy when that saves nothing.
 

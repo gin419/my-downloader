@@ -618,6 +618,25 @@ enum GalleryDlService {
         "https://www.instagram.com/\(username)/posts/"
     }
 
+    /// Switches gallery-dl's download archive off for the run, so a post is
+    /// skipped only when its file is in the destination (gallery-dl's
+    /// default skip, by file name).
+    ///
+    /// A user's own gallery-dl config can name an archive: a database of
+    /// every post gallery-dl has fetched, each one skipped from then on
+    /// whether or not its file still exists, or ever was in this folder.
+    /// With it, a profile pasted again fetched nothing its folder lacked.
+    ///
+    /// Given without a path the key is set at the top level, which
+    /// gallery-dl reads before any "extractor", site or subcategory level
+    /// of a config file, so it wins wherever the user set the archive; and
+    /// a false value means the archive is never opened: nothing is read
+    /// from it and nothing is written to it (verified against gallery-dl
+    /// 1.32.15's `DownloadJob.initialize` and `config.interpolate`).
+    ///
+    /// X Likes Sync builds its own command line and keeps its own archive.
+    static let ignoreDownloadArchiveArgs = ["-o", "archive=false"]
+
     private static func commandLine(
         url: String,
         outputDirectory: URL,
@@ -641,6 +660,7 @@ enum GalleryDlService {
             "--retries", "10",
             "-o", "downloader.http.timeout=60",
         ]
+        args += ignoreDownloadArchiveArgs
         args += siteArgs
         args += [
             "--no-mtime",
