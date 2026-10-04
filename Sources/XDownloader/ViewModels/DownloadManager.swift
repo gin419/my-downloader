@@ -110,6 +110,8 @@ class DownloadManager: ObservableObject {
     /// `recordImageSweepOutcome`. Any clean exit resets it.
     private var consecutiveImageSweepFailures = 0
     private var cookieSaveFeedbackShown = false
+    /// Latch for `surfaceEmbeddedUnmergedFeedback`.
+    private var embeddedUnmergedFeedbackShown = false
     /// IDs of items the user explicitly paused — distinguishes a user-initiated
     /// `terminate()` from a real download failure when the process exits.
     private var pausedItemIDs: Set<UUID> = []
@@ -1658,7 +1660,7 @@ class DownloadManager: ObservableObject {
             // message wording — arms the one-shot auto-retry below.
             item.emptySuccessFailure = true
             item.status = .failed(ytDlpEmptySuccessMessage)
-        } else if SiteRegistry.profile(for: item.url).resolvesAddressBeforeDownload {
+        } else if SiteRegistry.profile(for: item.toolLink).resolvesAddressBeforeDownload {
             // The exit code names no cause and the last warning may quote
             // the resolved address, which is not to reach the row or history.
             item.status = .failed(YtDlpService.resolvedAddressFailedMessage)
@@ -1904,36 +1906,7 @@ class DownloadManager: ObservableObject {
         let cookies: (path: String?, granted: URL?) = sendsCookies ? resolveCookiesForDownload() : (nil, nil)
         var ytResult = ProcessResult(code: 0, wasSignal: false)
         let runYtDlp = { [self] () async -> ProcessResult in
-            // Without a post folder found, the row's own folder is a work
-            // page's, settled by the resolver above.
-            let folders = found.map(Self.ytDlpFolders(for:)) ?? (flat: item.destination, list: nil)
-            let args = YtDlpService.buildArguments(
-                for: item,
-                outputDirectory: outputDirectory,
-                folder: folders.flat,
-                foundFolder: folders.list,
-                format: youtubeFormat,
-                videoQuality: videoQuality,
-                audioQuality: audioQuality,
-                subtitleLanguage: effectiveSubtitleLanguage,
-                embedSubtitles: embedSubtitles,
-                cookieBrowser: cookieBrowser,
-                cookieBrowserProfile: cookieBrowserProfile,
-                cookiesFile: cookies.path
-            )
-
-            return await ProcessRunner.run(
-                executablePath: ytdlpPath,
-                arguments: args,
-                item: item,
-                register: { [weak self] p in self?.activeProcesses[item.id] = p },
-                unregister: { [weak self] in self?.activeProcesses.removeValue(forKey: item.id) },
-                lineParser: { [weak self] line, item in
-                    YtDlpService.parseLine(line, item: item) {
-                        self?.activeProcesses[item.id]?.terminate()
-                    }
-                }
-            )
+            await startYtDlp(item, found: found, subtitleLanguage: effectiveSubtitleLanguage, cookiesFile: cookies.path)
         }
         if sendsCookies {
             await cookieAccess.withScope(for: item.id, file: cookies.path, grantedURL: cookies.granted) {
@@ -2070,9 +2043,10 @@ class DownloadManager: ObservableObject {
                 let directory = outputDirectory
                 let session = threadsSession
                 let stopped = await runResolverTask(item) { [weak self] in
-                    await ThreadsService.run(item: item, outputDirectory: directory, session: session) { pageURL in
-                        await self?.fetchThreadsPageSignedIn(pageURL, for: item) ?? .cancelled
-                    }
+                    await ThreadsService.run(
+                        item: item, outputDirectory: directory, session: session,
+                        signedInPage: { pageURL in await self?.fetchThreadsPageSignedIn(pageURL, for: item) ?? .cancelled },
+                        instagramPost: { link in await self?.downloadInstagramPost(link, for: item) ?? .stopped })
                 }
                 if stopped { return }  // user pressed Stop mid-run
             }
@@ -2158,6 +2132,45 @@ class DownloadManager: ObservableObject {
         finalize(item)
     }
 
+    /// One yt-dlp run of the row's `toolLink`, with Settings as they stand.
+    /// `found` is the post's folder found on disk as the run began, nil when
+    /// there is none. Stop and the row's ✕ reach the process through
+    /// `activeProcesses`.
+    private func startYtDlp(
+        _ item: DownloadItem, found: URL?, subtitleLanguage: SubtitleLanguage, cookiesFile: String?
+    ) async -> ProcessResult {
+        // Without a post folder found, the row's own folder is a work
+        // page's, settled by its resolver before the run.
+        let folders = found.map(Self.ytDlpFolders(for:)) ?? (flat: item.destination, list: nil)
+        let args = YtDlpService.buildArguments(
+            for: item,
+            outputDirectory: outputDirectory,
+            folder: folders.flat,
+            foundFolder: folders.list,
+            format: youtubeFormat,
+            videoQuality: videoQuality,
+            audioQuality: audioQuality,
+            subtitleLanguage: subtitleLanguage,
+            embedSubtitles: embedSubtitles,
+            cookieBrowser: cookieBrowser,
+            cookieBrowserProfile: cookieBrowserProfile,
+            cookiesFile: cookiesFile
+        )
+
+        return await ProcessRunner.run(
+            executablePath: ytdlpPath,
+            arguments: args,
+            item: item,
+            register: { [weak self] p in self?.activeProcesses[item.id] = p },
+            unregister: { [weak self] in self?.activeProcesses.removeValue(forKey: item.id) },
+            lineParser: { [weak self] line, item in
+                YtDlpService.parseLine(line, item: item) {
+                    self?.activeProcesses[item.id]?.terminate()
+                }
+            }
+        )
+    }
+
     /// Mixed video+photo posts: yt-dlp captures the video(s) and exits 0 —
     /// deliberately skipping the photos — and success bypasses the
     /// failure-driven fallback chain, so without this pass the photos would
@@ -2170,11 +2183,11 @@ class DownloadManager: ObservableObject {
         // download photos the user didn't ask for and recomputeMediaCategory
         // would overwrite the explicitly-set .audio category.
         guard youtubeFormat != .audioOnly,
-            SiteRegistry.profile(for: item.url).imageSweepArgs != nil,
+            SiteRegistry.profile(for: item.toolLink).imageSweepArgs != nil,
             let gdlPath = galleryDlPath
         else { return }
         let root = outputDirectory
-        let condition = GalleryDlService.ownPostCondition(for: item.url)
+        let condition = GalleryDlService.ownPostCondition(for: item.toolLink)
         // The photos go into the row's own folder when it has one: the
         // post's folder found on disk, where an earlier run put them, or the
         // one yt-dlp named for a post of several videos. It comes before the
@@ -2296,7 +2309,7 @@ class DownloadManager: ObservableObject {
     /// failed move, leaves the video loose and the row pointing at it.
     static func moveVideoToItsPhotos(_ item: DownloadItem, photos: [GalleryDlService.ReportedMedia], root: URL) {
         guard videoCanFollowItsPhotos(item, root: root), let videoPath = item.videoPath,
-            let id = RowFolder.postID(of: item.url)
+            let id = RowFolder.postID(of: item.toolLink)
         else { return }
         let folder = photos.lazy
             .map { URL(fileURLWithPath: $0.path) }
@@ -2325,7 +2338,7 @@ class DownloadManager: ObservableObject {
         // count puts them either way.
         let folderMode: GalleryDlService.FolderMode =
             item.destination.flatMap { folder in
-                GalleryDlService.ownPostCondition(for: item.url).map { .into(folder, ownPost: $0) }
+                GalleryDlService.ownPostCondition(for: item.toolLink).map { .into(folder, ownPost: $0) }
             } ?? .perPostIfMultiple
         let cookies = resolveCookiesForDownload()
         await cookieAccess.withScope(for: item.id, file: cookies.path, grantedURL: cookies.granted) {
@@ -2442,6 +2455,111 @@ class DownloadManager: ObservableObject {
             }
         }
         return outcome ?? .cancelled
+    }
+
+    /// The Instagram try of a Threads post whose only video is an Instagram
+    /// post or reel shown under its link card (see `ThreadsService.run`):
+    /// the post downloads the way a pasted Instagram link does — yt-dlp
+    /// with the browser login Settings name, the photo sweep after it, and
+    /// gallery-dl when yt-dlp saves nothing — for the Threads row, which
+    /// keeps its own link (`DownloadItem.embeddedPostLink`). Nothing of the
+    /// Threads login is used. It runs inside the resolver's Task and every
+    /// tool is registered in `activeProcesses`, so Stop and the row's ✕
+    /// reach it. Unless it saved, nothing of the try is left on the row and
+    /// the Threads copy downloads as it always has.
+    ///
+    /// Not tried — the Threads copy stands, as before — when yt-dlp is not
+    /// installed, when the address is not one Instagram post or would be
+    /// turned down, and when Settings ask for audio only, which a Threads
+    /// post has never been downloaded as.
+    private func downloadInstagramPost(_ link: String, for item: DownloadItem) async -> ThreadsService.InstagramPostOutcome {
+        guard SiteRegistry.profile(for: link).id == SiteRegistry.instagram.id,
+            SiteRegistry.refusalMessage(for: link) == nil,
+            InstagramLink.postCode(of: link) != nil,
+            youtubeFormat != .audioOnly,
+            ytDlpPathProvider() != nil
+        else { return .notSaved }
+        let stopped = { [self] in Task.isCancelled || !stillInList(item) || pausedItemIDs.contains(item.id) }
+        if stopped() { return .stopped }
+        item.embeddedPostLink = link
+        defer { item.embeddedPostLink = nil }
+        item.status = .fetching
+        // A folder an earlier run made for the post is found by its code and
+        // written into, as for the pasted link.
+        let folderID = RowFolder.folderID(of: link)
+        let found =
+            folderID
+            .flatMap { RowFolder.existing(in: outputDirectory, id: $0) }
+            .flatMap { RowFolder.isReusable($0) ? $0 : nil }
+        if let found { RowFolder.use(found, for: item) }
+        if let folderID { notePostFolders(of: item, id: folderID) }
+        let cookies = resolveCookiesForDownload()
+        var ytResult = ProcessResult(code: 0, wasSignal: false)
+        await cookieAccess.withScope(for: item.id, file: cookies.path, grantedURL: cookies.granted) {
+            ytResult = await startYtDlp(item, found: found, subtitleLanguage: subtitleLanguage, cookiesFile: cookies.path)
+        }
+        if stopped() { return .stopped }
+        if found == nil, let folderID,
+            let folder = Self.postFolder(holding: item.videoPath ?? item.outputPath, id: folderID, root: outputDirectory)
+        {
+            RowFolder.use(folder, for: item)
+        }
+        let cookieSaveOnlyFailure = Self.isCookieSaveOnlyFailure(
+            item: item, exitedCleanly: ytResult.isSuccess, cookiesFilePath: cookies.path)
+        if item.outputPath != nil, ytResult.isSuccess || cookieSaveOnlyFailure, Self.unmergedStreamsFailure(for: item) == nil {
+            YtDlpService.ensureFinalMediaCounts(item)
+            await runImageSweepIfNeeded(item)
+            if cookieSaveOnlyFailure { surfaceCookieSaveFeedback() }
+            item.markCompleted()
+            return .saved
+        }
+        // ffmpeg is missing: yt-dlp left the reel's video and audio as two
+        // unmerged streams. A pasted link keeps them for its Retry; this row
+        // has no Retry of the try — it ends with gallery-dl's file or the
+        // Threads copy — so the pieces go, and the user hears why the full
+        // size did not come.
+        if Self.unmergedStreamsFailure(for: item) != nil {
+            Self.removeUnmergedStreams(of: item, root: outputDirectory)
+            surfaceEmbeddedUnmergedFeedback(for: item)
+        }
+        if let galleryDl = galleryDlPath {
+            await runGalleryDlFallback(item, executablePath: galleryDl)
+            if stopped() { return .stopped }
+            if item.status == .completed { return .saved }
+        }
+        item.resetForReattempt()
+        RowFolder.use(nil, for: item)
+        return .notSaved
+    }
+
+    /// Deletes the pre-merge streams yt-dlp left for the row — the paths it
+    /// reported, only those named as a `.f{format_id}` piece and only inside
+    /// `root`, the download folder. A finished file is never one of them.
+    static func removeUnmergedStreams(of item: DownloadItem, root: URL) {
+        let rootPath = root.standardizedFileURL.path
+        let pieces = Set([item.outputPath, item.videoPath, item.audioPath].compactMap { $0 })
+            .filter(YtDlpService.isIntermediateFormatPath)
+            .filter { URL(fileURLWithPath: $0).standardizedFileURL.path.hasPrefix(rootPath + "/") }
+        for piece in pieces {
+            try? FileManager.default.removeItem(atPath: piece)
+        }
+    }
+
+    /// Shown when a Threads post's Instagram video could not be merged
+    /// (see `downloadInstagramPost`); the row still finishes, with
+    /// gallery-dl's file or the Threads copy, so there is nothing to Retry.
+    static let embeddedUnmergedStreamsMessage =
+        "The full-size Instagram video could not be merged — ffmpeg is missing, so a smaller copy may have been saved. Install it (brew install ffmpeg) for full-size Instagram videos."
+
+    /// Once per session: one missing ffmpeg is the same news for every row.
+    private func surfaceEmbeddedUnmergedFeedback(for item: DownloadItem) {
+        guard !embeddedUnmergedFeedbackShown else { return }
+        embeddedUnmergedFeedbackShown = true
+        showFeedback(
+            CaptureFeedback(
+                kind: .warning,
+                message: Self.embeddedUnmergedStreamsMessage,
+                highlightItemID: item.id))
     }
 
     /// What a signed-in Threads request is made with, as Settings stand now.

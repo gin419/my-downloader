@@ -93,6 +93,12 @@ enum InstagramLink {
     /// link. A "/share/" link carries a share id instead, which names the
     /// post only to Instagram itself.
     static func postCode(of link: String) -> String? {
+        postKindAndCode(of: link)?.code
+    }
+
+    /// The item kind ("p", "reel", "reels", "tv") and the code of the one
+    /// post a link names, read as `postCode` describes.
+    private static func postKindAndCode(of link: String) -> (kind: String, code: String)? {
         guard shape(of: link) == .singleItem,
             let components = URLComponents(string: link.trimmingCharacters(in: .whitespacesAndNewlines))
         else { return nil }
@@ -106,7 +112,18 @@ enum InstagramLink {
         guard segments.count > 1, itemKinds.contains(segments[0]) else { return nil }
         // Read as `namesItem` reads it: the code ends where a glued "&…" begins.
         let code = segments[1].prefix { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "_" || $0 == "-") }
-        return code.isEmpty ? nil : String(code)
+        return code.isEmpty ? nil : (segments[0], String(code))
+    }
+
+    /// The one address of the post, reel or video post a link names —
+    /// "https://www.instagram.com/<kind>/<code>/", the kind as the link has
+    /// it ("reels" read as "reel") — nil for any other link, a story and a
+    /// "/share/" link included. Built from the parts, never passed through:
+    /// nothing of the link's host spelling, username, query or fragment
+    /// reaches the tools.
+    static func canonicalPostLink(for link: String) -> String? {
+        guard let (kind, code) = postKindAndCode(of: link) else { return nil }
+        return "https://www.instagram.com/\(kind == "reels" ? "reel" : kind)/\(code)/"
     }
 
     /// The one spelling a profile link is kept in, whatever host, letter

@@ -324,6 +324,37 @@ final class InstagramLinkTests: XCTestCase {
         }
     }
 
+    /// The one address a post is handed to the tools as when a Threads
+    /// post shows it under its link card: built from the kind and the
+    /// code, nothing else of the link kept.
+    func testCanonicalPostLink() {
+        let cases: [(link: String, canonical: String?)] = [
+            ("https://www.instagram.com/reel/SYNreel0001_/", "https://www.instagram.com/reel/SYNreel0001_/"),
+            ("https://www.instagram.com/reels/SYNreel0001_/", "https://www.instagram.com/reel/SYNreel0001_/"),
+            ("https://instagram.com/reel/SYNreel0001_?igsh=SYNtracking#top", "https://www.instagram.com/reel/SYNreel0001_/"),
+            ("https://www.instagram.com/p/SYNpost0001_/?img_index=2", "https://www.instagram.com/p/SYNpost0001_/"),
+            ("https://www.instagram.com/tv/SYNvideo001_/", "https://www.instagram.com/tv/SYNvideo001_/"),
+            ("https://m.instagram.com/someone.invented/p/SYNpost0001_/", "https://www.instagram.com/p/SYNpost0001_/"),
+            ("https://instagram.com/p/SYN-post_01&igsh=abc", "https://www.instagram.com/p/SYN-post_01/"),
+            ("https://www.instagram.com/share/p/SYNshare01/", nil),
+            ("https://www.instagram.com/stories/someone.invented/3456789012345678901/", nil),
+            ("https://www.instagram.com/someone.invented/", nil),
+            ("https://www.instagram.com/someone.invented/tagged/", nil),
+            ("https://www.instagram.com/reels/audio/1234567890/", nil),
+            ("https://example.com/reel/SYNreel0001_/", nil),
+            ("https://www.instagram.com.example.com/reel/SYNreel0001_/", nil),
+        ]
+        for c in cases {
+            XCTAssertEqual(InstagramLink.canonicalPostLink(for: c.link), c.canonical, c.link)
+            if let canonical = c.canonical {
+                XCTAssertEqual(InstagramLink.shape(of: canonical), .singleItem, canonical)
+                XCTAssertEqual(InstagramLink.postCode(of: canonical), InstagramLink.postCode(of: c.link), canonical)
+                XCTAssertNil(SiteRegistry.refusalMessage(for: canonical), canonical)
+                XCTAssertEqual(SiteRegistry.profile(for: canonical).id, "instagram", canonical)
+            }
+        }
+    }
+
     /// Every spelling of one profile is kept as the same link.
     func testProfileLinksAreKeptInOneSpelling() {
         let spellings = [

@@ -150,6 +150,68 @@ final class ThreadsResolverTests: XCTestCase {
             "Reel Maker - Synthetic reel caption [SYNreel00001]")
     }
 
+    func testLinkedInlineVideoNamesTheInstagramReelItCopies() throws {
+        guard case .success(let post) = try resolve(expectation(for: "threads_linked_inline_video.html")) else {
+            return XCTFail("expected media")
+        }
+        XCTAssertEqual(post.instagramPost, "https://www.instagram.com/reel/SYNreel00001/")
+    }
+
+    /// Only media from under a link card is ever a copy of an Instagram
+    /// post: a post's own media, a quote's and a repost's never are.
+    func testEveryOtherFixtureNamesNoInstagramPost() throws {
+        let manifest = try JSONDecoder().decode([Expectation].self, from: Data(contentsOf: fixtureURL("manifest.json")))
+        var checked = 0
+        for expected in manifest where expected.fixture != "threads_linked_inline_video.html" {
+            guard case .success(let post) = try resolve(expected) else { continue }
+            XCTAssertNil(post.instagramPost, expected.fixture)
+            checked += 1
+        }
+        XCTAssertGreaterThanOrEqual(checked, 5)
+    }
+
+    func testInstagramPostIsReadOffTheLinkCardOnlyForLinkedInlineMedia() throws {
+        let linked = node(code: "SYNl0000001", name: "Linked", username: "linked", video: "https://example.invalid/l.mp4")
+        func post(card: [String: Any]?, own: String? = nil, quoted: [String: Any]? = nil) -> [String: Any] {
+            var info: [String: Any] = [
+                "share_info": ["quoted_post": quoted as Any? ?? NSNull(), "reposted_post": NSNull()],
+                "linked_inline_media": linked,
+            ]
+            if let card {
+                info["link_preview_response"] = card["response"] ?? NSNull()
+                info["link_preview_attachment"] = card["attachment"] ?? NSNull()
+            }
+            return node(
+                code: "SYNp0000001", name: "Example Author", username: "example_author", image: own,
+                extra: ["text_post_app_info": info])
+        }
+        func instagramPost(_ post: [String: Any]) -> String? {
+            ThreadsService.resolveMedia(in: post, linkCode: "SYNp0000001")?.instagramPost
+        }
+        let reel = "https://www.instagram.com/reel/SYNl0000001/"
+        let reelCard: [String: Any] = ["response": ["link_type": "ig_media", "url": reel], "attachment": ["url": reel]]
+
+        XCTAssertEqual(instagramPost(post(card: reelCard)), reel)
+        // Either half of the card is enough; the resolved address wins.
+        XCTAssertEqual(instagramPost(post(card: ["attachment": ["url": "https://instagram.com/reels/SYNl0000001?igsh=x"]])), reel)
+        XCTAssertEqual(
+            instagramPost(post(card: ["response": ["url": reel], "attachment": ["url": "https://www.instagram.com/p/SYNother001/"]])),
+            reel)
+        // A card pointing anywhere but one post or reel names nothing.
+        for other in [
+            "https://www.instagram.com/someone.invented/", "https://www.instagram.com/someone.invented/tagged/",
+            "https://www.instagram.com/stories/someone.invented/3456789012345678901/",
+            "https://www.instagram.com/share/p/SYNshare01/", "https://example.com/reel/SYNl0000001/", "not a link",
+        ] {
+            XCTAssertNil(instagramPost(post(card: ["response": ["url": other], "attachment": ["url": other]])), other)
+        }
+        XCTAssertNil(instagramPost(post(card: nil)))
+        // The post's own media or a quote's wins, and is never a copy.
+        XCTAssertNil(instagramPost(post(card: reelCard, own: "https://example.invalid/own.jpg")))
+        let quoted = node(code: "SYNq0000001", name: "Quoted", username: "quoted", video: "https://example.invalid/q.mp4")
+        XCTAssertNil(instagramPost(post(card: reelCard, quoted: quoted)))
+    }
+
     // MARK: - Failure pages
 
     func testRestrictedAudiencePage() throws {

@@ -32,7 +32,7 @@ enum YtDlpService {
         // Nested %(...)fmt patterns inside the &conditional corrupt to null
         // bytes (a yt-dlp template-parser limitation) — new suffixes must use
         // the `{0}` replacement syntax instead (see the instagram profile).
-        let profile = SiteRegistry.profile(for: item.url)
+        let profile = SiteRegistry.profile(for: item.toolLink)
         // A resolved address names its file after the server's storage, so
         // the name comes from the resolver instead of the extractor's fields.
         // Both travel together: a stem without its address is not used.
@@ -121,7 +121,7 @@ enum YtDlpService {
         // A resolved address names one file. Should it ever answer with a
         // list instead, the list is not walked.
         if item.resolvedAddress != nil { args += ["--no-playlist"] }
-        args.append(item.resolvedAddress ?? item.url)
+        args.append(item.resolvedAddress ?? item.toolLink)
 
         return args
     }
@@ -445,7 +445,7 @@ enum YtDlpService {
 
         // External redirect detection: yt-dlp followed a link out of the tweet.
         // Kill the process immediately so gallery-dl can handle the original tweet URL.
-        if SiteRegistry.profile(for: item.url).detectsExternalRedirect,
+        if SiteRegistry.profile(for: item.toolLink).detectsExternalRedirect,
             line.hasPrefix("[generic]") || line.hasPrefix("[redirect]"),
             let urlRange = line.range(of: "(?:Extracting URL|Following redirect to): (https?://\\S+)", options: .regularExpression),
             let detected = line[urlRange].components(separatedBy: ": ").last,
@@ -470,7 +470,7 @@ enum YtDlpService {
         // ("Precondition check failed" is deliberately NOT a tell — it fires
         // transiently on healthy installs.)
         if line.hasPrefix("WARNING") {
-            if SiteRegistry.profile(for: item.url).id == "youtube" {
+            if SiteRegistry.profile(for: item.toolLink).id == "youtube" {
                 let lowerWarning = line.lowercased()
                 if lowerWarning.contains("no supported javascript runtime") {
                     item.extractorBreakage = .missingJSRuntime
@@ -514,7 +514,7 @@ enum YtDlpService {
         let lower = line.lowercased()
         if lower.contains("error:") {
             if case .failed = item.status { return }
-            let profile = SiteRegistry.profile(for: item.url)
+            let profile = SiteRegistry.profile(for: item.toolLink)
             if profile.resolvesAddressBeforeDownload {
                 // Ahead of every branch below: each of them reads the line
                 // for what it says about a page link, and this run has none.
@@ -527,7 +527,7 @@ enum YtDlpService {
                 // tell means the tool itself is broken and Retry alone can't
                 // fix it — say so.
                 let breakage: ExtractorBreakage =
-                    SiteRegistry.profile(for: item.url).id == "youtube" ? item.extractorBreakage : .none
+                    SiteRegistry.profile(for: item.toolLink).id == "youtube" ? item.extractorBreakage : .none
                 switch breakage {
                 case .missingJSRuntime: item.status = .failed(Self.missingJSRuntimeMessage)
                 case .staleTool: item.status = .failed(Self.staleToolMessage)
@@ -545,7 +545,7 @@ enum YtDlpService {
             } else {
                 // Known raw errors get app-native copy naming the true cause
                 // and the in-app fix; everything else stays verbatim.
-                let profileID = SiteRegistry.profile(for: item.url).id
+                let profileID = SiteRegistry.profile(for: item.toolLink).id
                 item.status = .failed(Self.mappedErrorMessage(for: line, profileID: profileID) ?? line)
             }
         }
