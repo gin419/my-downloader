@@ -23,6 +23,7 @@ final class InstagramProfileArgumentsTests: XCTestCase {
                 "-D", ".",
                 "--retries", "10",
                 "-o", "downloader.http.timeout=60",
+                "-o", "archive=false",
                 "-f", "{username} - {description|''!s:.100} [{post_shortcode}] #{num}.{extension}",
                 "-o", "max-posts=37",
                 "-o", "videos=merged",
@@ -46,7 +47,8 @@ final class InstagramProfileArgumentsTests: XCTestCase {
         for limit in [1, 100, 1000] {
             let args = profileArguments(postLimit: limit)
             XCTAssertEqual(
-                optionValues(args), ["downloader.http.timeout=60", "max-posts=\(limit)", "videos=merged"], "\(limit)")
+                optionValues(args),
+                ["downloader.http.timeout=60", "archive=false", "max-posts=\(limit)", "videos=merged"], "\(limit)")
             XCTAssertFalse(args.contains("--range"))
             XCTAssertFalse(args.contains("--post-range"))
         }
