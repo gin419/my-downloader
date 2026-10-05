@@ -3,6 +3,15 @@
   <channel>
     <title>XDownloader</title>
     <item>
+      <title>1.12.4</title>
+      <pubDate>Mon, 05 Oct 2026 23:11:14 +0000</pubDate>
+      <sparkle:version>11204</sparkle:version>
+      <sparkle:shortVersionString>1.12.4</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <sparkle:releaseNotesLink>https://github.com/gin419/my-downloader/releases/tag/v1.12.4</sparkle:releaseNotesLink>
+      <enclosure url="https://github.com/gin419/my-downloader/releases/download/v1.12.4/XDownloader-v1.12.4.zip" sparkle:edSignature="ORQsuS7KYPKgeWj+p+SN1TYHRQSBAS4ltDlC473h6/HHogRkdahVVGcDL8QR4fQSA+nJRUvyGkUh6N13pFKRBA==" length="4769892" type="application/octet-stream"/>
+    </item>
+<item>
       <title>1.12.3</title>
       <pubDate>Wed, 30 Sep 2026 04:07:40 +0000</pubDate>
       <sparkle:version>11203</sparkle:version>
