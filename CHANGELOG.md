@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Entries before _Unreleased_ were back-filled from git history.
 
-## [Unreleased]
+## [1.12.4] — 2026-10-05
 
 ### Fixed
 - **An Instagram profile pasted again now fetches every post whose file is missing from its folder**, even when gallery-dl's own download archive (set in your gallery-dl config) lists the post as already downloaded. The same holds for single posts and photos saved through gallery-dl: what is skipped is decided by the files in the folder. X Likes Sync keeps its own archive as before.
