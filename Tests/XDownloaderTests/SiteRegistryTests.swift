@@ -62,7 +62,7 @@ final class SiteRegistryTests: XCTestCase {
     func testThreadsLeadsTheRegistryAndTheCatchAllEndsIt() {
         XCTAssertEqual(SiteRegistry.all.first?.id, "threads")
         XCTAssertEqual(SiteRegistry.all.last?.id, "other")
-        XCTAssertEqual(SiteRegistry.all.map(\.id), ["threads", "dmm", "twitter", "youtubePost", "youtube", "reddit", "instagram", "other"])
+        XCTAssertEqual(SiteRegistry.all.map(\.id), ["threads", "dmm", "pixiv", "twitter", "youtubePost", "youtube", "reddit", "instagram", "other"])
     }
 
     /// Work pages are matched by the exact HOST. Everything else of the
@@ -165,7 +165,7 @@ final class SiteRegistryTests: XCTestCase {
     }
 
     func testEveryOtherProfileStillRunsYtDlp() {
-        for profile in SiteRegistry.all where profile.id != "threads" && profile.id != "youtubePost" {
+        for profile in SiteRegistry.all where !["threads", "youtubePost", "pixiv"].contains(profile.id) {
             XCTAssertTrue(profile.usesYtDlp, profile.id)
         }
     }
@@ -181,6 +181,7 @@ final class SiteRegistryTests: XCTestCase {
         XCTAssertFalse(SiteProfile.Fallback.fxTwitter.needsExternalTool)
         XCTAssertFalse(SiteProfile.Fallback.threads.needsExternalTool)
         XCTAssertFalse(SiteProfile.Fallback.youtubePost.needsExternalTool)
+        XCTAssertFalse(SiteProfile.Fallback.pixiv.needsExternalTool)
     }
 
     func testCapabilityFlags() {
