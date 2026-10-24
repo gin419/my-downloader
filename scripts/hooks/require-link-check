@@ -1,0 +1,32 @@
+#!/bin/sh
+# pre-push: refuse to push a version tag (refs/tags/v*) unless its commit
+# passed scripts/check-links.sh within the last 24 hours. Installed by
+# scripts/install-hooks.sh. Escape hatch for an emergency release:
+#   XD_SKIP_LINK_CHECK=1 git push origin vX.Y.Z
+[ -n "${XD_SKIP_LINK_CHECK:-}" ] && exit 0
+
+common="$(cd "$(git rev-parse --git-common-dir)" && pwd)"
+stamps="$common/xdownloader-link-check-passes"
+now=$(date +%s)
+status=0
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+    case "$remote_ref" in refs/tags/v*) ;; *) continue ;; esac
+    # An all-zero id deletes the tag on the remote: nothing is released.
+    case "$local_sha" in *[!0]*) ;; *) continue ;; esac
+    commit=$(git rev-parse "$local_sha^{commit}" 2>/dev/null) || continue
+    ok=""
+    if [ -f "$stamps" ]; then
+        while read -r sha when; do
+            if [ "$sha" = "$commit" ] && [ $((now - when)) -le 86400 ]; then ok=1; fi
+        done <"$stamps"
+    fi
+    if [ -z "$ok" ]; then
+        tag="${remote_ref#refs/tags/}"
+        short=$(echo "$commit" | cut -c1-7)
+        echo "✋ $tag: commit $short has no passing link check from the last 24 hours." >&2
+        echo "   Run scripts/check-links.sh on that commit first (or scripts/release-tag.sh $tag)." >&2
+        status=1
+    fi
+done
+exit $status

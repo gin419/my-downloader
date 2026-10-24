@@ -41,7 +41,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     }
 }
 
+/// The process entry: a link check runs without any window (`LinkCheck`);
+/// every other launch is the normal app.
 @main
+enum AppEntry {
+    static func main() {
+        if let command = LinkCheck.command(from: CommandLine.arguments) {
+            MainActor.assumeIsolated { LinkCheck.runHeadless(command) }
+        }
+        XDownloaderApp.main()
+    }
+}
+
 struct XDownloaderApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var manager = DownloadManager()
