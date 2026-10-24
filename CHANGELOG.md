@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Entries before _Unreleased_ were back-filled from git history.
 
-## [Unreleased]
+## [1.12.6] — 2026-10-25
 
 ### Added
 - **A failed download leaves a diagnostic record** in `~/Library/Application Support/XDownloader/diagnostics/`, one folder per failure: the link, its site, the step that failed and the row's message, the app's and tools' versions, every page or API answer the app fetched itself (status, headers, and the body as received), and each yt-dlp or gallery-dl run's arguments and last output. Logins never reach a record: cookie, authorization and token values are masked in headers, arguments and output, and a page fetched with your login keeps no body. The newest 100 records are kept, none older than 30 days.
