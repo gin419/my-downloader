@@ -62,7 +62,9 @@ final class SiteRegistryTests: XCTestCase {
     func testThreadsLeadsTheRegistryAndTheCatchAllEndsIt() {
         XCTAssertEqual(SiteRegistry.all.first?.id, "threads")
         XCTAssertEqual(SiteRegistry.all.last?.id, "other")
-        XCTAssertEqual(SiteRegistry.all.map(\.id), ["threads", "dmm", "pixiv", "twitter", "youtubePost", "youtube", "reddit", "instagram", "other"])
+        XCTAssertEqual(
+            SiteRegistry.all.map(\.id),
+            ["threads", "dmm", "pixiv", "femdomdestiny", "twitter", "youtubePost", "youtube", "reddit", "instagram", "other"])
     }
 
     /// Work pages are matched by the exact HOST. Everything else of the
@@ -141,10 +143,11 @@ final class SiteRegistryTests: XCTestCase {
     }
 
     /// The two new members are off for every profile that was there before.
+    /// femdomdestiny.com sends no login either: its posts are free.
     func testEveryOtherProfileResolvesNothingAndStillSendsCookies() {
         for profile in SiteRegistry.all where profile.id != "dmm" {
             XCTAssertFalse(profile.resolvesAddressBeforeDownload, profile.id)
-            XCTAssertTrue(profile.receivesBrowserCookies, profile.id)
+            XCTAssertEqual(profile.receivesBrowserCookies, profile.id != "femdomdestiny", profile.id)
         }
     }
 
@@ -165,7 +168,7 @@ final class SiteRegistryTests: XCTestCase {
     }
 
     func testEveryOtherProfileStillRunsYtDlp() {
-        for profile in SiteRegistry.all where !["threads", "youtubePost", "pixiv"].contains(profile.id) {
+        for profile in SiteRegistry.all where !["threads", "youtubePost", "pixiv", "femdomdestiny"].contains(profile.id) {
             XCTAssertTrue(profile.usesYtDlp, profile.id)
         }
     }

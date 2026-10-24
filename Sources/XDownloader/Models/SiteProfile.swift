@@ -18,13 +18,14 @@ struct SiteProfile {
         case threads  // in-app Threads resolver, direct download
         case youtubePost  // in-app YouTube community post resolver
         case pixiv  // in-app Pixiv artwork resolver
+        case femdomDestiny  // in-app femdomdestiny.com post resolver
 
         /// Runs an external command-line tool, which may not be installed.
         /// The in-app resolvers need nothing but the network.
         var needsExternalTool: Bool {
             switch self {
             case .galleryDl: return true
-            case .fxTwitter, .threads, .youtubePost, .pixiv: return false
+            case .fxTwitter, .threads, .youtubePost, .pixiv, .femdomDestiny: return false
             }
         }
     }
@@ -284,6 +285,26 @@ enum SiteRegistry {
         usesYtDlp: false
     )
 
+    /// femdomdestiny.com posts: yt-dlp's generic extractor turns the pages
+    /// down and gallery-dl has no extractor, so the in-app resolver is the
+    /// downloader and yt-dlp is skipped. Everything is served logged out,
+    /// so no browser login goes to the site. Matched by exact host; the
+    /// site's own files ("/wp-content/…") stay with `other`.
+    static let femdomDestiny = SiteProfile(
+        id: "femdomdestiny",
+        matches: { FemdomDestinyService.isSiteLink($0) },
+        fallbacks: [.femdomDestiny],
+        supportsSubtitles: false,
+        usesYouTubeFormatSelector: false,
+        outputTemplateSuffix: "",
+        extractorTitleIncludesUploader: false,
+        detectsExternalRedirect: false,
+        galleryDlArgs: [],
+        imageSweepArgs: nil,
+        usesYtDlp: false,
+        receivesBrowserCookies: false
+    )
+
     /// Work pages whose preview clip is found in-app first: the page holds no
     /// media yt-dlp could read, so the clip's address is resolved and yt-dlp
     /// downloads that, logged out. Matching is by exact host, never by
@@ -320,7 +341,7 @@ enum SiteRegistry {
         imageSweepArgs: nil
     )
 
-    static let all: [SiteProfile] = [threads, dmm, pixiv, twitter, youtubePost, youtube, reddit, instagram, other]
+    static let all: [SiteProfile] = [threads, dmm, pixiv, femdomDestiny, twitter, youtubePost, youtube, reddit, instagram, other]
 
     static func profile(for url: String) -> SiteProfile {
         all.first { $0.matches(url) } ?? other
