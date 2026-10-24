@@ -257,7 +257,8 @@ enum DiagnosticRedaction {
         pattern: #"(?i)\b((?:set-)?cookie|(?:proxy-)?authorization|x-csrf-token|x-guest-token|x-ig-www-claim|x-fb-lsd)(\s*[:=]\s*)[^\r\n]*"#)
     private static let secretPair = try! NSRegularExpression(
         pattern:
-            #"(?i)\b(auth_token|ct0|twid|kdt|sessionid|csrftoken|ds_user_id|rur|fb_dtsg|lsd|access_token|refresh_token|refresh-token|id_token|token|api_key|apikey|password|passwd|PHPSESSID|SID|HSID|SSID|APISID|SAPISID|LOGIN_INFO|__Secure-[A-Za-z0-9_-]+)(["']?\s*[=:]\s*["']?)([^;&\s"',}]+)"#)
+            #"(?i)\b(auth_token|ct0|twid|kdt|sessionid|csrftoken|ds_user_id|rur|fb_dtsg|lsd|access_token|refresh_token|refresh-token|id_token|token|api_key|apikey|password|passwd|PHPSESSID|SID|HSID|SSID|APISID|SAPISID|LOGIN_INFO|__Secure-[A-Za-z0-9_-]+)(["']?\s*[=:]\s*["']?)([^;&\s"',}]+)"#
+    )
     private static let bearer = try! NSRegularExpression(pattern: #"(?i)\b(bearer)\s+[A-Za-z0-9._~+/=%-]+"#)
 
     /// Free text (a tool's output line, an argument) with secret values masked.
