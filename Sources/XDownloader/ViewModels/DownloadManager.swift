@@ -2035,6 +2035,15 @@ class DownloadManager: ObservableObject {
                 guard case .failed = item.status else { continue }  // only as a rescue
                 ranFallback = true
                 if await runFxTwitterFallback(item) { return }  // user pressed Stop mid-run
+            case .youtubePost:
+                ranFallback = true
+                let directory = outputDirectory
+                let stopped = await runResolverTask(item) { [weak self] in
+                    await YouTubePostService.run(
+                        item: item, outputDirectory: directory,
+                        video: { link in await self?.downloadPostVideo(link, for: item) ?? false })
+                }
+                if stopped { return }  // user pressed Stop mid-run
             case .threads:
                 // No "only as a rescue" guard: yt-dlp never ran for this
                 // site, so there is no earlier failure to rescue — the
@@ -2532,6 +2541,48 @@ class DownloadManager: ObservableObject {
         return .notSaved
     }
 
+    /// The video a YouTube community post shares (see `YouTubePostService`):
+    /// downloaded the way a pasted watch link is — yt-dlp with Settings as
+    /// they stand and the browser login — for the post's row, which keeps
+    /// its own link (`DownloadItem.embeddedPostLink`). Returns true when the
+    /// video saved; otherwise the row is left failed under yt-dlp's own
+    /// message. Runs inside the resolver's Task with yt-dlp registered in
+    /// `activeProcesses`, so Stop and the row's ✕ reach it.
+    private func downloadPostVideo(_ link: String, for item: DownloadItem) async -> Bool {
+        guard ytDlpPathProvider() != nil else {
+            item.status = .failed(YouTubePostService.videoNotDownloadableMessage)
+            return false
+        }
+        item.embeddedPostLink = link
+        defer { item.embeddedPostLink = nil }
+        item.status = .fetching
+        let cookies = resolveCookiesForDownload()
+        var ytResult = ProcessResult(code: 0, wasSignal: false)
+        await cookieAccess.withScope(for: item.id, file: cookies.path, grantedURL: cookies.granted) {
+            ytResult = await startYtDlp(item, found: nil, subtitleLanguage: subtitleLanguage, cookiesFile: cookies.path)
+        }
+        if Task.isCancelled || !stillInList(item) || pausedItemIDs.contains(item.id) { return false }
+        if let message = Self.unmergedStreamsFailure(for: item) {
+            item.status = .failed(message)
+            return false
+        }
+        let cookieSaveOnlyFailure = Self.isCookieSaveOnlyFailure(
+            item: item, exitedCleanly: ytResult.isSuccess, cookiesFilePath: cookies.path)
+        let subtitleOnlyFailure: Bool = {
+            guard item.subtitleDownloadFailed else { return false }
+            if case .failed = item.status { return false }
+            return true
+        }()
+        if item.outputPath != nil, ytResult.isSuccess || cookieSaveOnlyFailure || subtitleOnlyFailure {
+            YtDlpService.ensureFinalMediaCounts(item)
+            if cookieSaveOnlyFailure { surfaceCookieSaveFeedback() }
+            item.markCompleted()
+            return true
+        }
+        Self.settleOutcomeWithoutFallback(item, ranYtDlp: true, ytResult: ytResult)
+        return false
+    }
+
     /// Deletes the pre-merge streams yt-dlp left for the row — the paths it
     /// reported, only those named as a `.f{format_id}` piece and only inside
     /// `root`, the download folder. A finished file is never one of them.
@@ -2871,6 +2922,8 @@ class DownloadManager: ObservableObject {
 
     private func siteLabel(for url: String) -> String {
         if InstagramLink.profileUsername(of: url) != nil { return SiteRegistry.instagram.id }
+        // A community post is YouTube's, whatever downloads it.
+        if YouTubePostService.isPostLink(url) { return SiteRegistry.youtube.id }
         return SiteRegistry.profile(for: url).id
     }
 
@@ -2973,6 +3026,7 @@ class DownloadManager: ObservableObject {
     static func storedLink(_ urlString: String) -> String {
         if let profile = InstagramLink.canonicalProfileLink(for: urlString) { return profile }
         if let inner = DmmPreviewResolver.unwrapWrapperLink(urlString) { return inner }
+        if let postID = YouTubePostService.postID(of: urlString) { return YouTubePostService.canonicalLink(for: postID) }
         if let work = DmmPreviewResolver.parseLink(urlString),
             let canonical = DmmPreviewResolver.canonicalURL(for: work)
         {
