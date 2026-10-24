@@ -124,7 +124,8 @@ enum PixivService {
         let data: Data
         let response: URLResponse
         do {
-            (data, response) = try await session.data(for: DirectDownload.request(for: url, headers: apiHeaders(for: artworkID)))
+            (data, response) = try await DiagnosticTrail.data(
+                for: DirectDownload.request(for: url, headers: apiHeaders(for: artworkID)), session: session, label: "pixiv-api")
         } catch {
             if Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled { return .cancelled }
             return .unreachable(.transport(error))
