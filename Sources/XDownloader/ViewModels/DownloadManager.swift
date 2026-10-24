@@ -2044,6 +2044,14 @@ class DownloadManager: ObservableObject {
                         video: { link in await self?.downloadPostVideo(link, for: item) ?? false })
                 }
                 if stopped { return }  // user pressed Stop mid-run
+            case .pixiv:
+                guard let artworkID = PixivService.artworkID(of: item.url) else { continue }
+                ranFallback = true
+                let directory = outputDirectory
+                let stopped = await runResolverTask(item) {
+                    await PixivService.run(item: item, artworkID: artworkID, outputDirectory: directory)
+                }
+                if stopped { return }  // user pressed Stop mid-run
             case .threads:
                 // No "only as a rescue" guard: yt-dlp never ran for this
                 // site, so there is no earlier failure to rescue — the
@@ -3027,6 +3035,7 @@ class DownloadManager: ObservableObject {
         if let profile = InstagramLink.canonicalProfileLink(for: urlString) { return profile }
         if let inner = DmmPreviewResolver.unwrapWrapperLink(urlString) { return inner }
         if let postID = YouTubePostService.postID(of: urlString) { return YouTubePostService.canonicalLink(for: postID) }
+        if let artworkID = PixivService.artworkID(of: urlString) { return PixivService.canonicalLink(for: artworkID) }
         if let work = DmmPreviewResolver.parseLink(urlString),
             let canonical = DmmPreviewResolver.canonicalURL(for: work)
         {

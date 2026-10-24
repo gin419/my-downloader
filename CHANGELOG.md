@@ -10,6 +10,10 @@ Entries before _Unreleased_ were back-filled from git history.
 
 ### Added
 - **YouTube community posts** — paste a post link (youtube.com/post/…, including links shared from the app with "?surface=…&data=…", or a channel's community tab opened on one post) and its pictures download at their original size, a post of two or more pictures into its own folder. A post that shares a video downloads that video the usual way. A text-only or poll post ends with a message saying it has no pictures or video, instead of yt-dlp's "This channel does not have a … tab".
+- **Pixiv artworks** — paste a pixiv.net/artworks/… link (any language prefix) and the artwork downloads at original size, without a Pixiv login or gallery-dl's Pixiv token. Works Pixiv shows only to signed-in visitors (R-18) end with a message saying so.
+
+### Changed
+- **An X post whose only content is a link to a Pixiv artwork now downloads the artwork** (original size, every page; two or more pages into their own folder) instead of failing with "No media found — X returned no results … Retry later". A post that is only text now says it has no pictures or video — naming the site it links to, when it links somewhere — and is not retried; the "temporarily limited" message stays for posts X really withholds.
 
 ## [1.12.4] — 2026-10-05
 

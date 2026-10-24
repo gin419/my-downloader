@@ -18,8 +18,17 @@ enum FxTwitterService {
     /// files saved because the destination disk is full or unwritable → a
     /// disk failure, because restoring the prior "No media found…" message
     /// would blame the tweet for a local problem.
+    ///
+    /// A tweet fxtwitter does see, with no media of its own (nor in a
+    /// quoted tweet), is told apart from one X hid: when its text links to
+    /// a Pixiv artwork, that artwork is downloaded instead (`pixivSession`
+    /// is the seam for tests); otherwise the row says the post has no
+    /// pictures or video, which a Retry cannot change.
     @MainActor
-    static func run(item: DownloadItem, outputDirectory: URL, session: URLSession = .shared) async -> Bool {
+    static func run(
+        item: DownloadItem, outputDirectory: URL, session: URLSession = .shared,
+        pixivSession: URLSession = DirectDownload.session
+    ) async -> Bool {
         guard let id = tweetID(from: item.url) else { return false }
 
         let priorStatus = item.status
@@ -46,8 +55,20 @@ enum FxTwitterService {
             if let u = URL(string: raw) { urls.append((u, isVideo)) }
         }
         guard !urls.isEmpty else {
-            item.status = priorStatus
-            return false
+            switch noMediaOutcome(tweet: tweet) {
+            case .keepPrior:
+                item.status = priorStatus
+                return false
+            case .pixivArtwork(let artworkID):
+                return await PixivService.run(
+                    item: item, artworkID: artworkID, outputDirectory: outputDirectory, session: pixivSession)
+            case .noMedia(let message):
+                // The tweet is there and holds nothing to download: final,
+                // so the empty-success auto-retry stays off.
+                item.emptySuccessFailure = false
+                item.status = .failed(message)
+                return false
+            }
         }
 
         // Mirror gallery-dl's filename scheme (see GalleryDlService.formatArgs)
@@ -171,6 +192,42 @@ enum FxTwitterService {
         }
         item.markCompleted()
         return true
+    }
+
+    // MARK: - A tweet without media
+
+    /// What a tweet fxtwitter returned without media of its own comes to.
+    enum NoMediaOutcome: Equatable {
+        /// A quoted tweet has media the tools could not reach: keep the
+        /// tools' own failure.
+        case keepPrior
+        /// The text links to this Pixiv artwork: download it instead.
+        case pixivArtwork(String)
+        /// Nothing to download; the row's message.
+        case noMedia(String)
+    }
+
+    static func noMediaOutcome(tweet: [String: Any]) -> NoMediaOutcome {
+        let quote = tweet["quote"] as? [String: Any]
+        let quoteMedia = (quote?["media"] as? [String: Any])?["all"] as? [Any] ?? []
+        if !quoteMedia.isEmpty { return .keepPrior }
+        let text = tweet["text"] as? String ?? ""
+        if let artworkID = PixivService.firstArtworkID(in: text) { return .pixivArtwork(artworkID) }
+        let linkedHost = DownloadManager.extractURLs(from: text).lazy
+            .compactMap { URL(string: $0)?.host?.lowercased() }
+            .first { !SiteRegistry.isTwitterContent($0) && $0 != "t.co" }
+        return .noMedia(noMediaMessage(linkedHost: linkedHost))
+    }
+
+    /// The tweet is there but carries no picture or video. When it links
+    /// elsewhere, the place it links to is named: that is where the media
+    /// it talks about lives.
+    static func noMediaMessage(linkedHost: String?) -> String {
+        guard let linkedHost else {
+            return "This post has no pictures or video — only text, so there is nothing to download."
+        }
+        let site = linkedHost.hasPrefix("www.") ? String(linkedHost.dropFirst(4)) : linkedHost
+        return "This post has no pictures or video of its own — it links to \(site). Paste that link to download from there."
     }
 
     // MARK: - Per-file outcome truth
