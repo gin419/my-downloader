@@ -16,13 +16,14 @@ struct SiteProfile {
         case galleryDl  // image tweets, Reddit posts/galleries, …
         case fxTwitter  // X CDN direct download for spam-flagged/hidden tweets
         case threads  // in-app Threads resolver, direct download
+        case youtubePost  // in-app YouTube community post resolver
 
         /// Runs an external command-line tool, which may not be installed.
         /// The in-app resolvers need nothing but the network.
         var needsExternalTool: Bool {
             switch self {
             case .galleryDl: return true
-            case .fxTwitter, .threads: return false
+            case .fxTwitter, .threads, .youtubePost: return false
             }
         }
     }
@@ -244,6 +245,26 @@ enum SiteRegistry {
         usesYtDlp: false
     )
 
+    /// YouTube community posts: yt-dlp takes their link for a channel tab
+    /// and fails, and gallery-dl has no extractor for them, so the in-app
+    /// resolver is the downloader and yt-dlp is skipped (a post sharing a
+    /// video hands the video's own link back to yt-dlp). Matched by exact
+    /// host and path shape, ahead of `youtube`, which claims every other
+    /// YouTube link.
+    static let youtubePost = SiteProfile(
+        id: "youtubePost",
+        matches: { YouTubePostService.isPostLink($0) },
+        fallbacks: [.youtubePost],
+        supportsSubtitles: false,
+        usesYouTubeFormatSelector: false,
+        outputTemplateSuffix: "",
+        extractorTitleIncludesUploader: false,
+        detectsExternalRedirect: false,
+        galleryDlArgs: [],
+        imageSweepArgs: nil,
+        usesYtDlp: false
+    )
+
     /// Work pages whose preview clip is found in-app first: the page holds no
     /// media yt-dlp could read, so the clip's address is resolved and yt-dlp
     /// downloads that, logged out. Matching is by exact host, never by
@@ -280,7 +301,7 @@ enum SiteRegistry {
         imageSweepArgs: nil
     )
 
-    static let all: [SiteProfile] = [threads, dmm, twitter, youtube, reddit, instagram, other]
+    static let all: [SiteProfile] = [threads, dmm, twitter, youtubePost, youtube, reddit, instagram, other]
 
     static func profile(for url: String) -> SiteProfile {
         all.first { $0.matches(url) } ?? other

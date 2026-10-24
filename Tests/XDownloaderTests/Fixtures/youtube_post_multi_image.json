@@ -1,0 +1,62 @@
+{
+  "responseContext": {"serviceTrackingParams": []},
+  "contents": {
+    "twoColumnBrowseResultsRenderer": {
+      "tabs": [
+        {
+          "tabRenderer": {
+            "content": {
+              "sectionListRenderer": {
+                "contents": [
+                  {
+                    "itemSectionRenderer": {
+                      "contents": [
+                        {
+                          "backstagePostThreadRenderer": {
+                            "post": {
+                              "backstagePostRenderer": {
+                                "postId": "UgkxSYNpost0000multi0000000000000000",
+                                "authorText": {"runs": [{"text": "Example Channel"}]},
+                                "contentText": {"runs": [{"text": "Two pictures\nfrom the studio "}, {"text": "#example"}]},
+                                "backstageAttachment": {
+                                  "postMultiImageRenderer": {
+                                    "images": [
+                                      {
+                                        "backstageImageRenderer": {
+                                          "image": {
+                                            "thumbnails": [
+                                              {"url": "https://yt3.ggpht.com/SYNimageAAAA_one=s288-c-fcrop64=1,00001990ffffe66f-rw-nd-v1", "width": 288, "height": 288},
+                                              {"url": "https://yt3.ggpht.com/SYNimageAAAA_one=s1080-c-fcrop64=1,00001990ffffe66f-rw-nd-v1", "width": 1080, "height": 1080}
+                                            ]
+                                          }
+                                        }
+                                      },
+                                      {
+                                        "backstageImageRenderer": {
+                                          "image": {
+                                            "thumbnails": [
+                                              {"url": "//yt3.ggpht.com/SYNimageBBBB-two=s288-c-fcrop64=1,00001990ffffe66f-rw-nd-v1", "width": 288, "height": 288},
+                                              {"url": "//yt3.ggpht.com/SYNimageBBBB-two=s1080-c-fcrop64=1,00001990ffffe66f-rw-nd-v1", "width": 1080, "height": 1080}
+                                            ]
+                                          }
+                                        }
+                                      }
+                                    ]
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

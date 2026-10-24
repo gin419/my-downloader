@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Entries before _Unreleased_ were back-filled from git history.
 
+## [Unreleased]
+
+### Added
+- **YouTube community posts** — paste a post link (youtube.com/post/…, including links shared from the app with "?surface=…&data=…", or a channel's community tab opened on one post) and its pictures download at their original size, a post of two or more pictures into its own folder. A post that shares a video downloads that video the usual way. A text-only or poll post ends with a message saying it has no pictures or video, instead of yt-dlp's "This channel does not have a … tab".
+
 ## [1.12.4] — 2026-10-05
 
 ### Fixed
