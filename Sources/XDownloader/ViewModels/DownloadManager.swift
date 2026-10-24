@@ -2069,6 +2069,13 @@ class DownloadManager: ObservableObject {
                     await PixivService.run(item: item, artworkID: artworkID, outputDirectory: directory)
                 }
                 if stopped { return }  // user pressed Stop mid-run
+            case .femdomDestiny:
+                ranFallback = true
+                let directory = outputDirectory
+                let stopped = await runResolverTask(item) {
+                    await FemdomDestinyService.run(item: item, outputDirectory: directory)
+                }
+                if stopped { return }  // user pressed Stop mid-run
             case .threads:
                 // No "only as a rescue" guard: yt-dlp never ran for this
                 // site, so there is no earlier failure to rescue — the
@@ -3074,6 +3081,7 @@ class DownloadManager: ObservableObject {
         if let inner = DmmPreviewResolver.unwrapWrapperLink(urlString) { return inner }
         if let postID = YouTubePostService.postID(of: urlString) { return YouTubePostService.canonicalLink(for: postID) }
         if let artworkID = PixivService.artworkID(of: urlString) { return PixivService.canonicalLink(for: artworkID) }
+        if let slug = FemdomDestinyService.postSlug(of: urlString) { return FemdomDestinyService.canonicalLink(for: slug) }
         if let work = DmmPreviewResolver.parseLink(urlString),
             let canonical = DmmPreviewResolver.canonicalURL(for: work)
         {

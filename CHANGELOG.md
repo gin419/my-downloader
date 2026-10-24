@@ -10,6 +10,7 @@ Entries before _Unreleased_ were back-filled from git history.
 
 ### Added
 - **A failed download leaves a diagnostic record** in `~/Library/Application Support/XDownloader/diagnostics/`, one folder per failure: the link, its site, the step that failed and the row's message, the app's and tools' versions, every page or API answer the app fetched itself (status, headers, and the body as received), and each yt-dlp or gallery-dl run's arguments and last output. Logins never reach a record: cookie, authorization and token values are masked in headers, arguments and output, and a page fetched with your login keeps no body. The newest 100 records are kept, none older than 30 days.
+- **femdomdestiny.com posts** — paste a post's link and its videos and pictures download: videos at their source files (plain players and Flowplayer boxes alike), gallery pictures at full size instead of their thumbnails, and pictures placed in the text at their largest size. Advertising banners that link to other sites, pictures that link to other posts, video posters and the site's logo are left out. A post of two or more files goes into its own folder, each file under the name the site gave it. A link to the home page, a category or a tag ends with a message asking for a single post's link, and a post with nothing to download says so.
 
 ### Fixed
 - **A YouTube community post whose page arrives without its data is asked for once more** after a short pause before the row fails, and the post's data is also read when YouTube writes it as an escaped string.
