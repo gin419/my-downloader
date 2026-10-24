@@ -35,26 +35,26 @@ enum YouTubePostService {
             return false
         }
 
-        let data: Data
-        let response: URLResponse
-        do {
-            (data, response) = try await session.data(for: DirectDownload.request(for: pageURL, headers: pageHeaders))
-        } catch {
-            if Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled { return false }
-            item.status = .failed(pageUnreachableMessage(.transport(error)))
-            return false
-        }
-        if Task.isCancelled { return false }
-        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-            item.status = .failed(
-                http.statusCode == 404 ? notFoundMessage : pageUnreachableMessage(.httpStatus(http.statusCode)))
-            return false
+        // A page without its data is asked for once more after a pause:
+        // YouTube now and then answers with a page whose data is missing or
+        // shaped differently, and the next answer is usually whole. Both
+        // answers are kept in the row's diagnostic record.
+        var page = await fetchPage(pageURL, postID: postID, session: session)
+        if case .failed(.noPageData) = page {
+            try? await Task.sleep(nanoseconds: retryPause)
+            if Task.isCancelled { return false }
+            DiagnosticTrail.current?.step("youtube-post: page again after no data")
+            page = await fetchPage(pageURL, postID: postID, session: session)
         }
 
         let post: Post
-        switch resolve(html: String(decoding: data, as: UTF8.self), postID: postID) {
-        case .success(let resolved): post = resolved
-        case .failure(let failure):
+        switch page {
+        case .resolved(let resolved): post = resolved
+        case .cancelled: return false
+        case .unreachable(let message):
+            item.status = .failed(message)
+            return false
+        case .failed(let failure):
             item.status = .failed(message(for: failure))
             return false
         }
@@ -113,6 +113,39 @@ enum YouTubePostService {
         }
         item.markCompleted()
         return true
+    }
+
+    /// Pause before the page is asked for again (`run`). A seam for tests.
+    static var retryPause: UInt64 = 2_000_000_000
+
+    enum PageOutcome {
+        case resolved(Post)
+        case failed(Failure)
+        /// The page could not be loaded; the row's message.
+        case unreachable(String)
+        case cancelled
+    }
+
+    /// One page request, read.
+    @MainActor
+    private static func fetchPage(_ pageURL: URL, postID: String, session: URLSession) async -> PageOutcome {
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await DiagnosticTrail.data(
+                for: DirectDownload.request(for: pageURL, headers: pageHeaders), session: session, label: "youtube-post-page")
+        } catch {
+            if Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled { return .cancelled }
+            return .unreachable(pageUnreachableMessage(.transport(error)))
+        }
+        if Task.isCancelled { return .cancelled }
+        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+            return .unreachable(http.statusCode == 404 ? notFoundMessage : pageUnreachableMessage(.httpStatus(http.statusCode)))
+        }
+        switch resolve(html: String(decoding: data, as: UTF8.self), postID: postID) {
+        case .success(let post): return .resolved(post)
+        case .failure(let failure): return .failed(failure)
+        }
     }
 
     /// What the page request sends. The consent cookie keeps a visitor in
@@ -219,14 +252,107 @@ enum YouTubePostService {
         return .failure(.noMedia)
     }
 
-    /// The `ytInitialData` object of a page, or nil.
+    /// The `ytInitialData` object of a page, or nil. YouTube writes it as a
+    /// script literal (`var ytInitialData = {…};`, or assigned on `window`),
+    /// and on some pages as a string of escaped JSON
+    /// (`var ytInitialData = '\x7b…';`, or wrapped in `JSON.parse('…')`).
     static func initialData(in html: String) -> [String: Any]? {
-        for marker in ["var ytInitialData = ", "window[\"ytInitialData\"] = ", "ytInitialData = "] {
-            guard let range = html.range(of: marker),
-                let json = balancedObject(in: html, from: range.upperBound),
-                let object = try? JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any]
-            else { continue }
-            return object
+        let markers = [
+            "var ytInitialData = ", "window[\"ytInitialData\"] = ", "window['ytInitialData'] = ", "ytInitialData = ",
+            "var ytInitialData=", "window[\"ytInitialData\"]=", "window['ytInitialData']=", "ytInitialData=",
+        ]
+        for marker in markers {
+            var searchStart = html.startIndex
+            while let range = html.range(of: marker, range: searchStart..<html.endIndex) {
+                searchStart = range.upperBound
+                if let object = initialDataValue(in: html, from: range.upperBound) { return object }
+            }
+        }
+        return nil
+    }
+
+    /// The object written at `start`: a literal, a quoted string of JSON, or
+    /// `JSON.parse(<quoted string>)`.
+    private static func initialDataValue(in html: String, from start: String.Index) -> [String: Any]? {
+        var index = start
+        while index < html.endIndex, html[index] == " " { index = html.index(after: index) }
+        let jsonText: String
+        if html[index...].hasPrefix("{") {
+            guard let literal = balancedObject(in: html, from: index) else { return nil }
+            jsonText = String(literal)
+        } else {
+            if html[index...].hasPrefix("JSON.parse(") {
+                index = html.index(index, offsetBy: "JSON.parse(".count)
+            }
+            guard let decoded = quotedString(in: html, from: index) else { return nil }
+            jsonText = decoded
+        }
+        return try? JSONSerialization.jsonObject(with: Data(jsonText.utf8)) as? [String: Any]
+    }
+
+    /// The value of the JavaScript string literal (single or double quoted)
+    /// starting at `start`, its escapes (`\xHH`, `\uHHHH`, `\n`, `\'`, …)
+    /// decoded; nil when none starts there or it never closes.
+    static func quotedString(in text: String, from start: String.Index) -> String? {
+        let scalars = text.unicodeScalars
+        var index = start
+        guard index < scalars.endIndex, scalars[index] == "'" || scalars[index] == "\"" else { return nil }
+        let quote = scalars[index]
+        index = scalars.index(after: index)
+        var out = String.UnicodeScalarView()
+        // Pending UTF-16 high surrogate from a \uD8xx escape.
+        var pendingHigh: UInt32?
+        func hex(_ count: Int) -> UInt32? {
+            var value: UInt32 = 0
+            for _ in 0..<count {
+                guard index < scalars.endIndex, let digit = UInt32(String(scalars[index]), radix: 16) else { return nil }
+                value = value * 16 + digit
+                index = scalars.index(after: index)
+            }
+            return value
+        }
+        func append(_ value: UInt32) {
+            if let high = pendingHigh {
+                pendingHigh = nil
+                if (0xDC00...0xDFFF).contains(value) {
+                    let combined = 0x10000 + ((high - 0xD800) << 10) + (value - 0xDC00)
+                    if let scalar = Unicode.Scalar(combined) { out.append(scalar) }
+                    return
+                }
+            }
+            if (0xD800...0xDBFF).contains(value) {
+                pendingHigh = value
+                return
+            }
+            if let scalar = Unicode.Scalar(value) { out.append(scalar) }
+        }
+        while index < scalars.endIndex {
+            let scalar = scalars[index]
+            if scalar == quote { return String(out) }
+            index = scalars.index(after: index)
+            guard scalar == "\\" else {
+                out.append(scalar)
+                continue
+            }
+            guard index < scalars.endIndex else { return nil }
+            let escape = scalars[index]
+            index = scalars.index(after: index)
+            switch escape {
+            case "x":
+                guard let value = hex(2) else { return nil }
+                append(value)
+            case "u":
+                guard let value = hex(4) else { return nil }
+                append(value)
+            case "n": out.append("\n")
+            case "r": out.append("\r")
+            case "t": out.append("\t")
+            case "b": out.append("\u{08}")
+            case "f": out.append("\u{0C}")
+            case "v": out.append("\u{0B}")
+            case "0": out.append("\u{00}")
+            default: out.append(escape)
+            }
         }
         return nil
     }

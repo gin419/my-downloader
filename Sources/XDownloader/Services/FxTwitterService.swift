@@ -272,7 +272,7 @@ enum FxTwitterService {
         guard let url = URL(string: "https://api.fxtwitter.com/i/status/\(id)") else { return nil }
         var request = URLRequest(url: url, timeoutInterval: 20)
         request.setValue("XDownloader/1.4 (macOS)", forHTTPHeaderField: "User-Agent")
-        guard let (data, response) = try? await session.data(for: request),
+        guard let (data, response) = try? await DiagnosticTrail.data(for: request, session: session, label: "fxtwitter-api"),
             (response as? HTTPURLResponse)?.statusCode == 200,
             let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
             json["code"] as? Int == 200,

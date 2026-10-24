@@ -315,7 +315,8 @@ enum ThreadsService {
         let data: Data
         let response: URLResponse
         do {
-            (data, response) = try await session.data(for: DirectDownload.request(for: pageURL, headers: pageHeaders))
+            (data, response) = try await DiagnosticTrail.data(
+                for: DirectDownload.request(for: pageURL, headers: pageHeaders), session: session, label: "threads-page")
         } catch {
             if Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled { return .cancelled }
             return .failed(message: pageUnreachableMessage(.transport(error)), mayBeTransient: false, failure: nil)

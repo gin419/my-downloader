@@ -250,6 +250,76 @@ final class YouTubePostTests: XCTestCase {
         XCTAssertEqual(item.status, .failed(YouTubePostService.noMediaMessage))
     }
 
+    // MARK: - Page shapes and the second request
+
+    func testDataWrittenAsEscapedStringOrOnWindowIsRead() throws {
+        let data = try JSONSerialization.data(
+            withJSONObject: page(post: ["postId": postID, "backstageAttachment": ["videoRenderer": ["videoId": "dQw4w9WgXcQ"]]]))
+        let json = String(decoding: data, as: UTF8.self)
+        // As some pages write it: every character a \xHH escape.
+        let hexEscaped = json.utf8.map { String(format: "\\x%02x", $0) }.joined()
+        let quoted = json.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "'", with: "\\'")
+        for html in [
+            "<script>var ytInitialData = '\(hexEscaped)';</script>",
+            "<script>ytInitialData = JSON.parse('\(hexEscaped)');</script>",
+            "<script>window['ytInitialData'] = \(json);</script>",
+            "<script>var ytInitialData='\(quoted)';</script>",
+        ] {
+            let post = try? YouTubePostService.resolve(html: html, postID: postID).get()
+            XCTAssertEqual(post?.videoID, "dQw4w9WgXcQ", String(html.prefix(60)))
+        }
+    }
+
+    func testQuotedStringDecodesEscapesAndSurrogatePairs() {
+        let text = #"'a\x7bé\n\'\"🍅z' tail"#
+        XCTAssertEqual(YouTubePostService.quotedString(in: text, from: text.startIndex), "a{é\n'\"🍅z")
+        let open = "'never closes"
+        XCTAssertNil(YouTubePostService.quotedString(in: open, from: open.startIndex))
+    }
+
+    func testPageWithoutDataIsAskedForOnceMoreAndBothAnswersAreKept() async throws {
+        let json = try String(contentsOf: fixtureURL(), encoding: .utf8)
+        let pageURL = try XCTUnwrap(YouTubePostService.pageURL(for: postID))
+        StubProtocol.set(
+            [htmlStub("<html>no data here</html>"), htmlStub("<script>var ytInitialData = \(json);</script>")], for: pageURL)
+        StubProtocol.set(pngStub(), for: try XCTUnwrap(URL(string: "https://yt3.ggpht.com/SYNimageAAAA_one=s0")))
+        StubProtocol.set(pngStub(), for: try XCTUnwrap(URL(string: "https://yt3.ggpht.com/SYNimageBBBB-two=s0")))
+        let item = DownloadItem(url: "https://www.youtube.com/post/\(postID)")
+        let saved = YouTubePostService.retryPause
+        YouTubePostService.retryPause = 0
+        defer { YouTubePostService.retryPause = saved }
+        let trail = DiagnosticTrail()
+
+        let finished = await DiagnosticTrail.$current.withValue(trail) {
+            await YouTubePostService.run(item: item, outputDirectory: downloads, session: stubSession())
+        }
+
+        XCTAssertTrue(finished)
+        XCTAssertEqual(StubProtocol.requests(to: pageURL).count, 2)
+        let pages = trail.exchanges.filter { $0.label == "youtube-post-page" }
+        XCTAssertEqual(pages.count, 2)
+        XCTAssertEqual(pages.first?.body.map { String(decoding: $0, as: UTF8.self) }, "<html>no data here</html>")
+        XCTAssertEqual(pages.first?.status, 200)
+        XCTAssertEqual(pages.first?.finalURL, pageURL.absoluteString)
+        // The fixed consent cookie is still a Cookie header: never kept.
+        XCTAssertEqual(pages.first?.requestHeaders["Cookie"], DiagnosticRedaction.redacted)
+    }
+
+    func testPageWithoutDataTwiceFailsWithItsMessage() async throws {
+        let pageURL = try XCTUnwrap(YouTubePostService.pageURL(for: postID))
+        StubProtocol.set(htmlStub("<html>no data here</html>"), for: pageURL)
+        let item = DownloadItem(url: "https://www.youtube.com/post/\(postID)")
+        let saved = YouTubePostService.retryPause
+        YouTubePostService.retryPause = 0
+        defer { YouTubePostService.retryPause = saved }
+
+        let finished = await YouTubePostService.run(item: item, outputDirectory: downloads, session: stubSession())
+
+        XCTAssertFalse(finished)
+        XCTAssertEqual(item.status, .failed(YouTubePostService.noPageDataMessage))
+        XCTAssertEqual(StubProtocol.requests(to: pageURL).count, 2)
+    }
+
     // MARK: - Helpers
 
     private func fixtureURL() throws -> URL {

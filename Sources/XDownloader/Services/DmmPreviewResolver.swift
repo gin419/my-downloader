@@ -163,7 +163,8 @@ enum DmmPreviewResolver {
         let data: Data
         let response: URLResponse
         do {
-            (data, response) = try await session.data(for: request(contentID: work.contentID), delegate: RedirectRefusal())
+            (data, response) = try await DiagnosticTrail.data(
+                for: request(contentID: work.contentID), session: session, label: "dmm-page", delegate: RedirectRefusal())
         } catch {
             if Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled { return .cancelled }
             return .failed(.network)

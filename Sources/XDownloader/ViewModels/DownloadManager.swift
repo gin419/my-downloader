@@ -144,6 +144,9 @@ class DownloadManager: ObservableObject {
     /// What the preview resolver asks with. A seam for tests; the default
     /// keeps and sends no cookies.
     private let dmmSession: URLSession
+    /// Where a failed run's diagnostic record goes (`DiagnosticsStore`). A
+    /// seam for tests; the live store is off under XCTest.
+    private let diagnosticsStore: DiagnosticsStore
     /// Probes tool health on the app-lifecycle cadence; views reach it for
     /// forced refreshes (install sheet) and it feeds `toolHealths` above.
     let toolHealth: ToolHealthMonitor
@@ -175,8 +178,13 @@ class DownloadManager: ObservableObject {
         threadsSession: URLSession = DirectDownload.session,
         threadsSignedInTurn: ThreadsSignedInTurn? = nil,
         dmmSession: URLSession = DirectDownload.session,
-        toolHealthMonitor: ToolHealthMonitor? = nil
+        toolHealthMonitor: ToolHealthMonitor? = nil,
+        diagnosticsStore: DiagnosticsStore = .live
     ) {
+        self.diagnosticsStore = diagnosticsStore
+        // Records past their age or count are dropped at launch, off the
+        // main actor, as well as after each write.
+        Task.detached(priority: .background) { diagnosticsStore.prune() }
         self.history = history ?? HistoryStore()
         self.queueStore = queueStore
         self.settingsStore = settingsStore
@@ -1543,7 +1551,12 @@ class DownloadManager: ObservableObject {
             postFoldersAtStart[item.id] = nil
             item.videoDownloadedThisRun = false
             Task {
-                await runDownload(item)
+                // Each run keeps its own diagnostic trail; every request and
+                // tool run inside it finds the trail as the task-local, and
+                // a run that ends failed writes it out (`finalize`).
+                await DiagnosticTrail.$current.withValue(DiagnosticTrail()) {
+                    await runDownload(item)
+                }
                 inFlightItemIDs.remove(item.id)
                 cleanUpRowFolder(item)
                 if holdsProfileTurn { instagramProfileRunning = false }
@@ -1837,6 +1850,7 @@ class DownloadManager: ObservableObject {
         // Judged by the link itself, before its routing: an uppercase host
         // or a username ending in "x.com" routes the link to another site.
         if let username = InstagramLink.profileUsername(of: item.url) {
+            DiagnosticTrail.current?.step("instagram-profile")
             await runInstagramProfile(item, username: username)
             return
         }
@@ -1881,6 +1895,7 @@ class DownloadManager: ObservableObject {
         // The address comes first: without it there is nothing to hand
         // yt-dlp. Every run asks again — a first run, a Retry, a Resume and
         // the re-runs below all pass through here.
+        if profile.resolvesAddressBeforeDownload { DiagnosticTrail.current?.step("resolve-address") }
         if profile.resolvesAddressBeforeDownload, await !resolveAddress(for: item) { return }
         // The row's title is the resolver's. yt-dlp would name it after the
         // file, id included.
@@ -1906,7 +1921,8 @@ class DownloadManager: ObservableObject {
         let cookies: (path: String?, granted: URL?) = sendsCookies ? resolveCookiesForDownload() : (nil, nil)
         var ytResult = ProcessResult(code: 0, wasSignal: false)
         let runYtDlp = { [self] () async -> ProcessResult in
-            await startYtDlp(item, found: found, subtitleLanguage: effectiveSubtitleLanguage, cookiesFile: cookies.path)
+            DiagnosticTrail.current?.step("yt-dlp")
+            return await startYtDlp(item, found: found, subtitleLanguage: effectiveSubtitleLanguage, cookiesFile: cookies.path)
         }
         if sendsCookies {
             await cookieAccess.withScope(for: item.id, file: cookies.path, grantedURL: cookies.granted) {
@@ -2023,6 +2039,7 @@ class DownloadManager: ObservableObject {
         for fallback in profile.fallbacks {
             guard stillInList(item) else { return }  // ✕ during a fallback run
             if case .completed = item.status { break }  // a prior fallback already won
+            DiagnosticTrail.current?.step("fallback: \(fallback)")
             switch fallback {
             case .galleryDl:
                 guard let gdlPath = galleryDlPath else {  // tool not installed
@@ -2867,6 +2884,7 @@ class DownloadManager: ObservableObject {
         // just the terminated process winding down, not news and not history.
         guard stillInList(item) else { return }
         recordHistory(for: item)
+        writeDiagnostics(for: item)
         NotificationService.downloadFinished(item)
         // Failures that land while the user isn't looking raise the menu bar
         // ⚠. Only a failure with the main window actually on screen (not
@@ -2876,6 +2894,26 @@ class DownloadManager: ObservableObject {
             hasUnseenFailures = true
         }
         recomputeMenuBarState()
+    }
+
+    /// A run that ends failed leaves its diagnostic record: what the run's
+    /// trail kept, with the row's link, site, final message and the tools'
+    /// versions. Written once per run, off the main actor; nothing when the
+    /// row failed outside a run or the store is off.
+    private func writeDiagnostics(for item: DownloadItem) {
+        guard case .failed(let message) = item.status, diagnosticsStore.directory != nil,
+            let trail = DiagnosticTrail.current, trail.claimWrite()
+        else { return }
+        let store = diagnosticsStore
+        let url = item.url
+        let siteID = SiteRegistry.profile(for: url).id
+        let id = item.id.uuidString
+        var tools: [String: String] = [:]
+        for health in toolHealths { tools[health.id] = String(describing: health.status) }
+        Task.detached(priority: .utility) {
+            let made = DiagnosticsStore.makeRecord(url: url, siteID: siteID, message: message, tools: tools, trail: trail)
+            store.write(made.record, bodies: made.bodies, id: id)
+        }
     }
 
     /// Only terminal states (completed/failed) are persisted. Crash recovery for

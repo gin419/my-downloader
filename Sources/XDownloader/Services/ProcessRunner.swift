@@ -175,9 +175,18 @@ enum ProcessRunner {
 
         register(process)
 
+        // The row's diagnostic trail keeps the run: its arguments and the
+        // tail of its output, secrets masked (see DiagnosticTrail).
+        let trail = DiagnosticTrail.current
+        let runIndex = trail?.beginToolRun(executable: executablePath, arguments: arguments)
+
         do {
             try process.run()
         } catch {
+            if let trail, let runIndex {
+                trail.appendOutput("[launch failed] \(error.localizedDescription)", toRun: runIndex)
+                trail.endToolRun(runIndex, exitCode: -1, wasSignal: false)
+            }
             item.status = .failed(error.localizedDescription)
             unregister()
             return ProcessResult(code: -1, wasSignal: false)
@@ -185,14 +194,18 @@ enum ProcessRunner {
 
         // Same reader pattern as runStreaming: blocking availableData loops
         // (trailing partial line included) that are awaited below.
+        let onLine: @MainActor @Sendable (String) -> Void = { line in
+            if let trail, let runIndex { trail.appendOutput(line, toRun: runIndex) }
+            lineParser(line, item)
+        }
         let stdoutTask = makeStreamingReader(
             handle: stdout.fileHandleForReading,
             buffer: LineBuffer(),
-            onLine: { line in lineParser(line, item) })
+            onLine: onLine)
         let stderrTask = makeStreamingReader(
             handle: stderr.fileHandleForReading,
             buffer: LineBuffer(),
-            onLine: { line in lineParser(line, item) })
+            onLine: onLine)
 
         await withCheckedContinuation { continuation in
             process.terminationHandler = { _ in continuation.resume() }
@@ -207,9 +220,11 @@ enum ProcessRunner {
         await stderrTask.value
         unregister()
 
-        return ProcessResult(
+        let result = ProcessResult(
             code: process.terminationStatus,
             wasSignal: process.terminationReason == .uncaughtSignal)
+        if let trail, let runIndex { trail.endToolRun(runIndex, exitCode: result.code, wasSignal: result.wasSignal) }
+        return result
     }
 
     /// Minimal variant: no DownloadItem coupling, no register/unregister.
