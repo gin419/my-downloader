@@ -16,6 +16,9 @@ import AppKit
 enum NotificationService {
     private static var hasBundle: Bool { Bundle.main.bundleIdentifier != nil }
 
+    /// Set by the link check, whose test downloads are nobody's news.
+    static var isMuted = false
+
     /// Announce a finished download. Skipped while the app is frontmost —
     /// the row's status badge is already visible.
     ///
@@ -28,7 +31,7 @@ enum NotificationService {
         // No application object (a test host has a bundle identifier but
         // never starts one): nobody to notify, and `NSApp` must not be
         // unwrapped.
-        guard hasBundle, let app = NSApp, !app.isActive else { return }
+        guard hasBundle, !isMuted, let app = NSApp, !app.isActive else { return }
 
         let content = UNMutableNotificationContent()
         switch item.status {

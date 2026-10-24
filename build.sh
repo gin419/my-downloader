@@ -7,7 +7,10 @@ BUNDLE_NAME="$BUILD_DIR/$APP_NAME.app"
 CONFIG=${1:-release}   # debug | release (default: release)
 
 echo "🔨 Building $APP_NAME ($CONFIG)..."
-if [ "$CONFIG" = "release" ]; then
+# XD_NATIVE_ARCH=1 builds a release for this Mac's architecture only — the
+# link check (scripts/check-links.sh) runs it here, where the two-slice merge
+# below is not needed and has failed before.
+if [ "$CONFIG" = "release" ] && [ -z "${XD_NATIVE_ARCH:-}" ]; then
     # Release builds are UNIVERSAL (arm64 + x86_64): CI runners are Apple
     # Silicon, and a host-arch build shipped v1.9.2 unable to launch on Intel
     # Macs. Each slice is built separately and merged with lipo, because the
@@ -22,7 +25,7 @@ if [ "$CONFIG" = "release" ]; then
     BINARY=".build/universal-$CONFIG/$APP_NAME"
     xcrun lipo -create "$ARM64_BIN" "$X86_64_BIN" -output "$BINARY"
 else
-    # Debug builds stay host-arch for speed.
+    # Debug builds (and XD_NATIVE_ARCH release builds) stay host-arch.
     swift build -c "$CONFIG"
     BINARY="$(swift build -c "$CONFIG" --show-bin-path)/$APP_NAME"
 fi

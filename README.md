@@ -116,6 +116,27 @@ swift run
 
 After `./build.sh`, drag the resulting `XDownloader.app` to `/Applications/`.
 
+### Link check (before releasing)
+
+Unit tests can't tell when a site changes its pages. The link check can: the
+app itself downloads a list of known links — its own code, on your network and
+browser login — and reports which ones no longer give the files they should.
+
+```bash
+# Your list stays private, outside the repo. Start from the example:
+cp docs/check-links.example.json ~/Library/Application\ Support/XDownloader/check-links.json
+
+scripts/check-links.sh          # build for this Mac, run the list, stamp the commit if all pass
+scripts/install-hooks.sh        # once: a version tag push needs a pass from the last 24 hours
+scripts/release-tag.sh v1.2.3   # check, then tag and push (starts the release build)
+scripts/linkcheck/install.sh    # once: run the list nightly at 04:30, notify on failures
+```
+
+Each link sets `minFiles`, optional `kinds` (`video`, `image`, `audio`) and
+optional `stopEarly` (pass once enough files land — for pages of large videos).
+Reports go to `~/Library/Application Support/XDownloader/check-reports/`; a
+failed link's report names its diagnostic record.
+
 ---
 
 ## Features

@@ -1622,6 +1622,12 @@ class DownloadManager: ObservableObject {
         InstagramLink.profileUsername(of: item.url) != nil
     }
 
+    /// True once the item's run is over, fallbacks included: done or failed,
+    /// and no part of the run is still going. The link check waits on this.
+    func hasFinishedRun(_ item: DownloadItem) -> Bool {
+        Self.hasEnded(item) && !inFlightItemIDs.contains(item.id)
+    }
+
     /// Done or failed: nothing is queued, running or waiting for Resume.
     private static func hasEnded(_ item: DownloadItem) -> Bool {
         if case .failed = item.status { return true }

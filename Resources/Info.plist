@@ -28,6 +28,11 @@
     <true/>
     <key>NSHumanReadableCopyright</key>
     <string>Copyright © 2025–2026</string>
+    <!-- The app understands `--check-links` (LinkCheck.swift). The nightly
+         check reads this to decide whether the installed app can run it,
+         instead of launching an older app that would open its window. -->
+    <key>XDLinkCheckVersion</key>
+    <integer>1</integer>
     <!-- Sparkle auto-update. The feed is a CUMULATIVE appcast on GitHub Pages
          (served from the gh-pages branch), maintained by release.yml via
          scripts/build_appcast.py: every released version stays listed, so Sparkle

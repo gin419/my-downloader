@@ -1,0 +1,24 @@
+{
+  "links": [
+    {
+      "label": "X post with one video",
+      "url": "https://x.com/<user>/status/<id>",
+      "expect": { "minFiles": 1, "kinds": ["video"] }
+    },
+    {
+      "label": "X post with several pictures",
+      "url": "https://x.com/<user>/status/<id>",
+      "expect": { "minFiles": 2, "kinds": ["image"] }
+    },
+    {
+      "label": "YouTube short",
+      "url": "https://youtube.com/shorts/<id>",
+      "expect": { "minFiles": 1, "kinds": ["video"] }
+    },
+    {
+      "label": "A page of many large videos: one finished file is enough",
+      "url": "https://example.com/<page>/",
+      "expect": { "minFiles": 1, "kinds": ["video"], "stopEarly": true }
+    }
+  ]
+}
