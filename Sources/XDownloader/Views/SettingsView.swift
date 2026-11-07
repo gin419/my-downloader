@@ -171,8 +171,10 @@ struct SettingsView: View {
                 .font(.caption)
                 .foregroundColor(.secondary)
 
+                LikesAutoSyncSettingsRows()
+
                 Text(
-                    "XDownloader never stores your X password or cookie contents. Sync is manual and downloads X-hosted images, videos, and GIFs; unliking a post never deletes local files."
+                    "XDownloader never stores your X password or cookie contents. Sync downloads X-hosted images, videos, and GIFs; unliking a post never deletes local files."
                 )
                 .font(.caption)
                 .foregroundColor(.secondary)

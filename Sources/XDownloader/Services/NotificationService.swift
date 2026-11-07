@@ -46,8 +46,30 @@ enum NotificationService {
         content.body = item.title ?? item.url
         content.sound = .default
 
-        let request = UNNotificationRequest(
-            identifier: item.id.uuidString, content: content, trigger: nil)
+        deliver(
+            UNNotificationRequest(
+                identifier: item.id.uuidString, content: content, trigger: nil))
+    }
+
+    /// Announce what an automatic Likes sync run found: new media, new
+    /// failed items, or a pause that needs the user. The caller decides
+    /// whether the run is worth announcing at all; an automatic run with
+    /// nothing new stays silent. Same rules as `downloadFinished`: skipped
+    /// while the app is frontmost (the Likes card shows the result).
+    static func likesAutoSyncFinished(title: String, body: String) {
+        guard hasBundle, !isMuted, let app = NSApp, !app.isActive else { return }
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        content.sound = .default
+        // One identifier: a newer automatic-run notice replaces the older
+        // one in Notification Center instead of stacking up.
+        deliver(
+            UNNotificationRequest(
+                identifier: "likes-auto-sync", content: content, trigger: nil))
+    }
+
+    private static func deliver(_ request: UNNotificationRequest) {
         let center = UNUserNotificationCenter.current()
         center.getNotificationSettings { settings in
             switch settings.authorizationStatus {

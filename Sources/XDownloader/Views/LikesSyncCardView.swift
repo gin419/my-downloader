@@ -50,6 +50,8 @@ struct LikesSyncCardView: View {
                 }
             }
 
+            LikesAutoSyncStatusLine()
+
             if !snapshot.failures.isEmpty || counts.ignored > 0 {
                 Divider().opacity(0.45)
                 HStack {

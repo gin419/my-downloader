@@ -94,3 +94,22 @@ struct SettingsStore {
         return s
     }
 }
+
+// Automatic Likes sync keeps its own keys, outside `AppSettings`.
+extension SettingsStore {
+    func saveLikesAutoSync(_ s: LikesAutoSyncSettings) {
+        defaults.set(s.isEnabled, forKey: "likesAutoSyncEnabled")
+        defaults.set(s.interval.rawValue, forKey: "likesAutoSyncIntervalSeconds")
+    }
+
+    /// Absent keys give the defaults (off, 30 minutes). A stored interval
+    /// that is not an option maps to the nearest one, never below 15 minutes.
+    func loadLikesAutoSync() -> LikesAutoSyncSettings {
+        var s = LikesAutoSyncSettings()
+        s.isEnabled = defaults.object(forKey: "likesAutoSyncEnabled") as? Bool ?? s.isEnabled
+        if let seconds = defaults.object(forKey: "likesAutoSyncIntervalSeconds") as? Int {
+            s.interval = LikesAutoSyncInterval.nearest(toSeconds: seconds)
+        }
+        return s
+    }
+}

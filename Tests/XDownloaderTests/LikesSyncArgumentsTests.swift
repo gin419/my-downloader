@@ -138,6 +138,65 @@ final class LikesSyncArgumentsTests: XCTestCase {
         XCTAssertEqual(Array(args.prefix(2)), ["--cookies-from-browser", "chrome:Default"])
     }
 
+    func testFullScanHasNoAbortOption() throws {
+        let plan = LikesSyncPlanner.plan(
+            for: try LikesSyncHandle("@Gin"),
+            rootDirectory: URL(fileURLWithPath: "/tmp/downloads")
+        )
+        let args = LikesSyncArgumentBuilder.make(plan: plan, cookieBrowser: .safari, cookiesFile: nil).args
+        XCTAssertFalse(args.contains("-A"))
+        XCTAssertFalse(args.contains { $0.hasPrefix("skip=") })
+    }
+
+    /// Automatic sync's incremental scan: gallery-dl stops after N
+    /// consecutive already-saved files. Still the whole Likes URL, still the
+    /// per-account archive (which is what makes files count as skipped).
+    func testIncrementalScanAbortsAfterConsecutiveSkips() throws {
+        let plan = LikesSyncPlanner.plan(
+            for: try LikesSyncHandle("@Gin"),
+            rootDirectory: URL(fileURLWithPath: "/tmp/downloads")
+        )
+        let args = LikesSyncArgumentBuilder.make(
+            plan: plan, cookieBrowser: .safari, cookiesFile: nil,
+            abortAfterConsecutiveSkips: LikesAutoSyncSchedule.abortAfterConsecutiveSkips
+        ).args
+        XCTAssertTrue(containsPair(args, "-A", "30"))
+        XCTAssertTrue(containsPair(args, "--download-archive", plan.archivePath.path))
+        XCTAssertEqual(args.last, "https://x.com/gin/likes")
+    }
+
+    func testNonPositiveAbortCountIsIgnored() throws {
+        let plan = LikesSyncPlanner.plan(
+            for: try LikesSyncHandle("@Gin"),
+            rootDirectory: URL(fileURLWithPath: "/tmp/downloads")
+        )
+        let args = LikesSyncArgumentBuilder.make(
+            plan: plan, cookieBrowser: .safari, cookiesFile: nil, abortAfterConsecutiveSkips: 0
+        ).args
+        XCTAssertFalse(args.contains("-A"))
+    }
+
+    /// Both options together: no archive, and still the abort. gallery-dl
+    /// counts a file already at its path as a skip just like an archived one
+    /// (job.py `handle_url` → `handle_skip`), so the incremental scan still
+    /// stops after N files in a row that are in the folder.
+    func testRedownloadMissingKeepsTheIncrementalAbort() throws {
+        let plan = LikesSyncPlanner.plan(
+            for: try LikesSyncHandle("@Gin"),
+            rootDirectory: URL(fileURLWithPath: "/tmp/downloads")
+        )
+        let args = LikesSyncArgumentBuilder.make(
+            plan: plan, cookieBrowser: .safari, cookiesFile: nil,
+            redownloadMissing: true,
+            abortAfterConsecutiveSkips: LikesAutoSyncSchedule.abortAfterConsecutiveSkips
+        ).args
+        XCTAssertTrue(containsPair(args, "-A", "30"))
+        XCTAssertFalse(args.contains("--download-archive"))
+        XCTAssertFalse(args.contains { $0.hasPrefix("archive") })
+        XCTAssertTrue(containsPair(args, "--Print", "skip:likes-sync\tskip:{_json}"))
+        XCTAssertEqual(args.last, "https://x.com/gin/likes")
+    }
+
     func testVerificationIsBoundedAndNeverDownloads() throws {
         let args = LikesSyncArgumentBuilder.makeVerification(
             handle: try LikesSyncHandle("@gin"), cookieBrowser: .safari, cookiesFile: nil

@@ -37,7 +37,8 @@ enum LikesSyncArgumentBuilder {
         cookieBrowserProfile: String? = nil,
         cookiesFile: String?,
         inputURLs: [String]? = nil,
-        redownloadMissing: Bool = false
+        redownloadMissing: Bool = false,
+        abortAfterConsecutiveSkips: Int? = nil
     ) -> LikesSyncArguments {
         var args = CookieArgs.make(
             browser: cookieBrowser, profile: cookieBrowserProfile, file: cookiesFile)
@@ -86,6 +87,15 @@ enum LikesSyncArgumentBuilder {
             // string, or every real emission arrives as an anonymous
             // "likes-sync\t{json}" line no parser can attribute to an event.
             args += ["--Print", "\(event):likes-sync\t\(event):{_json}"]
+        }
+
+        if let abortAfterConsecutiveSkips, abortAfterConsecutiveSkips > 0 {
+            // Incremental scan (automatic sync): stop once N files in a row
+            // were already saved. gallery-dl raises StopExtraction for this,
+            // which its job swallows — the run still exits 0. Without the
+            // archive (redownloadMissing) a file already at its path is a
+            // skip too, so the count works the same either way.
+            args += ["-A", String(abortAfterConsecutiveSkips)]
         }
 
         let urls = inputURLs.flatMap { $0.isEmpty ? nil : $0 } ?? [plan.url.absoluteString]

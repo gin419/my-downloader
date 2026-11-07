@@ -325,6 +325,8 @@ enum LinkCheckRunner {
         for (key, value) in UserDefaults.standard.persistentDomain(forName: settingsDomain) ?? [:] {
             defaults.set(value, forKey: key)
         }
+        // A check must never start a real Likes sync on its own.
+        defaults.set(false, forKey: "likesAutoSyncEnabled")
         NotificationService.isMuted = true
 
         let stores = scratch.appendingPathComponent("stores", isDirectory: true)

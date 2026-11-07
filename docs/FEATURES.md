@@ -21,6 +21,7 @@
 
 ## Download Engine
 - **X.com / Twitter Likes sync** — enter one `@handle` and manually sync all accessible native media from that account's Likes using a specific browser profile; later scans skip archived media and download only new or previously failed items, while `cookies.txt` remains an optional fallback
+- **Automatic Likes sync** — optional (off by default): while the app runs, checks the newest Likes every 15 min – 6 h (30 min default) and downloads new media; each check stops after 30 already-saved files in a row, backs off after rate limits, pauses after login/tool/disk failures, and notifies only when something new was saved or needs attention
 - **Durable sync summary** — Likes appears as one aggregate task with downloaded, skipped, no-media, failed, and ignored counts; failures can be expanded, copied, opened, retried, or ignored without filling the normal queue with thousands of rows
 - **X.com / Twitter videos** — downloaded via yt-dlp using your browser's session cookies
 - **X.com / Twitter images** — automatic fallback to gallery-dl when yt-dlp finds no video; supports multi-image tweets

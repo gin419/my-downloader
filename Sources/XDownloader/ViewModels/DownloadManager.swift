@@ -26,6 +26,11 @@ class DownloadManager: ObservableObject {
     @Published private(set) var likesSyncSnapshot: LikesSyncSnapshot = .idle {
         didSet { recomputeMenuBarState() }
     }
+    /// Automatic Likes sync: incremental checks for new likes while the app
+    /// runs. Settings calls `likesAutoSyncSettingsChanged()` after a change.
+    @Published var likesAutoSyncEnabled = false
+    @Published var likesAutoSyncInterval: LikesAutoSyncInterval = .default
+    @Published private(set) var likesAutoSyncStatus = LikesAutoSyncStatus()
     private let cookieAccess = CookieAccessManager()  // security-scoped bookmark + per-download scope for cookies.txt
     @Published var maxConcurrent: Int = 2
     /// How many of an account's newest posts a pasted Instagram profile link
@@ -84,6 +89,18 @@ class DownloadManager: ObservableObject {
     /// True once the active run records a run-level failure (nil tweet id),
     /// which blocks auto-resolving the account's prior run-level rows.
     private var likesRunRecordedRunLevelFailure = false
+    /// Category of the run-level failure the active run recorded, if any —
+    /// what the auto-sync schedule backs off or pauses on.
+    private var likesRunRunLevelCategory: LikesSyncFailureCategory?
+    /// True while the active run was started by automatic sync (incremental).
+    private var likesRunIsAutomatic = false
+    /// Failure ids pending or ignored when an automatic run started, so its
+    /// finish can tell new failures from ones the user already knows about.
+    private var likesAutoRunKnownFailureIDs: Set<String> = []
+    private var likesAutoSyncSchedule = LikesAutoSyncSchedule()
+    private var likesAutoSyncTimer: Task<Void, Never>?
+    private let likesAutoSyncSleeper: @Sendable (TimeInterval) async throws -> Void
+    private let likesAutoSyncNow: () -> Date
     /// In-flight in-app resolvers (FxTwitterService, ThreadsService,
     /// DmmPreviewResolver) — URLSession Tasks, so they need Task.cancel() rather than
     /// Process.terminate() when the user hits Stop. (The Threads resolver's
@@ -182,9 +199,15 @@ class DownloadManager: ObservableObject {
         threadsSignedInTurn: ThreadsSignedInTurn? = nil,
         dmmSession: URLSession = DirectDownload.session,
         toolHealthMonitor: ToolHealthMonitor? = nil,
-        diagnosticsStore: DiagnosticsStore = .live
+        diagnosticsStore: DiagnosticsStore = .live,
+        likesAutoSyncSleeper: @escaping @Sendable (TimeInterval) async throws -> Void = { seconds in
+            try await Task.sleep(nanoseconds: UInt64(max(0, seconds) * 1_000_000_000))
+        },
+        likesAutoSyncNow: @escaping () -> Date = Date.init
     ) {
         self.diagnosticsStore = diagnosticsStore
+        self.likesAutoSyncSleeper = likesAutoSyncSleeper
+        self.likesAutoSyncNow = likesAutoSyncNow
         // Records past their age or count are dropped at launch, off the
         // main actor, as well as after each write.
         Task.detached(priority: .background) { diagnosticsStore.prune() }
@@ -208,6 +231,7 @@ class DownloadManager: ObservableObject {
 
         loadSettings()
         restoreLikesSyncSnapshot()
+        loadLikesAutoSyncSettings()
         loadQueue()
         // Mirror the monitor's probe results into our own @Published so every
         // view observing the manager re-renders when tool health changes.
@@ -990,6 +1014,7 @@ class DownloadManager: ObservableObject {
             {
             case .verified:
                 self.likesAccessVerification = .verified(handle)
+                self.resumeLikesAutoSyncAfterUserAction()
             case .noLikesVisible:
                 self.likesAccessVerification = .noLikesVisible(handle)
             case .failed:
@@ -1006,7 +1031,9 @@ class DownloadManager: ObservableObject {
         startLikesSync(inputURLs: nil)
     }
 
-    private func startLikesSync(inputURLs: [String]?) {
+    /// `automatic` runs are incremental: gallery-dl stops after
+    /// `LikesAutoSyncSchedule.abortAfterConsecutiveSkips` already-saved files.
+    private func startLikesSync(inputURLs: [String]?, automatic: Bool = false) {
         guard !likesSyncSnapshot.status.isActive, likesVerificationProcess == nil else { return }
         guard let executable = galleryDlPath else {
             failLikesBeforeStart("gallery-dl is required. Install or update it, then try again.")
@@ -1050,14 +1077,26 @@ class DownloadManager: ObservableObject {
         likesAccumulator = LikesSyncRunAccumulator()
         likesDiagnostics = []
         likesCancelRequested = false
-        likesRunIsFullScan = inputURLs == nil
+        // An incremental (automatic) run stops early, so it proves nothing
+        // about the likes it never reached — it is not a full scan.
+        likesRunIsFullScan = inputURLs == nil && !automatic
         likesRunRecordedRunLevelFailure = false
+        likesRunRunLevelCategory = nil
+        likesRunIsAutomatic = automatic
+        likesAutoRunKnownFailureIDs =
+            automatic
+            ? Set(
+                (likesSyncStore.pendingFailures(accountID: accountID)
+                    + likesSyncStore.ignoredFailures(accountID: accountID)).map(\.id))
+            : []
         likesSyncSnapshot = LikesSyncSnapshot(
             handle: handle,
             status: .running,
             counts: LikesSyncCounts(ignored: likesSyncStore.ignoredFailures(accountID: accountID).count),
             failures: likesSyncStore.pendingFailures(accountID: accountID),
-            message: inputURLs == nil ? "Scanning all accessible Likes…" : "Retrying failed Likes…",
+            message: automatic
+                ? "Checking for new Likes…"
+                : inputURLs == nil ? "Scanning all accessible Likes…" : "Retrying failed Likes…",
             outputDirectory: plan.outputDirectory,
             startedAt: run.startedAt,
             finishedAt: nil)
@@ -1069,7 +1108,8 @@ class DownloadManager: ObservableObject {
             cookieBrowserProfile: cookieBrowserProfile,
             cookiesFile: cookies.path,
             inputURLs: inputURLs,
-            redownloadMissing: likesRedownloadMissing
+            redownloadMissing: likesRedownloadMissing,
+            abortAfterConsecutiveSkips: automatic ? LikesAutoSyncSchedule.abortAfterConsecutiveSkips : nil
         ).args
         let scopeID = UUID()
         likesSyncTask = Task { @MainActor [weak self] in
@@ -1205,7 +1245,10 @@ class DownloadManager: ObservableObject {
         url: String? = nil
     ) {
         guard let accountID = likesAccountID else { return }
-        if tweetID == nil { likesRunRecordedRunLevelFailure = true }
+        if tweetID == nil {
+            likesRunRecordedRunLevelFailure = true
+            likesRunRunLevelCategory = category
+        }
         let classified = category
         let identity = tweetID ?? url ?? classified.rawValue
         let failure = LikesSyncFailure(
@@ -1317,12 +1360,18 @@ class DownloadManager: ObservableObject {
         default:
             break
         }
-        if status.needsAttention, !isMainWindowShowing { hasUnseenFailures = true }
+        let autoSyncFlagsAttention = likesRunFinishedForAutoSync(
+            exitCode: exitCode, rateLimitTruncated: rateLimitTruncated, pending: pending)
+        if status.needsAttention, !isMainWindowShowing, autoSyncFlagsAttention {
+            hasUnseenFailures = true
+        }
         likesSyncProcess = nil
         likesSyncTask = nil
         likesRunID = nil
         likesCancelRequested = false
+        likesRunIsAutomatic = false
         recomputeMenuBarState()
+        rescheduleLikesAutoSync()
     }
 
     private func updateLikesSnapshotCounts() {
@@ -1467,10 +1516,141 @@ class DownloadManager: ObservableObject {
         }
     }
 
+    // MARK: - Automatic Likes sync
+
+    /// Settings toggled auto-sync or changed its interval. Either is the user
+    /// acting, so a pause or backoff from earlier failures is forgotten.
+    func likesAutoSyncSettingsChanged() {
+        likesAutoSyncSchedule.resume()
+        saveSettings()
+        rescheduleLikesAutoSync()
+    }
+
+    private func loadLikesAutoSyncSettings() {
+        let s = settingsStore.loadLikesAutoSync()
+        likesAutoSyncEnabled = s.isEnabled
+        likesAutoSyncInterval = s.interval
+        rescheduleLikesAutoSync()
+    }
+
+    private func resumeLikesAutoSyncAfterUserAction() {
+        guard likesAutoSyncSchedule.isPaused || likesAutoSyncSchedule.backoffLevel > 0 else { return }
+        likesAutoSyncSchedule.resume()
+        rescheduleLikesAutoSync()
+    }
+
+    /// Arms the one pending check (replacing any earlier one) from the
+    /// schedule's current state. A run in progress re-arms on its finish;
+    /// a paused or disabled schedule arms nothing.
+    private func rescheduleLikesAutoSync() {
+        likesAutoSyncTimer?.cancel()
+        likesAutoSyncTimer = nil
+        likesAutoSyncStatus.pauseReason = likesAutoSyncEnabled ? likesAutoSyncSchedule.pauseReason : nil
+        likesAutoSyncStatus.backoffLevel = likesAutoSyncSchedule.backoffLevel
+        guard likesAutoSyncEnabled, !likesAutoSyncSchedule.isPaused,
+            !(likesRunIsAutomatic && likesSyncSnapshot.status.isActive)
+        else {
+            likesAutoSyncStatus.nextCheckAt = nil
+            return
+        }
+        let delay = likesAutoSyncSchedule.nextDelay(interval: likesAutoSyncInterval.seconds)
+        likesAutoSyncStatus.nextCheckAt = likesAutoSyncNow().addingTimeInterval(delay)
+        let sleeper = likesAutoSyncSleeper
+        likesAutoSyncTimer = Task { @MainActor [weak self] in
+            do { try await sleeper(delay) } catch { return }
+            guard !Task.isCancelled else { return }
+            self?.likesAutoSyncCheckDue()
+        }
+    }
+
+    private func likesAutoSyncCheckDue() {
+        likesAutoSyncTimer = nil
+        let decision = LikesAutoSyncSchedule.decide(
+            enabled: likesAutoSyncEnabled,
+            paused: likesAutoSyncSchedule.isPaused,
+            syncActive: likesSyncSnapshot.status.isActive,
+            verifying: likesVerificationProcess != nil || likesAccessVerification == .verifying,
+            hasValidHandle: (try? LikesSyncHandle(twitterHandle)) != nil,
+            hasGalleryDl: galleryDlPath != nil)
+        likesAutoSyncSchedule.markChecked()
+        guard decision == .run else {
+            // Busy, no handle, or no gallery-dl: not a failure — try again
+            // after the regular interval. (A manual run's finish re-arms too.)
+            rescheduleLikesAutoSync()
+            return
+        }
+        likesAutoSyncStatus.lastCheckAt = likesAutoSyncNow()
+        startLikesSync(inputURLs: nil, automatic: true)
+        if !likesSyncSnapshot.status.isActive {
+            // Failed before gallery-dl started (folder or database) — the
+            // card already says why; retry later, more slowly.
+            likesAutoSyncSchedule.record(.transientFailure)
+        }
+        // Started: arms nothing (the run's finish does). Failed: arms the
+        // backed-off retry.
+        rescheduleLikesAutoSync()
+    }
+
+    /// Feeds a finished run into the auto-sync schedule. Returns whether the
+    /// run may flag the menu bar's attention mark: a manual run always may;
+    /// an automatic one only when it brought a NEW failure or a pause, so
+    /// failures the user already saw don't re-flag every interval.
+    private func likesRunFinishedForAutoSync(
+        exitCode: Int32, rateLimitTruncated: Bool, pending: [LikesSyncFailure]
+    ) -> Bool {
+        let outcome = LikesAutoSyncRunOutcome.classify(
+            exitCode: exitCode,
+            cancelled: likesCancelRequested,
+            runLevelCategory: likesRunRunLevelCategory,
+            rateLimitTruncated: rateLimitTruncated)
+        guard likesRunIsAutomatic else {
+            // A clean manual full scan is the user fixing whatever paused
+            // automatic sync; the next check comes a full interval later.
+            if likesRunIsFullScan, outcome == .succeeded, exitCode == 0 {
+                likesAutoSyncSchedule.resume()
+                likesAutoSyncSchedule.markChecked()
+            }
+            return true
+        }
+        likesAutoSyncSchedule.record(outcome)
+        let newFailures = pending.filter { !likesAutoRunKnownFailureIDs.contains($0.id) }
+        likesAutoRunKnownFailureIDs = []
+        let downloaded = likesAccumulator.downloadedCount
+        if LikesAutoSyncSchedule.shouldNotify(
+            outcome: outcome, downloadedCount: downloaded, newFailureCount: newFailures.count)
+        {
+            let notice = Self.likesAutoSyncNotice(
+                outcome: outcome, downloadedCount: downloaded, newFailureCount: newFailures.count,
+                handle: likesSyncSnapshot.handle?.displayName ?? "your account")
+            NotificationService.likesAutoSyncFinished(title: notice.title, body: notice.body)
+        }
+        if case .needsUser = outcome { return true }
+        return !newFailures.isEmpty
+    }
+
+    /// Notification copy for an automatic run worth announcing.
+    nonisolated static func likesAutoSyncNotice(
+        outcome: LikesAutoSyncRunOutcome, downloadedCount: Int, newFailureCount: Int, handle: String
+    ) -> (title: String, body: String) {
+        if case .needsUser(let reason) = outcome {
+            return ("Automatic Likes sync paused", reason.message)
+        }
+        let failedPart =
+            newFailureCount == 0
+            ? "" : "\(newFailureCount) item\(newFailureCount == 1 ? "" : "s") could not be downloaded."
+        if downloadedCount > 0 {
+            let saved = "Saved \(downloadedCount) new file\(downloadedCount == 1 ? "" : "s") from \(handle)'s Likes."
+            return ("New Likes downloaded", failedPart.isEmpty ? saved : saved + " " + failedPart)
+        }
+        return ("Some new Likes could not be downloaded", failedPart + " Open XDownloader to review them.")
+    }
+
     // MARK: - Settings
 
     func saveSettings() {
         settingsStore.save(currentSettings())
+        settingsStore.saveLikesAutoSync(
+            LikesAutoSyncSettings(isEnabled: likesAutoSyncEnabled, interval: likesAutoSyncInterval))
     }
 
     private func currentSettings() -> AppSettings {
