@@ -129,6 +129,33 @@ final class DownloadManagerLikesSyncTests: XCTestCase {
         XCTAssertEqual(runner.invocations[0].last, "https://x.com/gin/likes")
     }
 
+    /// The Settings toggle reaches the gallery-dl run: off names the
+    /// archive, on leaves it out so a file missing from the folder is
+    /// downloaded again. A file still there is reported as skipped.
+    func testRedownloadMissingSettingReachesTheSyncRun() async throws {
+        let post = event(
+            "post", #"{"tweet_id":"123","url":"https://x.com/gin/status/123","author":{"nick":"gin"}}"#)
+        let skip = event(
+            "skip", #"{"tweet_id":"123","media_id":"m1","_path":"/tmp/a.jpg","extension":"jpg"}"#)
+        let (manager, runner, _, _) = makeManager(runs: [
+            .init(lines: [post, skip], exitCode: 0),
+            .init(lines: [post, skip], exitCode: 0),
+        ])
+        XCTAssertFalse(manager.likesRedownloadMissing)
+
+        manager.startLikesSync()
+        await waitForLikesRun(manager)
+        XCTAssertTrue(runner.invocations[0].contains("--download-archive"))
+
+        manager.likesRedownloadMissing = true
+        manager.startLikesSync()
+        await waitForLikesRun(manager)
+        XCTAssertEqual(manager.likesSyncSnapshot.status, .completed)
+        XCTAssertEqual(manager.likesSyncSnapshot.counts.skipped, 1)
+        XCTAssertFalse(runner.invocations[1].contains("--download-archive"))
+        XCTAssertFalse(runner.invocations[1].contains("archive-event=after,skip"))
+    }
+
     func testCookieExtractionInfoDoesNotFailSuccessfulVerification() async throws {
         let (manager, runner, _, _) = makeManager(runs: [
             .init(

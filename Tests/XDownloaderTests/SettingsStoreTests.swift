@@ -35,6 +35,7 @@ final class SettingsStoreTests: XCTestCase {
         saved.cookiesFileBookmarkData = Data([9])
         saved.twitterHandle = "example_user"
         saved.instagramProfilePostLimit = 250
+        saved.likesRedownloadMissing = true
         store.save(saved)
 
         let loaded = store.load(fallback: sampleFallback())
@@ -49,6 +50,7 @@ final class SettingsStoreTests: XCTestCase {
         XCTAssertEqual(loaded.cookiesFileBookmarkData, Data([9]))
         XCTAssertEqual(loaded.twitterHandle, "example_user")
         XCTAssertEqual(loaded.instagramProfilePostLimit, 250)
+        XCTAssertTrue(loaded.likesRedownloadMissing)
     }
 
     func testEmptyDefaultsUseFallback() {
@@ -57,6 +59,22 @@ final class SettingsStoreTests: XCTestCase {
         XCTAssertEqual(loaded.maxConcurrent, 2)
         XCTAssertTrue(loaded.embedSubtitles)
         XCTAssertEqual(loaded.instagramProfilePostLimit, 100)
+        XCTAssertFalse(loaded.likesRedownloadMissing)
+    }
+
+    /// Turned off after being on, it stays off: a stored false is not
+    /// mistaken for a missing key.
+    func testLikesRedownloadMissingRoundTripsOff() {
+        let store = freshStore()
+        var saved = sampleFallback()
+        saved.likesRedownloadMissing = true
+        store.save(saved)
+        saved.likesRedownloadMissing = false
+        store.save(saved)
+
+        var fallback = sampleFallback()
+        fallback.likesRedownloadMissing = true
+        XCTAssertFalse(store.load(fallback: fallback).likesRedownloadMissing)
     }
 
     /// A stored number outside the range — a hand-edited defaults file — is

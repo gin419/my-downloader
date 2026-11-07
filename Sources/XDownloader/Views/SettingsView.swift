@@ -162,6 +162,15 @@ struct SettingsView: View {
                 .font(.caption)
                 .foregroundColor(.secondary)
 
+                Toggle("Download again files missing from the folder", isOn: $manager.likesRedownloadMissing)
+                    .disabled(manager.likesSyncSnapshot.status.isActive)
+                    .onChange(of: manager.likesRedownloadMissing) { manager.saveSettings() }
+                Text(
+                    "Normally a Like's files are downloaded once, and deleting or moving one keeps it away. With this on, each sync downloads whatever is not in the Likes folder. Files are matched by name, so a renamed file is downloaded again."
+                )
+                .font(.caption)
+                .foregroundColor(.secondary)
+
                 Text(
                     "XDownloader never stores your X password or cookie contents. Sync is manual and downloads X-hosted images, videos, and GIFs; unliking a post never deletes local files."
                 )

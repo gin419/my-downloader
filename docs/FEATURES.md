@@ -70,6 +70,7 @@
 - **Browser profiles** — select the Chrome or Edge profile containing the authenticated session instead of relying on the browser's automatic profile choice
 - **Cookies file** — optionally point at an exported `cookies.txt` for stubborn authenticated content; takes precedence over direct browser access
 - **X account** — one normalized `@handle` for manual Likes sync, verified against the selected cookie source; no password or cookie contents are stored by XDownloader
+- **Download again files missing from the folder** — off by default (a Like's files are downloaded once); on, each Likes sync fetches whatever is no longer in the Likes folder. Files are matched by name, so a renamed file is downloaded again
 - **Download format** — Video+Audio / Single File / Audio Only
 - **Subtitle language & embed toggle**
 - **Max concurrent downloads** — stepper from 1–5

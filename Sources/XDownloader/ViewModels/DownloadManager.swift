@@ -19,6 +19,9 @@ class DownloadManager: ObservableObject {
     @Published var cookieBrowserProfile: String = ""
     @Published var cookiesFilePath: String? = nil  // display / last resolved path
     @Published var twitterHandle: String = ""
+    /// Likes Sync lets the files in the folder decide what is downloaded:
+    /// a file deleted or moved away is fetched again on the next sync.
+    @Published var likesRedownloadMissing: Bool = false
     @Published private(set) var likesAccessVerification: LikesAccessVerification = .idle
     @Published private(set) var likesSyncSnapshot: LikesSyncSnapshot = .idle {
         didSet { recomputeMenuBarState() }
@@ -1065,7 +1068,8 @@ class DownloadManager: ObservableObject {
             cookieBrowser: cookieBrowser,
             cookieBrowserProfile: cookieBrowserProfile,
             cookiesFile: cookies.path,
-            inputURLs: inputURLs
+            inputURLs: inputURLs,
+            redownloadMissing: likesRedownloadMissing
         ).args
         let scopeID = UUID()
         likesSyncTask = Task { @MainActor [weak self] in
@@ -1479,6 +1483,7 @@ class DownloadManager: ObservableObject {
             cookiesFilePath: cookiesFilePath,
             cookiesFileBookmarkData: cookieAccess.bookmarkForSaving,
             twitterHandle: persistedTwitterHandle,
+            likesRedownloadMissing: likesRedownloadMissing,
             showDownloadDate: showDownloadDate,
             youtubeFormat: youtubeFormat,
             videoQuality: videoQuality,
@@ -1502,6 +1507,7 @@ class DownloadManager: ObservableObject {
         cookieBrowserProfile = s.cookieBrowserProfile
         cookiesFilePath = s.cookiesFilePath
         twitterHandle = s.twitterHandle
+        likesRedownloadMissing = s.likesRedownloadMissing
         if let bm = s.cookiesFileBookmarkData { cookieAccess.loadBookmark(bm) }
         showDownloadDate = s.showDownloadDate
         youtubeFormat = s.youtubeFormat

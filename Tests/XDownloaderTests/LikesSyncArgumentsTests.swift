@@ -43,6 +43,78 @@ final class LikesSyncArgumentsTests: XCTestCase {
         XCTAssertEqual(args.last, "https://x.com/gin/likes")
     }
 
+    /// The default trusts the archive: a file it lists is skipped even when
+    /// it is gone from the folder.
+    func testByDefaultTheArchiveDecidesWhatIsSkipped() throws {
+        let plan = LikesSyncPlanner.plan(
+            for: try LikesSyncHandle("@Gin"),
+            rootDirectory: URL(fileURLWithPath: "/tmp/downloads")
+        )
+        let implicit = LikesSyncArgumentBuilder.make(plan: plan, cookieBrowser: .chrome, cookiesFile: nil).args
+        let explicit = LikesSyncArgumentBuilder.make(
+            plan: plan, cookieBrowser: .chrome, cookiesFile: nil, redownloadMissing: false
+        ).args
+
+        XCTAssertEqual(implicit, explicit)
+        XCTAssertTrue(containsPair(implicit, "--download-archive", plan.archivePath.path))
+        XCTAssertTrue(containsPair(implicit, "-o", "archive-event=after,skip"))
+    }
+
+    /// With "download again files missing from the folder" on, no archive is
+    /// named: gallery-dl skips a file already at its path and downloads a
+    /// missing one. Everything else — destination, flat folder, file name,
+    /// skip events — stays as it is.
+    func testRedownloadMissingLeavesTheArchiveOut() throws {
+        let plan = LikesSyncPlanner.plan(
+            for: try LikesSyncHandle("@Gin"),
+            rootDirectory: URL(fileURLWithPath: "/tmp/downloads")
+        )
+        let normal = LikesSyncArgumentBuilder.make(plan: plan, cookieBrowser: .chrome, cookiesFile: nil).args
+        let args = LikesSyncArgumentBuilder.make(
+            plan: plan, cookieBrowser: .chrome, cookiesFile: nil, redownloadMissing: true
+        ).args
+
+        XCTAssertFalse(args.contains("--download-archive"))
+        XCTAssertFalse(args.contains(plan.archivePath.path))
+        XCTAssertFalse(args.contains { $0.hasPrefix("archive") })
+        // A user's gallery-dl config can't bring an archive back.
+        XCTAssertTrue(args.contains("--config-ignore"))
+        // Nothing but the two archive options differs from the default.
+        var expected = normal
+        for (key, value) in [
+            ("--download-archive", plan.archivePath.path), ("-o", "archive-event=after,skip"),
+        ] {
+            let index = try XCTUnwrap(
+                expected.indices.first {
+                    $0 + 1 < expected.count && expected[$0] == key && expected[$0 + 1] == value
+                })
+            expected.removeSubrange(index...index + 1)
+        }
+        XCTAssertEqual(args, expected)
+        XCTAssertTrue(containsPair(args, "--dest", "/tmp/downloads/Twitter Likes/@gin"))
+        XCTAssertTrue(containsPair(args, "-D", "."))
+        XCTAssertTrue(
+            containsPair(args, "-f", "{author[nick]} - {content!s:.100} [{tweet_id}] #{num}.{extension}"))
+        XCTAssertTrue(containsPair(args, "--Print", "skip:likes-sync\tskip:{_json}"))
+        XCTAssertEqual(args.last, "https://x.com/gin/likes")
+    }
+
+    /// Retrying failed Likes runs the same way as a full sync.
+    func testRedownloadMissingAppliesToRetriedLinks() throws {
+        let plan = LikesSyncPlanner.plan(
+            for: try LikesSyncHandle("@Gin"),
+            rootDirectory: URL(fileURLWithPath: "/tmp/downloads")
+        )
+        let link = "https://x.com/someone/status/123"
+        let args = LikesSyncArgumentBuilder.make(
+            plan: plan, cookieBrowser: .chrome, cookiesFile: nil, inputURLs: [link],
+            redownloadMissing: true
+        ).args
+
+        XCTAssertFalse(args.contains("--download-archive"))
+        XCTAssertEqual(args.last, link)
+    }
+
     func testArgumentsFallBackToCookieBrowserWithoutFile() throws {
         let plan = LikesSyncPlanner.plan(
             for: try LikesSyncHandle("@Gin"),

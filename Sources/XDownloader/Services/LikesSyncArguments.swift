@@ -36,7 +36,8 @@ enum LikesSyncArgumentBuilder {
         cookieBrowser: CookieBrowser,
         cookieBrowserProfile: String? = nil,
         cookiesFile: String?,
-        inputURLs: [String]? = nil
+        inputURLs: [String]? = nil,
+        redownloadMissing: Bool = false
     ) -> LikesSyncArguments {
         var args = CookieArgs.make(
             browser: cookieBrowser, profile: cookieBrowserProfile, file: cookiesFile)
@@ -45,14 +46,31 @@ enum LikesSyncArgumentBuilder {
             "--no-input",
             "--dest", plan.outputDirectory.path,
             "-D", ".",
-            "--download-archive", plan.archivePath.path,
+        ]
+        // Off (the default): the archive beside the files decides — a media
+        // file it lists is skipped without looking at the folder, so a file
+        // deleted or moved away is never fetched again. On: no archive, and
+        // gallery-dl's own path check decides — a file already in the folder
+        // under its name is skipped (still a "skip" event), a missing one is
+        // downloaded. A full scan reads every Like's metadata either way, so
+        // leaving the archive out costs no extra requests. Turning the option
+        // off again heals the archive: gallery-dl adds each file it finds on
+        // disk ("archive-event" includes "skip") the next time it sees it.
+        if !redownloadMissing {
+            args += ["--download-archive", plan.archivePath.path]
+        }
+        args += [
             "--retries", "10",
             "-o", "downloader.http.timeout=60",
             "-o", "extractor.twitter.quoted=true",
             "-o", "extractor.twitter.retweets=true",
             "-o", "extractor.twitter.cards=false",
             "-o", "extractor.twitter.text-tweets=true",
-            "-o", "archive-event=after,skip",
+        ]
+        if !redownloadMissing {
+            args += ["-o", "archive-event=after,skip"]
+        }
+        args += [
             "-f", "{author[nick]} - {content!s:.100} [{tweet_id}] #{num}.{extension}",
             "--no-mtime",
         ]

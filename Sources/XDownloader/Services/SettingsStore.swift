@@ -10,6 +10,9 @@ struct AppSettings {
     var cookiesFilePath: String?
     var cookiesFileBookmarkData: Data?
     var twitterHandle: String
+    /// X Likes Sync downloads again a file missing from the Likes folder,
+    /// instead of trusting the download archive. Off unless turned on.
+    var likesRedownloadMissing: Bool = false
     var showDownloadDate: Bool
     var youtubeFormat: YouTubeFormat
     var videoQuality: VideoQuality
@@ -38,6 +41,7 @@ struct SettingsStore {
         d.set(s.cookieBrowserProfile, forKey: "cookieBrowserProfile")
         d.set(s.cookiesFilePath, forKey: "cookiesFilePath")
         d.set(s.twitterHandle, forKey: "twitterHandle")
+        d.set(s.likesRedownloadMissing, forKey: "likesRedownloadMissing")
         if let bm = s.cookiesFileBookmarkData {
             d.set(bm, forKey: "cookiesFileBookmarkData")
         } else {
@@ -68,6 +72,8 @@ struct SettingsStore {
         s.cookieBrowserProfile = d.string(forKey: "cookieBrowserProfile") ?? fallback.cookieBrowserProfile
         if let p = d.string(forKey: "cookiesFilePath"), !p.isEmpty { s.cookiesFilePath = p } else { s.cookiesFilePath = nil }
         s.twitterHandle = d.string(forKey: "twitterHandle") ?? fallback.twitterHandle
+        s.likesRedownloadMissing =
+            d.object(forKey: "likesRedownloadMissing") as? Bool ?? fallback.likesRedownloadMissing
         s.cookiesFileBookmarkData = d.data(forKey: "cookiesFileBookmarkData")
         if let r = d.string(forKey: "youtubeFormat"), let v = YouTubeFormat(rawValue: r) { s.youtubeFormat = v }
         if let r = d.string(forKey: "videoQuality"), let v = VideoQuality(rawValue: r) { s.videoQuality = v }

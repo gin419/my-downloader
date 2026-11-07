@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Entries before _Unreleased_ were back-filled from git history.
 
+## [Unreleased]
+
+### Added
+- **X Likes Sync can download again a file missing from the Likes folder** — turn on "Download again files missing from the folder" in Settings › X Likes Sync, and each sync fetches every liked picture, video or GIF that is no longer in the folder, so a file you deleted or moved away comes back. A file still in the folder is skipped as before. Files are matched by name, and the name holds the post's text, so a renamed file is downloaded again under its original name. Off unless turned on: a file is then downloaded once, as before. Turning it off again changes nothing already saved.
+
 ## [1.12.8] — 2026-11-11
 
 ### Fixed
