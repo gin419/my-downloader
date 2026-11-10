@@ -18,12 +18,14 @@ final class XiaohongshuServiceTests: XCTestCase {
     }
 
     func testOpenGraphVideoIsResolvedAsVideo() throws {
-        let note = try XCTUnwrap(XiaohongshuService.resolveOpenGraph(html: #"""
-            <meta property="og:title" content="Video note - 小红书">
-            <meta property="og:description" content="Caption">
-            <meta property="og:video" content="http://sns-video-qc.xhscdn.com/clip.mp4">
-            <meta property="og:image" content="http://sns-webpic-qc.xhscdn.com/cover.jpg">
-            """#, id: "12345678"))
+        let note = try XCTUnwrap(
+            XiaohongshuService.resolveOpenGraph(
+                html: #"""
+                    <meta property="og:title" content="Video note - 小红书">
+                    <meta property="og:description" content="Caption">
+                    <meta property="og:video" content="http://sns-video-qc.xhscdn.com/clip.mp4">
+                    <meta property="og:image" content="http://sns-webpic-qc.xhscdn.com/cover.jpg">
+                    """#, id: "12345678"))
 
         XCTAssertEqual(note.title, "Video note")
         XCTAssertEqual(note.text, "Caption")

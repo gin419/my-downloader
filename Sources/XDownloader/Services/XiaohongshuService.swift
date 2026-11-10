@@ -68,10 +68,12 @@ enum XiaohongshuService {
             item.status = .failed("Paste a link to one Xiaohongshu note, not a profile, feed, or search page.")
             return false
         }
-        var request = DirectDownload.request(for: pageURL, headers: [
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml",
-        ])
+        var request = DirectDownload.request(
+            for: pageURL,
+            headers: [
+                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+                "Accept": "text/html,application/xhtml+xml",
+            ])
         request.httpShouldHandleCookies = false
 
         let note: Note
@@ -97,13 +99,16 @@ enum XiaohongshuService {
             guard let id = response.url.flatMap({ noteID(in: $0.absoluteString) }) ?? originalID,
                 let resolved = resolve(html: html, id: id) ?? resolveOpenGraph(html: html, id: id)
             else {
-                item.status = .failed("Couldn't read this Xiaohongshu note. It may require sign-in or a fresh full share link; only publicly accessible notes are supported.")
+                item.status = .failed(
+                    "Couldn't read this Xiaohongshu note. It may require sign-in or a fresh full share link; only publicly accessible notes are supported."
+                )
                 return false
             }
             note = resolved
         } catch {
             if Task.isCancelled || (error as? URLError)?.code == .cancelled { return false }
-            item.status = .failed("Couldn't load the Xiaohongshu note — \(DirectDownload.shortReason(for: .transport(error))). Check the connection, then Retry.")
+            item.status = .failed(
+                "Couldn't load the Xiaohongshu note — \(DirectDownload.shortReason(for: .transport(error))). Check the connection, then Retry.")
             return false
         }
 
@@ -161,17 +166,20 @@ enum XiaohongshuService {
                 }
                 saved.append(textURL)
             } catch {
-                item.status = .failed("The note was read, but its text file couldn't be saved. Check the download folder's disk and permissions, then Retry.")
+                item.status = .failed(
+                    "The note was read, but its text file couldn't be saved. Check the download folder's disk and permissions, then Retry.")
                 return false
             }
         }
 
         guard let first = saved.first else {
-            item.status = .failed(failure.map { "Couldn't save this Xiaohongshu note — \(DirectDownload.shortReason(for: $0)). Retry." }
-                ?? "This Xiaohongshu note has no downloadable media or text.")
+            item.status = .failed(
+                failure.map { "Couldn't save this Xiaohongshu note — \(DirectDownload.shortReason(for: $0)). Retry." }
+                    ?? "This Xiaohongshu note has no downloadable media or text.")
             return false
         }
-        item.outputPath = saved.first(where: { MediaExtensions.video.contains($0.pathExtension.lowercased()) })?.path
+        item.outputPath =
+            saved.first(where: { MediaExtensions.video.contains($0.pathExtension.lowercased()) })?.path
             ?? saved.first(where: { MediaExtensions.image.contains($0.pathExtension.lowercased()) })?.path
             ?? first.path
         item.imageCount = images > 0 ? images : nil
@@ -222,9 +230,10 @@ enum XiaohongshuService {
                 if let raw, let url = safeMediaURL(raw) { media.append(.init(url: url, kind: .image)) }
             }
         }
-        guard !media.isEmpty
-            || !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            || !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        guard
+            !media.isEmpty
+                || !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                || !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         else { return nil }
         return Note(id: id, title: title, text: text, author: author, media: media)
     }
@@ -257,8 +266,9 @@ enum XiaohongshuService {
             default: break
             }
         }
-        guard !imageURLs.isEmpty || !videoURLs.isEmpty
-            || !(description ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        guard
+            !imageURLs.isEmpty || !videoURLs.isEmpty
+                || !(description ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         else {
             return nil
         }
@@ -290,7 +300,8 @@ enum XiaohongshuService {
     }
 
     private static func attribute(_ name: String, in tag: String) -> String? {
-        let pattern = #"(?:^|\s)"# + NSRegularExpression.escapedPattern(for: name)
+        let pattern =
+            #"(?:^|\s)"# + NSRegularExpression.escapedPattern(for: name)
             + #"\s*=\s*([\"'])(.*?)\1"#
         guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive, .dotMatchesLineSeparators]),
             let match = regex.firstMatch(in: tag, range: NSRange(tag.startIndex..., in: tag)),
@@ -341,14 +352,14 @@ enum XiaohongshuService {
         for index in text[start...].indices {
             let char = text[index]
             if inString {
-                if escaped { escaped = false }
-                else if char == "\\" { escaped = true }
-                else if char == "\"" { inString = false }
+                if escaped { escaped = false } else if char == "\\" { escaped = true } else if char == "\"" { inString = false }
                 continue
             }
-            if char == "\"" { inString = true }
-            else if char == "{" { depth += 1 }
-            else if char == "}" {
+            if char == "\"" {
+                inString = true
+            } else if char == "{" {
+                depth += 1
+            } else if char == "}" {
                 depth -= 1
                 if depth == 0 { return index }
             }
