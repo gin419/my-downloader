@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Entries before _Unreleased_ were back-filled from git history.
 
+## [1.12.7] — 2026-11-11
+
+### Added
+- **Xiaohongshu / RedNote** — download videos, photo carousels and note text from full note links or `xhslink.com` / `xhslink.cn` share links.
+
+### Fixed
+- **Xiaohongshu video links that redirect to sign-in** now get one yt-dlp retry using the browser session selected in Settings → Cookies; Open Graph video metadata is also recognized.
+
 ## [1.12.6] — 2026-10-25
 
 ### Added

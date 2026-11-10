@@ -19,13 +19,14 @@ struct SiteProfile {
         case youtubePost  // in-app YouTube community post resolver
         case pixiv  // in-app Pixiv artwork resolver
         case femdomDestiny  // in-app femdomdestiny.com post resolver
+        case xiaohongshu  // in-app Xiaohongshu note media and text resolver
 
         /// Runs an external command-line tool, which may not be installed.
         /// The in-app resolvers need nothing but the network.
         var needsExternalTool: Bool {
             switch self {
             case .galleryDl: return true
-            case .fxTwitter, .threads, .youtubePost, .pixiv, .femdomDestiny: return false
+            case .fxTwitter, .threads, .youtubePost, .pixiv, .femdomDestiny, .xiaohongshu: return false
             }
         }
     }
@@ -247,6 +248,24 @@ enum SiteRegistry {
         usesYtDlp: false
     )
 
+    /// Xiaohongshu notes can contain a video, a photo carousel, or both.
+    /// The in-app resolver reads the note's embedded page state so it can
+    /// save every image and the caption together; yt-dlp currently handles
+    /// video notes but does not expose photo-carousel entries.
+    static let xiaohongshu = SiteProfile(
+        id: "xiaohongshu",
+        matches: { XiaohongshuService.isSiteURL($0) },
+        fallbacks: [.xiaohongshu],
+        supportsSubtitles: false,
+        usesYouTubeFormatSelector: false,
+        outputTemplateSuffix: "",
+        extractorTitleIncludesUploader: false,
+        detectsExternalRedirect: false,
+        galleryDlArgs: [],
+        imageSweepArgs: nil,
+        usesYtDlp: false
+    )
+
     /// YouTube community posts: yt-dlp takes their link for a channel tab
     /// and fails, and gallery-dl has no extractor for them, so the in-app
     /// resolver is the downloader and yt-dlp is skipped (a post sharing a
@@ -341,7 +360,7 @@ enum SiteRegistry {
         imageSweepArgs: nil
     )
 
-    static let all: [SiteProfile] = [threads, dmm, pixiv, femdomDestiny, twitter, youtubePost, youtube, reddit, instagram, other]
+    static let all: [SiteProfile] = [threads, xiaohongshu, dmm, pixiv, femdomDestiny, twitter, youtubePost, youtube, reddit, instagram, other]
 
     static func profile(for url: String) -> SiteProfile {
         all.first { $0.matches(url) } ?? other
