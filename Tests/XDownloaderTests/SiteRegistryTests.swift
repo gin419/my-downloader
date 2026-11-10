@@ -13,6 +13,8 @@ final class SiteRegistryTests: XCTestCase {
         XCTAssertEqual(SiteRegistry.profile(for: "https://www.youtube.com/watch?v=x").id, "youtube")
         XCTAssertEqual(SiteRegistry.profile(for: "https://youtu.be/x").id, "youtube")
         XCTAssertEqual(SiteRegistry.profile(for: "https://www.reddit.com/r/x/comments/y").id, "reddit")
+        XCTAssertEqual(SiteRegistry.profile(for: "https://www.xiaohongshu.com/explore/abcdef1234567890").id, "xiaohongshu")
+        XCTAssertEqual(SiteRegistry.profile(for: "https://xhslink.com/a/AbCdEf12").id, "xiaohongshu")
         XCTAssertEqual(SiteRegistry.profile(for: "https://example.com/p").id, "other")
     }
 
@@ -64,7 +66,7 @@ final class SiteRegistryTests: XCTestCase {
         XCTAssertEqual(SiteRegistry.all.last?.id, "other")
         XCTAssertEqual(
             SiteRegistry.all.map(\.id),
-            ["threads", "dmm", "pixiv", "femdomdestiny", "twitter", "youtubePost", "youtube", "reddit", "instagram", "other"])
+            ["threads", "xiaohongshu", "dmm", "pixiv", "femdomdestiny", "twitter", "youtubePost", "youtube", "reddit", "instagram", "other"])
     }
 
     /// Work pages are matched by the exact HOST. Everything else of the
@@ -168,7 +170,7 @@ final class SiteRegistryTests: XCTestCase {
     }
 
     func testEveryOtherProfileStillRunsYtDlp() {
-        for profile in SiteRegistry.all where !["threads", "youtubePost", "pixiv", "femdomdestiny"].contains(profile.id) {
+        for profile in SiteRegistry.all where !["threads", "youtubePost", "pixiv", "femdomdestiny", "xiaohongshu"].contains(profile.id) {
             XCTAssertTrue(profile.usesYtDlp, profile.id)
         }
     }

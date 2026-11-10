@@ -157,6 +157,7 @@ failed link's report names its diagnostic record.
 - **X / Twitter images** via `gallery-dl` fallback (multi-image aware)
 - **Instagram** — Reels, videos & video carousels via `yt-dlp`, image & mixed carousels via the `gallery-dl` fallback (sign in to Instagram in your cookie-source browser). A post, reel or story link downloads that one item. A profile link downloads the account's newest posts, reels included — 100 by default, set under Settings → Instagram Profiles — one profile at a time, skipping files already saved, so pasting it again later fetches only new posts. Tagged, saved, highlights and hashtag links are turned down
 - **Threads** — photos, videos & multi-item posts from public posts, read by the app itself (no extra tool, no login). A post Threads only shows to signed-in visitors gets one second try with your browser login, through `yt-dlp`: one signed-in try at the post's own address, and no cookie file written when the source is a browser (sign in at threads.com in your cookie-source browser — an Instagram sign-in alone is not enough)
+- **Xiaohongshu / RedNote** — note videos, every photo in a carousel, and the caption saved as a `.txt` sidecar; supports full note URLs and `xhslink.com` / `xhslink.cn` share links. Public notes download directly; a note redirected to sign-in gets one yt-dlp retry with the browser session selected in Settings → Cookies.
 - **YouTube** and any other `yt-dlp`-supported site
 - **Smart fallback** when `yt-dlp` follows an external link out of a tweet
 - **Tracking parameter stripping** before download

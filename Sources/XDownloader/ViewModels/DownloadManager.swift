@@ -2082,6 +2082,16 @@ class DownloadManager: ObservableObject {
                     await FemdomDestinyService.run(item: item, outputDirectory: directory)
                 }
                 if stopped { return }  // user pressed Stop mid-run
+            case .xiaohongshu:
+                ranFallback = true
+                let directory = outputDirectory
+                let stopped = await runResolverTask(item) { [weak self] in
+                    await XiaohongshuService.run(item: item, outputDirectory: directory) { link in
+                        await self?.downloadPostVideo(
+                            link, for: item, unavailableMessage: XiaohongshuService.signInRequiredMessage) ?? false
+                    }
+                }
+                if stopped { return }
             case .threads:
                 // No "only as a rescue" guard: yt-dlp never ran for this
                 // site, so there is no earlier failure to rescue — the
@@ -2586,9 +2596,13 @@ class DownloadManager: ObservableObject {
     /// video saved; otherwise the row is left failed under yt-dlp's own
     /// message. Runs inside the resolver's Task with yt-dlp registered in
     /// `activeProcesses`, so Stop and the row's ✕ reach it.
-    private func downloadPostVideo(_ link: String, for item: DownloadItem) async -> Bool {
+    private func downloadPostVideo(
+        _ link: String,
+        for item: DownloadItem,
+        unavailableMessage: String = YouTubePostService.videoNotDownloadableMessage
+    ) async -> Bool {
         guard ytDlpPathProvider() != nil else {
-            item.status = .failed(YouTubePostService.videoNotDownloadableMessage)
+            item.status = .failed(unavailableMessage)
             return false
         }
         item.embeddedPostLink = link
