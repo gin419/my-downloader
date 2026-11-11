@@ -33,10 +33,25 @@ final class XiaohongshuServiceTests: XCTestCase {
         XCTAssertEqual(note.media.first?.url.absoluteString, "https://sns-video-qc.xhscdn.com/clip.mp4")
     }
 
+    func testHTTPShareURLsAreUpgradedToHTTPS() throws {
+        let shortLink = try XCTUnwrap(URL(string: "http://xhslink.com/o/4kGLPgVk0OB?xsec_token=example"))
+        let noteLink = try XCTUnwrap(URL(string: "http://www.xiaohongshu.com/explore/12345678"))
+        let unrelatedLink = try XCTUnwrap(URL(string: "http://example.com/video"))
+
+        XCTAssertEqual(
+            XiaohongshuService.secureRequestURL(shortLink).absoluteString,
+            "https://xhslink.com/o/4kGLPgVk0OB?xsec_token=example")
+        XCTAssertEqual(
+            XiaohongshuService.secureRequestURL(noteLink).absoluteString,
+            "https://www.xiaohongshu.com/explore/12345678")
+        XCTAssertEqual(XiaohongshuService.secureRequestURL(unrelatedLink), unrelatedLink)
+    }
+
     func testLoginRedirectHandsOriginalShortLinkToSignedInVideoFallback() async throws {
         let shortLink = "http://xhslink.com/o/4kGLPgVk0OB"
+        let requestURL = XiaohongshuService.secureRequestURL(URL(string: shortLink)!)
         let loginURL = URL(string: "https://www.xiaohongshu.com/login?redirectPath=%2Fdiscovery%2Fitem%2F12345678")!
-        StubProtocol.set(.redirect(to: loginURL), for: URL(string: shortLink)!)
+        StubProtocol.set(.redirect(to: loginURL), for: requestURL)
         StubProtocol.set(.init(status: 200, headers: [:], body: Data("<html>Sign in</html>".utf8)), for: loginURL)
 
         let configuration = DirectDownload.sessionConfiguration()

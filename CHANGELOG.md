@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Entries before _Unreleased_ were back-filled from git history.
 
+## [1.12.8] — 2026-11-11
+
+### Fixed
+- **HTTP Xiaohongshu share links** are upgraded to HTTPS before opening, so macOS no longer blocks short links such as `http://xhslink.com/...` before their redirect can load.
+
 ## [1.12.7] — 2026-11-11
 
 ### Added

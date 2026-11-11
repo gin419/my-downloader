@@ -50,6 +50,17 @@ enum XiaohongshuService {
         return ["xhslink.com", "www.xhslink.com", "xhslink.cn", "www.xhslink.cn"].contains(host)
     }
 
+    /// App Transport Security rejects cleartext HTTP requests before a
+    /// redirect can upgrade them. XHS share links are routinely shared as
+    /// `http://`; request their HTTPS equivalent directly instead.
+    static func secureRequestURL(_ url: URL) -> URL {
+        guard url.scheme?.lowercased() == "http", isSiteURL(url.absoluteString),
+            var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        else { return url }
+        components.scheme = "https"
+        return components.url ?? url
+    }
+
     @MainActor
     static func run(
         item: DownloadItem,
@@ -69,7 +80,7 @@ enum XiaohongshuService {
             return false
         }
         var request = DirectDownload.request(
-            for: pageURL,
+            for: secureRequestURL(pageURL),
             headers: [
                 "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
                 "Accept": "text/html,application/xhtml+xml",
