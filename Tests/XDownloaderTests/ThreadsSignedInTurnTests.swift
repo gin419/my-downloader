@@ -179,8 +179,22 @@ final class ThreadsSignedInTurnTests: XCTestCase {
     func testTimedOutHolderHandsTheTurnOn() async throws {
         let turn = makeTurn()
         let tool = root.appendingPathComponent("tool")
-        try Data("#!/bin/sh\necho begin >> \"\(toolLog.path)\"\nexec sleep 30\n".utf8).write(to: tool)
+        try Data(
+            "#!/bin/sh\n[ \"$1\" = --warm-up ] && exit 0\necho begin >> \"\(toolLog.path)\"\nexec sleep 30\n".utf8
+        ).write(to: tool)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: tool.path)
+        // macOS assesses a freshly written executable on its first launch,
+        // which can take longer than the 0.3 s below; a run killed during it
+        // never reaches its first line, and the next launch is assessed
+        // again. One launch to completion first, so the timed runs measure
+        // the turn and not that one-time check.
+        let warmUp = Process()
+        warmUp.executableURL = tool
+        warmUp.arguments = ["--warm-up"]
+        try warmUp.run()
+        warmUp.waitUntilExit()
+        XCTAssertEqual(warmUp.terminationStatus, 0)
+        XCTAssertEqual(try toolRuns(), [])
         let pageURL = try XCTUnwrap(URL(string: "https://www.threads.com/@synthetic.author/post/SYNturn0000"))
         var events: [String] = []
 
