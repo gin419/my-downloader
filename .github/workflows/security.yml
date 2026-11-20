@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:  # all bases, so stacked PRs get CI too
+  # Merge gate without a PR (2026-11-19 rule): gh workflow run <file> --ref <branch>
+  workflow_dispatch:
   workflow_call:   # allows release.yml (and others) to call this workflow
 
 jobs:
