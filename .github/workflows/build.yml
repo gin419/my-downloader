@@ -6,6 +6,10 @@ on:
     paths-ignore: ['**/*.md']
   # Merge gate without a PR (2026-11-19 rule): gh workflow run <file> --ref <branch>
   workflow_dispatch:
+# PUBLIC repo on a self-hosted runner that runs as Gin's own macOS user
+# (Gin 2026-11-22): never add pull_request / pull_request_target / fork-
+# triggered events here or in any workflow that runs on [self-hosted, ...] -
+# outside code would run with access to Gin's account and keychain.
 
 jobs:
   build:
@@ -34,6 +38,10 @@ jobs:
 
       # Exercise build.sh end-to-end (bundling + tag version-stamping) without publishing.
       - name: Bundle smoke test
+        # Ad-hoc sign, as on the old hosted runner: Sheffield's keychain holds the
+        # real Developer ID, and CI must never use it (release.yml signs for real).
+        env:
+          CODESIGN_IDENTITY: "-"
         run: |
           ./build.sh release
           # Bundle structure + universal (arm64 + x86_64) assertions live in the
