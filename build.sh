@@ -17,10 +17,22 @@ if [ "$CONFIG" = "release" ] && [ -z "${XD_NATIVE_ARCH:-}" ]; then
     # combined `swift build --arch a --arch b` form delegates to XCBuild,
     # which ships only with full Xcode — Command Line Tools-only machines
     # (like the maintainer's) lack it.
-    swift build -c "$CONFIG" --triple arm64-apple-macosx
-    swift build -c "$CONFIG" --triple x86_64-apple-macosx
-    ARM64_BIN="$(swift build -c "$CONFIG" --triple arm64-apple-macosx --show-bin-path)/$APP_NAME"
-    X86_64_BIN="$(swift build -c "$CONFIG" --triple x86_64-apple-macosx --show-bin-path)/$APP_NAME"
+    #
+    # Each slice gets its OWN scratch path: newer toolchains (Xcode 27 /
+    # Swift 6.4) put every triple's products in one shared directory
+    # (.build/out/Products/Release), so the second build overwrote the first
+    # and lipo saw two x86_64 slices. Separate scratch paths keep the slices
+    # apart on old and new toolchains alike — and away from the default
+    # .build, whose shared products dir may hold whichever triple ran last.
+    ARM64_SCRATCH=".build/slice-arm64"
+    X86_64_SCRATCH=".build/slice-x86_64"
+    swift build -c "$CONFIG" --triple arm64-apple-macosx --scratch-path "$ARM64_SCRATCH"
+    swift build -c "$CONFIG" --triple x86_64-apple-macosx --scratch-path "$X86_64_SCRATCH"
+    ARM64_BIN="$(swift build -c "$CONFIG" --triple arm64-apple-macosx --scratch-path "$ARM64_SCRATCH" --show-bin-path)/$APP_NAME"
+    X86_64_BIN="$(swift build -c "$CONFIG" --triple x86_64-apple-macosx --scratch-path "$X86_64_SCRATCH" --show-bin-path)/$APP_NAME"
+    # Sparkle's binaryTarget is resolved per scratch path; its macOS slice is
+    # already universal, so the arm64 build's copy serves the bundle.
+    ARTIFACTS_DIR="$ARM64_SCRATCH/artifacts"
     mkdir -p ".build/universal-$CONFIG"
     BINARY=".build/universal-$CONFIG/$APP_NAME"
     xcrun lipo -create "$ARM64_BIN" "$X86_64_BIN" -output "$BINARY"
@@ -28,6 +40,7 @@ else
     # Debug builds (and XD_NATIVE_ARCH release builds) stay host-arch.
     swift build -c "$CONFIG"
     BINARY="$(swift build -c "$CONFIG" --show-bin-path)/$APP_NAME"
+    ARTIFACTS_DIR=".build/artifacts"
 fi
 
 echo "📦 Creating app bundle..."
@@ -41,9 +54,9 @@ chmod +x "$BUNDLE_NAME/Contents/MacOS/$APP_NAME"
 
 # Embed Sparkle.framework (SPM binaryTarget artifact). ditto preserves the
 # framework's symlink structure — a flattening copy breaks its code signature.
-SPARKLE_FW=$(find .build/artifacts -type d -name "Sparkle.framework" -path "*macos*" | head -1)
+SPARKLE_FW=$(find "$ARTIFACTS_DIR" -type d -name "Sparkle.framework" -path "*macos*" | head -1)
 if [ -z "$SPARKLE_FW" ]; then
-    echo "❌ Sparkle.framework not found under .build/artifacts — run swift build first." >&2
+    echo "❌ Sparkle.framework not found under $ARTIFACTS_DIR — run swift build first." >&2
     exit 1
 fi
 mkdir -p "$BUNDLE_NAME/Contents/Frameworks"
