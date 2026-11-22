@@ -3,7 +3,7 @@ name: Security Scan
 on:
   push:
     branches: [main]
-  pull_request:  # all bases, so stacked PRs get CI too
+    paths-ignore: ['**/*.md']
   # Merge gate without a PR (2026-11-19 rule): gh workflow run <file> --ref <branch>
   workflow_dispatch:
   workflow_call:   # allows release.yml (and others) to call this workflow
@@ -12,7 +12,9 @@ jobs:
   # ── Layer 1: project-specific rules ─────────────────────────────────────────
   layer1:
     name: "Layer 1 — Project rules"
-    runs-on: ubuntu-latest
+    # Sheffield by default. When called from release.yml (github.workflow is the
+    # caller's name there) keep the original hosted Linux runner, unchanged.
+    runs-on: ${{ fromJSON(github.workflow == 'Release' && '["ubuntu-latest"]' || '["self-hosted","sheffield"]') }}
 
     steps:
       - uses: actions/checkout@v4
@@ -20,6 +22,7 @@ jobs:
           fetch-depth: 0   # full history so gitleaks can scan all commits
 
       - name: Install gitleaks
+        if: runner.os == 'Linux'
         run: |
           VERSION=$(curl -sf "https://api.github.com/repos/gitleaks/gitleaks/releases/latest" \
             -H "Authorization: Bearer ${{ github.token }}" \
@@ -29,18 +32,11 @@ jobs:
             | tar -xz gitleaks
           sudo mv gitleaks /usr/local/bin/gitleaks
 
-      - name: "Scan — PR (changed commits only)"
-        if: github.event_name == 'pull_request'
-        run: |
-          gitleaks detect \
-            --config .github/gitleaks/layer1-rules.toml \
-            --source . \
-            --log-opts="origin/${{ github.base_ref }}...HEAD" \
-            --redact \
-            --verbose
+      - name: Install gitleaks (macOS, Homebrew)
+        if: runner.os != 'Linux'
+        run: command -v gitleaks >/dev/null || brew install gitleaks
 
       - name: "Scan — full history (push / release)"
-        if: github.event_name != 'pull_request'
         run: |
           gitleaks detect \
             --config .github/gitleaks/layer1-rules.toml \
@@ -51,7 +47,9 @@ jobs:
   # ── Layer 2: community rules (auto-updated weekly) ──────────────────────────
   layer2:
     name: "Layer 2 — Community rules"
-    runs-on: ubuntu-latest
+    # Sheffield by default. When called from release.yml (github.workflow is the
+    # caller's name there) keep the original hosted Linux runner, unchanged.
+    runs-on: ${{ fromJSON(github.workflow == 'Release' && '["ubuntu-latest"]' || '["self-hosted","sheffield"]') }}
 
     steps:
       - uses: actions/checkout@v4
@@ -59,6 +57,7 @@ jobs:
           fetch-depth: 0
 
       - name: Install gitleaks
+        if: runner.os == 'Linux'
         run: |
           VERSION=$(curl -sf "https://api.github.com/repos/gitleaks/gitleaks/releases/latest" \
             -H "Authorization: Bearer ${{ github.token }}" \
@@ -68,18 +67,11 @@ jobs:
             | tar -xz gitleaks
           sudo mv gitleaks /usr/local/bin/gitleaks
 
-      - name: "Scan — PR (changed commits only)"
-        if: github.event_name == 'pull_request'
-        run: |
-          gitleaks detect \
-            --config .github/gitleaks/layer2-config.toml \
-            --source . \
-            --log-opts="origin/${{ github.base_ref }}...HEAD" \
-            --redact \
-            --verbose
+      - name: Install gitleaks (macOS, Homebrew)
+        if: runner.os != 'Linux'
+        run: command -v gitleaks >/dev/null || brew install gitleaks
 
       - name: "Scan — full history (push / release)"
-        if: github.event_name != 'pull_request'
         run: |
           gitleaks detect \
             --config .github/gitleaks/layer2-config.toml \
